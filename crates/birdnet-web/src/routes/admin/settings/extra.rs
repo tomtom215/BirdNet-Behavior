@@ -383,7 +383,7 @@ pub const EXTRA_SETTINGS: &[Extra] = &[
         config_key: "RAW_AUDIO_KEEP_EVERY",
         group: Group::Storage,
         label: "Keep one raw recording in every",
-        help: "Raw recordings are normally deleted once analysed. Keeping one in N lets you check what the microphone really hears, at the cost of disk. 0 or empty keeps none.",
+        help: "Raw recordings are normally deleted once analysed. Keeping one in N lets you check what the microphone really hears, at the cost of disk. A recording the human-sound rule found speech in is not kept. 0 or empty keeps none.",
         kind: Kind::Int {
             min: 0,
             max: 100_000,

@@ -6,6 +6,7 @@ pub mod charts;
 pub mod correlation;
 pub mod detection_reviews;
 pub mod detections;
+pub mod discards;
 pub mod effort;
 pub mod heatmap;
 pub mod images;
@@ -58,6 +59,7 @@ pub use detections::{
     todays_detections, todays_source_activity, unlock_detection, unlock_detection_at,
     unstamped_detection_count,
 };
+pub use discards::{DiscardRow, add_discards, discards_on};
 pub use effort::total_recording_seconds;
 pub use heatmap::{hourly_totals, species_daily_heatmap, weekly_heatmap};
 pub use images::{

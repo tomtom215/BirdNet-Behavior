@@ -2601,6 +2601,28 @@ pub const MIGRATIONS: &[Migration] = &[
             UPDATE detections SET review_verdict = NULL
              WHERE rowid = NEW.rowid AND review_verdict IS NOT NULL;
         END;",
+    },    Migration {
+        version: 60,
+        description: "Count what the detection filters discard, per day, source and reason",
+        // ACC-02: the privacy rule alone masked about a third of the windows in
+        // the repository's own parity study, and nothing recorded it, so how
+        // much audio a station actually judged on a day could not be known.
+        // The daemon tallies each analysed file's discards (`FilterTally`) and
+        // adds them here, keyed like `recording_effort` (migration 27) so the
+        // two can be read side by side.
+        //
+        // `windows` is analysis windows masked whole (privacy and noise), and
+        // `detections` is species detections removed (privacy, noise,
+        // corroboration, occurrence and the operator's lists); a reason has
+        // whichever of the two applies, and zero in the other. Purely additive.
+        up_sql: "CREATE TABLE IF NOT EXISTS filter_discards (
+            date TEXT NOT NULL,
+            source TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            windows INTEGER NOT NULL DEFAULT 0,
+            detections INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (date, source, reason)
+        );",
     },
 ];
 

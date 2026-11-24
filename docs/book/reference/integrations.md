@@ -257,7 +257,8 @@ Drop them on a dashboard or trigger automations from them — "flash the porch l
 | `birdnet_cpu_count` | gauge | Number of CPU cores available. |
 | `birdnet_process_resident_memory_bytes` | gauge | Resident memory size in bytes. |
 | `birdnet_analytics_enabled` | gauge | Whether DuckDB analytics is enabled. |
-| `birdnet_detections_dropped_total` | counter | Classifications produced and then discarded, labeled by `reason`. |
+| `birdnet_detections_dropped_total` | counter | Classifications produced and then discarded, labeled by `reason`: `confidence`, `duplicate`, `quarantine`, `implausible_hour` and `implausible_clock` from the station's gates, and `privacy`, `noise`, `corroboration`, `occurrence` (out of range here this week; those above the confidence bar are also in the quarantine queue) and `species_list` (your include or exclude list) from the filters. The filters count at the floor the classifier runs at, so some of their discards would otherwise have gone for `confidence`; each discard is counted once, under the first filter that removed it. The filters' counts are also kept per day and source in the database table `filter_discards`. |
+| `birdnet_windows_masked_total` | counter | Analysis windows a filter masked whole, labeled by `reason` (`privacy` for a voice in or next to the window, `noise` for a watched noise class): audio the station recorded and did not judge. |
 | `birdnet_capture_restarts_total` | counter | Capture processes restarted by the supervisor, labeled by `source`. |
 | `birdnet_capture_stalls_total` | counter | Capture processes found alive but producing no segments, labeled by `source`. |
 | `birdnet_occurrence_filter_active` | gauge | `1` when species occurrence filtering is running, `0` when every species the classifier knows is admitted. |

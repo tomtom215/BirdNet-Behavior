@@ -112,7 +112,7 @@ No alias table ships with the station. The obvious candidate, [OpenFauna](https:
 Once it is running:
 
 - Make sure your latitude/longitude are correct first — the filter is only as good as your coordinates.
-- Raise `SF_THRESH` to be stricter about out-of-range species; lower it (or 0) to let everything through (useful if you *want* to catch vagrants).
+- Raise `SF_THRESH` to be stricter about out-of-range species; lower it (or 0) to let everything through. A species the filter holds back is not lost if it clears the confidence bar: it waits in the quarantine queue as *Unlikely here this time of year*, with the range model's score, for you to approve or reject, so a vagrant can be kept without lowering the threshold for every species. Those under the bar are dropped and counted in `birdnet_detections_dropped_total{reason="occurrence"}`.
 
 ### 5. Rain, wind and other broadband noise
 

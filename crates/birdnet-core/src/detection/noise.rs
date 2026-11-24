@@ -194,6 +194,23 @@ impl NoiseFilter {
         })
     }
 
+    /// The watched class that masks a chunk: one in its detection list, else
+    /// its loudest watched class read before the detection threshold (see
+    /// [`Self::filter_with_evidence`]). `None` when the filter is off.
+    #[must_use]
+    pub fn firing<'a>(
+        &self,
+        chunk: &'a [Detection],
+        loudest: Option<&'a Detection>,
+    ) -> Option<&'a Detection> {
+        let unlisted = loudest.filter(|d| {
+            self.is_enabled()
+                && d.confidence >= self.threshold
+                && self.classes.iter().any(|class| names_detection(class, d))
+        });
+        self.offending(chunk).or(unlisted)
+    }
+
     /// Drop every detection in each chunk a watched class was heard in, and —
     /// when [`NoiseFilter::remember_secs`] is set — the species that were in
     /// such a chunk from later chunks inside the window.
@@ -238,11 +255,7 @@ impl NoiseFilter {
         let mut suppressed_at: Vec<(f32, Vec<String>)> = Vec::new();
         let mut out: Vec<Vec<Detection>> = Vec::with_capacity(predictions.len());
         for (i, chunk) in predictions.iter().enumerate() {
-            let unlisted = loudest.get(i).and_then(Option::as_ref).filter(|d| {
-                d.confidence >= self.threshold
-                    && self.classes.iter().any(|class| names_detection(class, d))
-            });
-            if let Some(noise) = self.offending(chunk).or(unlisted) {
+            if let Some(noise) = self.firing(chunk, loudest.get(i).and_then(Option::as_ref)) {
                 tracing::debug!(
                     class = %noise.common_name,
                     confidence = noise.confidence,

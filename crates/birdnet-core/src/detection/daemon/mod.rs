@@ -147,7 +147,13 @@ pub struct ThroughputObserver {
     model_health: Option<ModelHealthCallback>,
     /// What each classifier is, once, after they are loaded.
     model_info: Option<ModelInfoCallback>,
+    /// What the filters discarded from each analysed file (ACC-02).
+    filtered: Option<FilteredCallback>,
 }
+
+/// A shared callback taking a file path and what the filters discarded from it.
+type FilteredCallback =
+    std::sync::Arc<dyn Fn(&std::path::Path, &crate::detection::FilterTally) + Send + Sync>;
 
 /// A shared callback taking what each loaded classifier is.
 type ModelInfoCallback =
@@ -352,6 +358,25 @@ impl ThroughputObserver {
             shed: None,
             model_health: None,
             model_info: None,
+            filtered: None,
+        }
+    }
+
+    /// Also report what the filters discarded from each analysed file
+    /// (ACC-02), after [`Self::analysed`] for it.
+    #[must_use]
+    pub fn with_filtered<F>(mut self, f: F) -> Self
+    where
+        F: Fn(&std::path::Path, &crate::detection::FilterTally) + Send + Sync + 'static,
+    {
+        self.filtered = Some(std::sync::Arc::new(f));
+        self
+    }
+
+    /// Report what the filters discarded from one analysed file.
+    pub fn filtered(&self, path: &std::path::Path, tally: &crate::detection::FilterTally) {
+        if let Some(f) = &self.filtered {
+            f(path, tally);
         }
     }
 
@@ -820,6 +845,21 @@ pub struct DetectionEvent {
     /// the last of these events is dropped. `None` where nothing claims the
     /// file (no lease table, or an event not made from a segment).
     pub lease: Option<Arc<InFlightGuard>>,
+    /// `Some(p)` when the occurrence filter held this species back, `p`
+    /// being the occurrence model's probability for it here this week
+    /// (ACC-01): not a detection, but a record for the "Unlikely here"
+    /// quarantine. `None` for every detection the filters admitted.
+    pub out_of_range: Option<f32>,
+}
+
+/// What the daemon made of one file: the events to process, and what its
+/// filters discarded (ACC-02).
+#[derive(Debug)]
+pub struct FilteredFile {
+    /// Detections, and out-of-range records for the quarantine.
+    pub events: Vec<DetectionEvent>,
+    /// The discards, by reason.
+    pub tally: crate::detection::FilterTally,
 }
 
 /// Handle for controlling a running daemon.
@@ -1072,6 +1112,7 @@ mod tests {
             latency_ms: 42,
             correlation_id: "e-12345-0001".to_owned(),
             lease: None,
+            out_of_range: None,
         };
         // Use the clone path even though we drop the original immediately —
         // the clippy::redundant_clone flag will fire, but pinning Clone is

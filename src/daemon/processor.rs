@@ -697,6 +697,60 @@ pub(super) fn event_processor(
             dynamic.tracker(),
             now_ms,
         );
+        // Out of range here this week (ACC-01): the occurrence model held it
+        // back, and the daemon has already counted it under "occurrence". One
+        // the station's own bar would have dropped anyway is dropped; the rest
+        // go to the "Unlikely here" quarantine with the score that rejected
+        // them, where a vagrant can be approved rather than lost. Before the
+        // clock and hour gates, so each discard has one reason and one count.
+        if let Some(sf_probability) = event.out_of_range {
+            if !matches!(disposition, DispositionDecision::DropBelowGlobal) {
+                let week_str = detection.week.to_string();
+                let file_str = event.source_file.to_string_lossy();
+                let q_record = birdnet_db::sqlite::QuarantineRecord {
+                    date: &detection.date,
+                    time: &detection.time,
+                    sci_name: &detection.scientific_name,
+                    com_name: &detection.common_name,
+                    confidence: f64::from(detection.confidence),
+                    sf_probability: Some(f64::from(sf_probability)),
+                    reason: birdnet_db::sqlite::QuarantineReason::BelowSfThresh,
+                    file_name: if file_str.is_empty() {
+                        None
+                    } else {
+                        Some(file_str.as_ref())
+                    },
+                    lat: provenance.lat,
+                    lon: provenance.lon,
+                    week: week_str.parse::<i32>().ok(),
+                    run_id: Some(provenance.run_id),
+                    // The bar it would have been judged against, and the run's
+                    // settings (DD-9): approval copies them onto the detection.
+                    cutoff: crate::daemon::disposition::applicable_threshold(
+                        detection.confidence,
+                        &detection.scientific_name,
+                        species_thresholds,
+                        global_confidence,
+                        dynamic.tracker(),
+                        now_ms,
+                    ),
+                    sensitivity: Some(provenance.sensitivity),
+                    overlap: Some(provenance.overlap),
+                };
+                if let Some(Err(e)) = state
+                    .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
+                {
+                    tracing::warn!(
+                        correlation_id,
+                        error = %e,
+                        species = %detection.scientific_name,
+                        "failed to quarantine a detection out of range here this week"
+                    );
+                }
+            }
+            continue;
+        }
+
         if matches!(disposition, DispositionDecision::DropBelowGlobal) {
             // Counted, not silent. "The station is detecting nothing" and
             // "the station is discarding everything" look identical from
@@ -2356,6 +2410,7 @@ mod tests {
                 latency_ms: 100,
                 correlation_id: "test-corr-notify".into(),
                 lease: None,
+                out_of_range: None,
             })
             .unwrap();
         drop(event_tx);
@@ -3382,6 +3437,7 @@ mod tests {
                 latency_ms: 100,
                 correlation_id: "test-corr-abc".into(),
                 lease: None,
+                out_of_range: None,
             })
             .unwrap();
         drop(event_tx);
@@ -3474,6 +3530,7 @@ mod tests {
                     latency_ms: 100,
                     correlation_id: "model-scores".into(),
                     lease: None,
+                    out_of_range: None,
                 })
                 .unwrap();
         }
@@ -3759,6 +3816,7 @@ mod tests {
                 latency_ms: 100,
                 correlation_id: "clock-gate".into(),
                 lease: None,
+                out_of_range: None,
             })
             .unwrap();
         drop(event_tx);
@@ -3864,6 +3922,7 @@ mod tests {
                 latency_ms: 100,
                 correlation_id: "ps5-gate".into(),
                 lease: None,
+                out_of_range: None,
             })
             .unwrap();
         drop(event_tx);
@@ -4663,6 +4722,7 @@ mod tests {
             latency_ms: 100,
             correlation_id: correlation_id.into(),
             lease: None,
+            out_of_range: None,
         }
     }
 
@@ -4881,6 +4941,186 @@ mod tests {
         assert!(
             live.try_recv().is_err(),
             "a detection the database refused was broadcast as if recorded"
+        );
+    }
+
+    /// The daemon's own output for one three-second file: the tiny V2.4
+    /// classifier naming Turdus merula and Pica pica (and nine placeholders),
+    /// every class at threshold 0, under the tiny geomodel, whose fixed
+    /// scores are Pica pica 0.90 and Turdus merula 0.047 against a threshold
+    /// of 0.5 (`crates/birdnet-core/src/detection/daemon/process.rs` holds the
+    /// fixture's description).
+    fn daemon_events_under_the_tiny_geomodel(
+        dir: &std::path::Path,
+    ) -> Vec<birdnet_core::detection::daemon::DetectionEvent> {
+        use birdnet_core::detection::ChunkFilters;
+        use birdnet_core::detection::corroboration::ConfirmationLevel;
+        use birdnet_core::detection::noise::NoiseFilter;
+        use birdnet_core::detection::privacy::PrivacyFilter;
+        use birdnet_core::inference::labels::LabelSet;
+        use birdnet_core::inference::model::{BirdNetModel, ModelConfig};
+        use birdnet_core::inference::registry::ClassifierRegistry;
+        use birdnet_core::inference::species_filter::{SpeciesFilter, SpeciesFilterConfig};
+        const TINY_V24: &[u8] =
+            include_bytes!("../../crates/birdnet-core/src/testdata/tiny_v24_test.onnx");
+        const TINY_META: &[u8] =
+            include_bytes!("../../crates/birdnet-core/src/testdata/tiny_meta_test.onnx");
+
+        let model_path = dir.join("v24.onnx");
+        let meta_path = dir.join("meta.onnx");
+        std::fs::write(&model_path, TINY_V24).unwrap();
+        std::fs::write(&meta_path, TINY_META).unwrap();
+        let labels = LabelSet::from_entries(
+            [
+                ("Turdus merula", "Eurasian Blackbird"),
+                ("Pica pica", "Eurasian Magpie"),
+            ]
+            .iter()
+            .map(|(s, c)| ((*s).to_owned(), (*c).to_owned()))
+            .chain((2..11).map(|i| (format!("Species{i} bird"), format!("Bird {i}"))))
+            .collect(),
+        );
+        let model = BirdNetModel::load(
+            &model_path,
+            labels.clone(),
+            ModelConfig {
+                confidence_threshold: 0.0,
+                top_n: 100,
+                ..ModelConfig::default()
+            },
+        )
+        .unwrap();
+        let mut registry = ClassifierRegistry::single("birdnet", model);
+        let meta = LabelSet::from_entries(
+            [
+                ("Pica pica", "Eurasian Magpie"),
+                ("Parus major", "Great Tit"),
+                ("Corvus corax", "Common Raven"),
+                ("Turdus merula", "Eurasian Blackbird"),
+                ("Erithacus rubecula", "European Robin"),
+            ]
+            .iter()
+            .map(|(s, c)| ((*s).to_owned(), (*c).to_owned()))
+            .collect(),
+        );
+        let mut species_filter = SpeciesFilter::load_with_vocabulary(
+            &meta_path,
+            Some(meta),
+            &labels,
+            &HashMap::new(),
+            SpeciesFilterConfig {
+                sf_thresh: 0.5,
+                ..SpeciesFilterConfig::default()
+            },
+        )
+        .unwrap();
+
+        let wav = dir.join("2026-05-19-birdnet-09:00:00.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+        let mut x: u32 = 1;
+        for _ in 0..48_000 * 3 {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            #[allow(clippy::cast_possible_truncation)]
+            w.write_sample(((x >> 16) as i16) / 8).unwrap();
+        }
+        w.finalize().unwrap();
+
+        birdnet_core::detection::daemon::process_and_infer_filtered(
+            &wav,
+            &birdnet_core::detection::pipeline::PipelineConfig {
+                raw_audio_input: true,
+                target_sample_rate: 48_000,
+                chunk_duration_secs: 3.0,
+                ..birdnet_core::detection::pipeline::PipelineConfig::default()
+            },
+            &mut registry,
+            &[0],
+            &ChunkFilters {
+                privacy: PrivacyFilter::new(0.0),
+                noise: NoiseFilter::new(0.0, Vec::new()),
+                confirmation: ConfirmationLevel::Off,
+            },
+            &mut species_filter,
+            None,
+            Some(52.52),
+            Some(13.405),
+            "acc-01",
+        )
+        .expect("the file is processed")
+        .events
+    }
+
+    /// ACC-01's gate: a daemon run in which the occurrence model rejects a
+    /// species heard leaves one "Unlikely here" quarantine row for it, with
+    /// the score that rejected it. The range filter's `continue` left no row,
+    /// no clip and no count. Counterpart in the same run: the admitted
+    /// species is stored as a detection and is not quarantined.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn an_out_of_range_bird_is_quarantined_as_unlikely_here() {
+        let tmp = tempfile::tempdir().unwrap();
+        let events = daemon_events_under_the_tiny_geomodel(tmp.path());
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        run_processor(&state, events, HashMap::new(), 0.0).await;
+
+        let rows = state.with_db(|c| {
+            birdnet_db::sqlite::list_quarantine(
+                c,
+                birdnet_db::sqlite::QuarantineFilter::Pending,
+                100,
+                0,
+            )
+            .unwrap()
+        });
+        assert_eq!(rows.len(), 1, "{rows:?}");
+        assert_eq!(rows[0].sci_name, "Turdus merula");
+        assert_eq!(rows[0].reason, "below_sf_thresh");
+        let p = rows[0].sf_probability.expect("the score is kept");
+        assert!((p - 0.047).abs() < 1e-3, "{p}");
+        assert_eq!((rows[0].lat, rows[0].lon), (Some(51.48), Some(-0.13)));
+
+        let stored: Vec<String> = state.with_db(|c| {
+            let mut st = c.prepare("SELECT Sci_Name FROM detections").unwrap();
+            st.query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        });
+        assert_eq!(stored, vec!["Pica pica".to_owned()]);
+    }
+
+    /// Counterpart: an out-of-range record the station's own bar would have
+    /// dropped is dropped, not quarantined, and is not counted again under
+    /// "confidence" (the daemon counted it under "occurrence").
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_out_of_range_bird_under_the_station_s_bar_is_dropped() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let mut ev = make_event(
+            "Turdus merula",
+            "Eurasian Blackbird",
+            0.10,
+            tmp.path().join("rec.wav"),
+            "corr",
+        );
+        ev.out_of_range = Some(0.047);
+        run_processor(&state, vec![ev], HashMap::new(), 0.25).await;
+        let pending =
+            state.with_db(|c| birdnet_db::sqlite::quarantine_pending_count(c).unwrap_or(-1));
+        assert_eq!(pending, 0);
+        assert_eq!(
+            state.with_db(|c| birdnet_db::sqlite::detection_count(c).unwrap_or(-1)),
+            0
+        );
+        assert!(
+            state.metrics().snapshot().detections_dropped.is_empty(),
+            "counted twice: {:?}",
+            state.metrics().snapshot().detections_dropped
         );
     }
 

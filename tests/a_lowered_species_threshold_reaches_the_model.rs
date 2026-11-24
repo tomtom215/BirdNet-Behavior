@@ -61,6 +61,7 @@ fn magpies(registry: &mut ClassifierRegistry, dir: &Path) -> usize {
         "threshold-floor-e2e",
     )
     .expect("processing the bundled recording")
+    .events
     .iter()
     .filter(|e| e.detection.scientific_name == "Pica pica")
     .count()

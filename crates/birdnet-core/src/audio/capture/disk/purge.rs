@@ -391,6 +391,7 @@ pub(super) fn purge_flat_older_than(
     let now = std::time::SystemTime::now();
     let mut removed = 0_u32;
     let mut kept = 0_u32;
+    let mut withheld = 0_u32;
     // In capture order, so "one in N" is a steady duty cycle across the day
     // rather than whichever N the directory listing happened to yield.
     let mut aged: Vec<(PathBuf, std::time::SystemTime)> = collect_flat_audio(dir)
@@ -408,13 +409,22 @@ pub(super) fn purge_flat_older_than(
         // not a rename: the stream dir is a RAM-backed tmpfs and the keep dir
         // is the data disk. A copy that fails (the disk is full) is reported
         // and the segment still drained, or the tmpfs fills and capture stops.
+        // RES-28: speech the human-sound rule masked from analysis is not
+        // written to the data disk either. The mark is spent whatever the
+        // cadence says, and the cadence carries on as if this one were taken.
+        let speech = keep.is_some_and(|(policy, _)| {
+            path.file_name()
+                .is_some_and(|name| policy.speech.take(name))
+        });
         if let Some((policy, counter)) = keep
             && policy.every > 0
             && let Ok(mut n) = counter.lock()
         {
             let take = *n % u64::from(policy.every) == 0;
             *n += 1;
-            if take {
+            if take && speech {
+                withheld += 1;
+            } else if take {
                 match keep_raw_segment(&path, &policy.dir) {
                     Ok(()) => kept += 1,
                     Err(e) => tracing::warn!(
@@ -430,10 +440,14 @@ pub(super) fn purge_flat_older_than(
             removed += 1;
         }
     }
+    if let Some((policy, _)) = keep {
+        policy.speech.forget_missing(dir);
+    }
     if removed > 0 {
         tracing::info!(
             count = removed,
             kept,
+            withheld_for_speech = withheld,
             dir = %dir.display(),
             "drained aged raw stream segments"
         );
@@ -803,6 +817,7 @@ mod tests {
         let policy = super::super::manager::RawKeep {
             dir: keep_dir.clone(),
             every: 3,
+            speech: super::super::manager::SpeechMarks::default(),
         };
         let counter = std::sync::Mutex::new(0_u64);
         let removed = purge_flat_older_than(
@@ -860,6 +875,57 @@ mod tests {
             1
         );
         assert_eq!(std::fs::read_dir(&keep_dir).unwrap().count(), 3);
+    }
+
+    /// RES-28's gate: a segment the privacy rule masked speech in is drained
+    /// but never kept, however the duty cycle falls, and its mark is spent.
+    /// The keep copied every chosen segment verbatim. Counterpart: the
+    /// unmarked segments around it are kept as before.
+    #[test]
+    fn a_segment_with_speech_in_it_is_never_kept() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let keep_dir = dir.path().join("keep");
+        for i in 0..3_i64 {
+            write_sized_wav(
+                &dir.path()
+                    .join(format!("2026-03-14-birdnet-06:00:{i:02}.wav")),
+                64,
+                1_000 + i,
+            );
+        }
+        let speech = super::super::manager::SpeechMarks::default();
+        speech.mark(&dir.path().join("2026-03-14-birdnet-06:00:01.wav"));
+        let policy = super::super::manager::RawKeep {
+            dir: keep_dir.clone(),
+            every: 1,
+            speech: speech.clone(),
+        };
+        let counter = std::sync::Mutex::new(0_u64);
+        let removed = purge_flat_older_than(
+            dir.path(),
+            std::time::Duration::from_secs(1),
+            &[],
+            &[],
+            Some((&policy, &counter)),
+        );
+        assert_eq!(removed, 3, "the stream directory is drained in full");
+        let mut kept: Vec<String> = std::fs::read_dir(&keep_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        kept.sort();
+        assert_eq!(
+            kept,
+            vec![
+                "2026-03-14-birdnet-06:00:00.wav".to_owned(),
+                "2026-03-14-birdnet-06:00:02.wav".to_owned()
+            ],
+            "the segment with speech in it was kept"
+        );
+        assert!(
+            speech.is_empty(),
+            "the drained segment's mark was not spent"
+        );
     }
 
     /// R-4. Kept raw audio is the first thing the recordings purge gives up:

@@ -39,7 +39,123 @@ pub struct ChunkFilters {
     pub confirmation: corroboration::ConfirmationLevel,
 }
 
+/// What the filters discarded from one recording, by reason (ACC-02).
+///
+/// Each discard is counted once, under the first stage that removed it, in
+/// the order the daemon applies them: privacy, noise, corroboration, then the
+/// species occurrence filter and the operator's lists. *Windows* are analysis
+/// windows a filter masked whole, whether or not they held a detection: the
+/// audio the station listened to and did not judge. *Detections* are the
+/// species the classifier reported at the floor it runs at (the lowest
+/// per-species threshold, so some sit under the station's own bar and would
+/// have been dropped later for confidence); sounds and human classes, which
+/// are never stored, are not counted.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilterTally {
+    /// The recording's date, `YYYY-MM-DD`, as its file name gives it. Empty
+    /// until the daemon sets it.
+    pub date: String,
+    /// Analysis windows in the recording.
+    pub windows: u64,
+    /// Windows masked for a human voice, the voiced ones and their neighbours.
+    pub privacy_windows: u64,
+    /// Windows masked for a watched noise class, not already masked for a voice.
+    pub noise_windows: u64,
+    /// Species detections the privacy filter removed.
+    pub privacy_detections: u64,
+    /// Species detections the noise filter removed.
+    pub noise_detections: u64,
+    /// Species detections corroboration removed.
+    pub corroboration_detections: u64,
+    /// Species detections the occurrence model rejected here this week, or
+    /// that it does not score (ACC-01).
+    pub occurrence_detections: u64,
+    /// Species detections the operator's include or exclude list removed.
+    pub species_list_detections: u64,
+}
+
+impl FilterTally {
+    /// Whether anything was discarded.
+    #[must_use]
+    pub const fn discarded_anything(&self) -> bool {
+        self.privacy_windows
+            + self.noise_windows
+            + self.privacy_detections
+            + self.noise_detections
+            + self.corroboration_detections
+            + self.occurrence_detections
+            + self.species_list_detections
+            > 0
+    }
+
+    /// One row per reason label: `(reason, windows masked, detections
+    /// dropped)`. Only `privacy` and `noise` mask windows.
+    #[must_use]
+    pub const fn by_reason(&self) -> [(&'static str, u64, u64); 5] {
+        [
+            ("privacy", self.privacy_windows, self.privacy_detections),
+            ("noise", self.noise_windows, self.noise_detections),
+            ("corroboration", 0, self.corroboration_detections),
+            ("occurrence", 0, self.occurrence_detections),
+            ("species_list", 0, self.species_list_detections),
+        ]
+    }
+}
+
+/// Species detections in some chunks' lists: not the sounds and human classes.
+fn species_in(lists: &[Vec<types::Detection>]) -> u64 {
+    lists
+        .iter()
+        .flatten()
+        .filter(|d| !sound_class::is_sound_class(&d.scientific_name, &d.common_name))
+        .count() as u64
+}
+
 impl ChunkFilters {
+    /// [`Self::apply`], also counting what each filter discarded (ACC-02).
+    #[must_use]
+    pub fn apply_tallied(
+        &self,
+        starts: &[f32],
+        chunks: &[types::ChunkPrediction],
+    ) -> (Vec<Vec<types::Detection>>, FilterTally) {
+        let before: Vec<Vec<types::Detection>> =
+            chunks.iter().map(|c| c.detections.clone()).collect();
+        let after_privacy = self.privacy.filter_timed(starts, chunks);
+        let privacy_masked = self.privacy.masked_windows(chunks);
+        let loudest: Vec<Option<types::Detection>> =
+            chunks.iter().map(|c| c.loudest_noise.clone()).collect();
+        let noise_windows = after_privacy
+            .iter()
+            .zip(&loudest)
+            .zip(&privacy_masked)
+            .filter(|((list, loud), masked)| {
+                !**masked && self.noise.firing(list, loud.as_ref()).is_some()
+            })
+            .count() as u64;
+        let after_noise = self
+            .noise
+            .filter_with_evidence(starts, &after_privacy, &loudest);
+        let kept = corroboration::corroborate(self.confirmation, starts, &after_noise);
+
+        let (n0, n1, n2, n3) = (
+            species_in(&before),
+            species_in(&after_privacy),
+            species_in(&after_noise),
+            species_in(&kept),
+        );
+        let tally = FilterTally {
+            windows: chunks.len() as u64,
+            privacy_windows: privacy_masked.iter().filter(|&&m| m).count() as u64,
+            noise_windows,
+            privacy_detections: n0.saturating_sub(n1),
+            noise_detections: n1.saturating_sub(n2),
+            corroboration_detections: n2.saturating_sub(n3),
+            ..FilterTally::default()
+        };
+        (kept, tally)
+    }
+
     /// Apply every filter in order: privacy, noise, then corroboration.
     ///
     /// `starts[i]` is the start time in seconds of the chunk whose prediction
@@ -54,13 +170,7 @@ impl ChunkFilters {
         starts: &[f32],
         chunks: &[types::ChunkPrediction],
     ) -> Vec<Vec<types::Detection>> {
-        let after_privacy = self.privacy.filter_timed(starts, chunks);
-        let loudest: Vec<Option<types::Detection>> =
-            chunks.iter().map(|c| c.loudest_noise.clone()).collect();
-        let after_noise = self
-            .noise
-            .filter_with_evidence(starts, &after_privacy, &loudest);
-        corroboration::corroborate(self.confirmation, starts, &after_noise)
+        self.apply_tallied(starts, chunks).0
     }
 
     /// Whether any filter will suppress anything.
@@ -261,6 +371,119 @@ mod chunk_filter_tests {
             1,
             "the trailing chunk was corroborated by its own neighbourhood and \
              should have survived: {out:?}"
+        );
+    }
+
+    /// ACC-02's gate: a voice between two birds masks three windows (the
+    /// voiced one and both neighbours), and the three birds it removed are
+    /// counted against privacy. Nothing counted this before.
+    #[test]
+    fn a_voice_between_two_birds_is_counted_as_three_masked_windows() {
+        let filters = ChunkFilters {
+            privacy: PrivacyFilter::new(0.03),
+            noise: NoiseFilter::with_default_classes(0.0),
+            confirmation: ConfirmationLevel::Off,
+        };
+        let bird = quiet(vec![d("Turdus merula", "Eurasian Blackbird", 0.8)]);
+        let mut voice = voiced(vec![d("Turdus merula", "Eurasian Blackbird", 0.8)]);
+        // The human class itself is in the list: it is a sound, not a
+        // species, and must not be counted as a bird the filter removed.
+        voice.detections.push(d("Human vocal", "Human vocal", 0.9));
+        let (out, tally) = filters.apply_tallied(&[0.0, 3.0, 6.0], &[bird.clone(), voice, bird]);
+        assert!(out.iter().all(Vec::is_empty));
+        assert_eq!(tally.windows, 3);
+        assert_eq!(tally.privacy_windows, 3, "{tally:?}");
+        assert_eq!(tally.privacy_detections, 3, "{tally:?}");
+        assert_eq!(tally.noise_windows, 0);
+        assert_eq!(tally.noise_detections + tally.corroboration_detections, 0);
+    }
+
+    /// Counterparts: each filter's discards land under its own reason, once,
+    /// and a recording nothing touched counts nothing.
+    #[test]
+    fn each_filter_s_discards_are_counted_under_its_own_reason_once() {
+        // A bark masks its window; a voice in the same window is counted
+        // under privacy only, because privacy ran first.
+        let filters = ChunkFilters {
+            privacy: PrivacyFilter::new(0.03),
+            noise: NoiseFilter::with_default_classes(0.5),
+            confirmation: ConfirmationLevel::Off,
+        };
+        let mut barked_and_voiced = voiced(vec![d("Parus major", "Great Tit", 0.8)]);
+        barked_and_voiced.loudest_noise = Some(d("Dog", "Dog", 0.9));
+        let mut barked = quiet(vec![
+            d("Dog", "Dog", 0.9),
+            d("Parus major", "Great Tit", 0.8),
+            d("Pica pica", "Eurasian Magpie", 0.8),
+        ]);
+        barked.loudest_noise = Some(d("Dog", "Dog", 0.9));
+        let clear = quiet(vec![d("Parus major", "Great Tit", 0.8)]);
+        // Windows: 0 voiced, 1 neighbour of the voice, 2 clear, 3 barked, 4 clear.
+        // Each detection at its own window's times, or the clip-reach rule
+        // reads them all as reaching the voice at 0-3 s.
+        let mut chunks = vec![
+            barked_and_voiced,
+            clear.clone(),
+            clear.clone(),
+            barked,
+            clear.clone(),
+        ];
+        for (chunk, start) in chunks.iter_mut().zip([0.0_f32, 3.0, 6.0, 9.0, 12.0]) {
+            for det in &mut chunk.detections {
+                det.start = start;
+                det.stop = det.start + 3.0;
+            }
+        }
+        let (_, tally) = filters.apply_tallied(&[0.0, 3.0, 6.0, 9.0, 12.0], &chunks);
+        assert_eq!(tally.windows, 5);
+        assert_eq!(
+            (tally.privacy_windows, tally.privacy_detections),
+            (2, 2),
+            "{tally:?}"
+        );
+        assert_eq!(
+            (tally.noise_windows, tally.noise_detections),
+            (1, 2),
+            "{tally:?}"
+        );
+        assert_eq!(tally.corroboration_detections, 0);
+
+        // Corroboration: a lone call in three windows is removed and counted;
+        // it masks no window.
+        let strict = ChunkFilters {
+            privacy: PrivacyFilter::new(0.0),
+            noise: NoiseFilter::with_default_classes(0.0),
+            confirmation: ConfirmationLevel::Strict,
+        };
+        let (out, tally) = strict.apply_tallied(
+            &[0.0, 3.0, 6.0],
+            &[clear.clone(), quiet(Vec::new()), quiet(Vec::new())],
+        );
+        assert!(out[0].is_empty(), "precondition: the lone call is removed");
+        assert_eq!(tally.corroboration_detections, 1);
+        assert_eq!(tally.privacy_windows + tally.noise_windows, 0);
+
+        // Nothing on, nothing counted; and `apply` is `apply_tallied`'s lists.
+        let off = ChunkFilters {
+            privacy: PrivacyFilter::new(0.0),
+            noise: NoiseFilter::with_default_classes(0.0),
+            confirmation: ConfirmationLevel::Off,
+        };
+        let chunks = [clear.clone(), clear];
+        let (out, tally) = off.apply_tallied(&[0.0, 3.0], &chunks);
+        let names = |lists: &[Vec<Detection>]| -> Vec<Vec<String>> {
+            lists
+                .iter()
+                .map(|l| l.iter().map(|d| d.scientific_name.clone()).collect())
+                .collect()
+        };
+        assert_eq!(names(&out), names(&off.apply(&[0.0, 3.0], &chunks)));
+        assert_eq!(
+            tally,
+            super::FilterTally {
+                windows: 2,
+                ..super::FilterTally::default()
+            }
         );
     }
 

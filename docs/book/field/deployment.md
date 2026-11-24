@@ -111,7 +111,12 @@ the retention each one needs:
   Set `RAW_AUDIO_KEEP_EVERY=N` to copy one aged segment in N (in capture
   order) into `<recordings>/raw` before the drain removes it: that is the
   audio a season can be re-analysed from under a new model, and without it
-  only the audio that already triggered a detection survives. Budget it — a
+  only the audio that already triggered a detection survives. A segment the
+  human-sound rule masked speech in is not kept, whichever segment the duty
+  cycle falls on, so the share kept can be a little under one in N. The rule
+  can only speak for audio it judged: with the rule off, or for a segment the
+  daemon shed unanalysed, speech is kept like anything else.
+  Budget it — a
   15 s segment at 48 kHz mono is about 1.4 MB, so `1` is roughly 8 GB a day
   per source and `10` about 0.8 GB — and know that the disk-full purge takes
   kept raw audio before it takes any clip.

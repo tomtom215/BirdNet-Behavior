@@ -642,8 +642,8 @@
    "work_package": "WP-03",
    "phase": 1,
    "source": "03-precision-accuracy.md:35",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "54859c7: SpeciesFilter::rejection (Lists | Score(p) | Unscored) from the occurrence model's kept scores; a Score(p) rejection leaves the daemon as DetectionEvent.out_of_range = Some(p) and event_processor files it as below_sf_thresh with sf_probability, the run's lat/lon, cutoff and settings, unless the station's global bar would drop it (then dropped, counted once under occurrence). List exclusions and unscored species are counted and not queued (MMP-03 decision). Gates: an_out_of_range_bird_is_quarantined_as_unlikely_here (src/daemon/processor.rs; real process_and_infer_filtered on the tiny V2.4 + tiny geomodel, then event_processor) red with the processor branch disabled (0 rows); core gate an_out_of_range_species_is_sent_for_quarantine_with_its_score red with the original continue restored. Counterparts green: the admitted Pica pica is stored and not quarantined; an_out_of_range_bird_under_the_station_s_bar_is_dropped; an_excluded_species_is_counted_and_never_quarantined. No cap per species per day: queue volume on a real station is unmeasured."
   },
   {
    "id": "ACC-02",
@@ -654,8 +654,8 @@
    "work_package": "WP-03",
    "phase": 1,
    "source": "03-precision-accuracy.md:54",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "54859c7: ChunkFilters::apply_tallied -> FilterTally (windows masked by privacy/noise; species detections removed by privacy, noise, corroboration, occurrence, species_list; each once, under the first stage); ThroughputObserver::filtered -> birdnet_detections_dropped_total{reason=privacy|noise|corroboration|occurrence|species_list}, new birdnet_windows_masked_total{reason}, and table filter_discards (migration 60, per date, source, reason). Gates: a_voice_between_two_birds_is_counted_as_three_masked_windows (the audit's: masked count 3) did not compile on the unfixed code and went red after under two mutants (sound classes counted; only the voiced window counted); a_file_s_privacy_discards_are_exported_and_kept (src/daemon/mod.rs) red with the observer wiring removed. The audit's exposition gate asked for a daemon run with PRIVACY_RANK set: the tiny model has no human class, so the observer is driven with a tally rather than through run.rs, and the tally itself is gated on real ChunkFilters. Not done: no page reads filter_discards yet; counts are at the classifier's run floor, not the station's bar."
   },
   {
    "id": "ACC-03",
@@ -2322,8 +2322,8 @@
    "work_package": "WP-03",
    "phase": 1,
    "source": "07-research-grade.md:583",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "54859c7: RawKeep.speech (SpeechMarks, one per process via daemon::speech_marks): the daemon marks a segment whose privacy rule masked any window; the stream drain spends the mark and keeps no copy; marks for segments gone otherwise are forgotten each drain; capped at 4096. Gate a_segment_with_speech_in_it_is_never_kept did not compile before SpeechMarks and went red with the speech check bypassed; the neighbours are kept (counterpart in the same test). Suppression counts are ACC-02's. The CONJECTURE (a kept segment can contain speech) was not probed on real audio; the gate shows the keep copied a marked segment unconditionally. Limits, in the manual: with the rule off, or a segment shed unanalysed, speech is kept as before. Per-hour logging of privacy suppression is left to RES-01 (WP-05)."
   },
   {
    "id": "RES-29",
@@ -2408,6 +2408,18 @@
    "source": "02-multi-model-pipeline.md (MMP-25, added 2026-11-23 by the WP-02 session)",
    "status": "open",
    "evidence": ""
+  },
+  {
+   "id": "ACC-21",
+   "title": "The manual's review-queue table said quarantine holds only per-species threshold misses",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-03",
+   "phase": 1,
+   "source": "docs/book/guide/reviews.md:16 (ACC-21, added 2026-11-23 by the WP-03 session)",
+   "status": "done",
+   "evidence": "54859c7: the 'What it holds' cell listed only detections that failed a stricter per-species threshold, while the night-time and unset-clock reasons already wrote rows; the table now says 'held back from the log, each with its reason', and a paragraph below it names the five reasons, including the new 'Unlikely here' (a list in the cell made a column several screens tall on a phone, seen in a 390x844 screenshot). Found while correcting the page for ACC-01; documentation only, no gate."
   }
  ]
 }

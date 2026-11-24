@@ -51,9 +51,12 @@ One list of non-bird and human classes per vocabulary; the location filter appli
 
 Count every discard by reason, keep out-of-range detections in the quarantine with the reason the UI already has, persist the counters.
 
-- [ ] **ACC-01** (high) The occurrence filter discards out-of-range birds without a trace; the "Unlikely here" quarantine is never written
-- [ ] **ACC-02** (high) The biggest discard paths are invisible: privacy, noise, corroboration and occurrence are not counted
-- [ ] **RES-28** (low, tracked, c) Kept raw audio bypasses the privacy filter, and suppressions are invisible
+- [x] **ACC-01** (high) The occurrence filter discards out-of-range birds without a trace; the "Unlikely here" quarantine is never written
+- [x] **ACC-02** (high) The biggest discard paths are invisible: privacy, noise, corroboration and occurrence are not counted
+- [x] **RES-28** (low, tracked, c) Kept raw audio bypasses the privacy filter, and suppressions are invisible
+- [x] **ACC-21** (low) The manual's review-queue table said quarantine holds only per-species threshold misses (added 2026-11-23, after this file was generated; not in the counts above)
+
+`[x]` done; `checklist.json` has the evidence.
 
 ## WP-04 (phase 1): Source identity and fairness between sources
 

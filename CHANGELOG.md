@@ -26,6 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A ledger of what the filters discard (WP-03 of the 2026-11 audit).** The human-sound rule, the noise
+  filter, corroboration, the range filter and the operator's species lists each count what they remove:
+  `birdnet_detections_dropped_total` gains the reasons `privacy`, `noise`, `corroboration`, `occurrence` and
+  `species_list`, a new `birdnet_windows_masked_total{reason="privacy"|"noise"}` counts analysis windows masked
+  whole, and the day's counts per source and reason are kept in a new table, `filter_discards` (migration 60).
+  None of these was counted before, and the human-sound rule alone masked about a third of the windows in the
+  parity study. Nothing yet shows the table on a page.
+- **An out-of-range bird is kept for review instead of vanishing.** A species the range filter holds back
+  here this week, at a confidence that clears the station's bar, now waits in the quarantine queue as
+  *Unlikely here this time of year* with the range model's score, where it can be approved into the log. It
+  used to be dropped with no row, no clip and no count, at any confidence; the queue's reason and label existed
+  and nothing wrote them. Species the range model does not score, and species the operator's lists exclude,
+  are counted and not queued.
+
 - **Which classifiers heard a detection, and a Models board.** A detection's page shows a *Who heard it* card:
   each classifier's own score against its own bar, in four states that are never rounded to a zero (heard it,
   scored it below its bar, has no class for the species, its window failed), counted as "heard by N of M models
@@ -98,6 +112,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Kept raw audio leaves out speech.** With `RAW_AUDIO_KEEP_EVERY` set, a segment in which the human-sound
+  rule masked speech is drained without a copy being kept, so the share kept can fall a little under one in N.
+  A segment drained before it was analysed, or any segment with the rule off, is kept as before.
 - **A sound is no longer stored as a species (MMP-04, ACC-18).** BirdNET V2.4's `Dog`, `Engine`, `Siren`, `Gun`,
   `Fireworks`, `Power tools`, `Noise`, `Environmental` and its three `Human` classes, Perch's 198 sound classes
   (`Speech`, `Engine`, `Crow`, `Rain`, …) and the human classes of every classifier were recorded, notified and
