@@ -261,26 +261,92 @@ impl ShedPolicy {
     }
 }
 
-/// Split a sweep's ready segments under a shed: in capture order (the file
-/// name carries it), the first, third, fifth … are analysed and the rest shed.
-#[must_use]
-pub fn shed_split(mut ready: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
-    ready.sort();
-    let mut analyse = Vec::new();
-    let mut shed = Vec::new();
-    for (i, path) in ready.into_iter().enumerate() {
-        if i % 2 == 0 {
-            analyse.push(path);
-        } else {
-            shed.push(path);
+/// Which segments to shed: one in two of **each source's** segments, in
+/// capture order, remembered across sweeps (audit MSC-01).
+///
+/// A split by position within one sweep was neither. Sources started in the
+/// same tick close their segments together, so a sweep held `[A@t, B@t]`
+/// and, sorted by name, analysed A and shed B every time: one microphone
+/// stopped producing detections while the station looked healthy. And a
+/// sweep holding a single segment shed nothing, so "one segment in two" was
+/// not what happened either. The source is the id in the file name
+/// (`…-birdnet-{id}-HH:MM:SS`); a name without one is the id-less local mic.
+#[derive(Debug, Default)]
+pub struct Shedder {
+    /// Per source: whether its next segment is the one to shed.
+    shed_next: std::collections::HashMap<Option<String>, bool>,
+}
+
+impl Shedder {
+    /// Split one sweep's ready segments into those to analyse and those to
+    /// shed. Within a source, capture order is the file name's order.
+    pub fn split(&mut self, mut ready: Vec<PathBuf>) -> (Vec<PathBuf>, Vec<PathBuf>) {
+        ready.sort();
+        let mut analyse = Vec::new();
+        let mut shed = Vec::new();
+        for path in ready {
+            let source = crate::detection::types::RecordingFile::parse(&path.to_string_lossy())
+                .and_then(|r| r.rtsp_id);
+            let next = self.shed_next.entry(source).or_insert(false);
+            if *next {
+                shed.push(path);
+            } else {
+                analyse.push(path);
+            }
+            *next = !*next;
         }
+        (analyse, shed)
     }
-    (analyse, shed)
 }
 
 #[cfg(test)]
 mod shed_tests {
-    use super::{DEFAULT_SHED_BACKLOG_ABOVE, ShedPolicy, ShedReason, shed_split};
+    use super::{DEFAULT_SHED_BACKLOG_ABOVE, ShedPolicy, ShedReason, Shedder};
+
+    /// Audit MSC-01: two sources whose segments settle in the same sweep. A
+    /// split by name within one sweep analysed A and shed B every time, so one
+    /// microphone stopped producing detections while the other carried on.
+    #[test]
+    fn shedding_is_fair_across_sources() {
+        let mut shedder = Shedder::default();
+        let mut analysed = std::collections::HashMap::<&str, usize>::new();
+        for i in 0..10 {
+            let t = format!("06:{i:02}:00");
+            let sweep = vec![
+                PathBuf::from(format!("/s/2026-03-14-birdnet-src_b-{t}.wav")),
+                PathBuf::from(format!("/s/2026-03-14-birdnet-src_a-{t}.wav")),
+            ];
+            let (analyse, _) = shedder.split(sweep);
+            for p in analyse {
+                let name = p.to_string_lossy().into_owned();
+                let key = if name.contains("src_a") { "a" } else { "b" };
+                *analysed.entry(key).or_default() += 1;
+            }
+        }
+        for source in ["a", "b"] {
+            let n = analysed.get(source).copied().unwrap_or(0);
+            assert!(
+                (4..=6).contains(&n),
+                "source {source} analysed {n} of 10: {analysed:?}"
+            );
+        }
+    }
+
+    /// Counterpart, and the second half of the defect: one source whose
+    /// segments arrive one per sweep is still shed one in two, as the log line
+    /// says. Within a sweep only, a lone segment was always the first.
+    #[test]
+    fn one_source_alone_sheds_every_second_segment_across_sweeps() {
+        let mut shedder = Shedder::default();
+        let mut analysed = 0;
+        for i in 0..10 {
+            let sweep = vec![PathBuf::from(format!(
+                "/s/2026-03-14-birdnet-06:{i:02}:00.wav"
+            ))];
+            analysed += shedder.split(sweep).0.len();
+        }
+        assert_eq!(analysed, 5);
+    }
     use std::path::PathBuf;
 
     /// PR-2. The decision is backlog first, thermal second, nothing when the
@@ -318,7 +384,7 @@ mod shed_tests {
             .iter()
             .map(|t| PathBuf::from(format!("/s/2026-03-14-birdnet-{t}.wav")))
             .collect();
-        let (analyse, shed) = shed_split(ready);
+        let (analyse, shed) = Shedder::default().split(ready);
         let stem = |p: &PathBuf| p.file_name().unwrap().to_string_lossy().into_owned();
         assert_eq!(
             analyse.iter().map(stem).collect::<Vec<_>>(),
@@ -335,7 +401,10 @@ mod shed_tests {
                 "2026-03-14-birdnet-06:00:45.wav"
             ]
         );
-        assert_eq!(shed_split(Vec::new()), (Vec::new(), Vec::new()));
+        assert_eq!(
+            Shedder::default().split(Vec::new()),
+            (Vec::new(), Vec::new())
+        );
     }
 }
 

@@ -18,8 +18,8 @@ use crate::inference::vocabulary::parse_alias_file;
 
 use super::process::process_and_infer_filtered;
 use super::{
-    DaemonConfig, DaemonError, DaemonHandle, DetectionEvent, ShedReason, new_event_correlation_id,
-    shed_split,
+    DaemonConfig, DaemonError, DaemonHandle, DetectionEvent, ShedReason, Shedder,
+    new_event_correlation_id,
 };
 
 /// How stale the operator's species include/exclude lists may get before the
@@ -242,6 +242,8 @@ pub fn run_daemon(
     let in_flight = config.in_flight.clone();
     let shed_policy = config.shed.clone();
     // The shed decision is logged on change, not on every 500 ms sweep.
+    // Per source and across sweeps (MSC-01).
+    let mut shedder = Shedder::default();
     let mut shedding: Option<ShedReason> = None;
     if let Some(observer) = filter_observer.as_ref() {
         observer.report(species_filter.has_model(), None);
@@ -498,7 +500,7 @@ pub fn run_daemon(
             }
             let ready = match decision {
                 Some(reason) => {
-                    let (analyse, shed) = shed_split(settled.ready);
+                    let (analyse, shed) = shedder.split(settled.ready);
                     for path in &shed {
                         tracing::debug!(file = %path.display(), reason = reason.as_str(), "segment shed");
                         if let Some(observer) = throughput.as_ref() {
