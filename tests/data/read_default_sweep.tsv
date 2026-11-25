@@ -221,7 +221,7 @@ handled	src/integrations/station_health.rs	spawn_station_health	let-ok	let Ok(..
 handled	src/integrations/store_forward.rs	apply_disposition	match-err	match birdnet_db::outbound_queue::mark_failure(conn, id, &error, now) { Err .. }
 write-outcome	src/integrations/weather.rs	poll_loop	is_ok	conn.upsert(row).is_ok()
 write-outcome	src/integrations/weather.rs	poll_loop	unwrap_or	conn.prune_older_than_days(RETENTION_DAYS).unwrap_or(0)
-task-panic	src/main.rs	main	unwrap_or	tokio::task::spawn_blocking(move || { helpers::models::install_from_catalogue(&id, &dest) }) .await .unwrap_or
+task-panic	src/main.rs	main	unwrap_or	tokio::task::spawn_blocking(move || { helpers::models::install_from_catalogue(&id, &dest, from.as_deref()) }) .await .unwrap_or
 handled	src/weekly_report.rs	weekly_report_loop	match-err	match state.run_blocking(build_weekly_report).await { Err .. }
 handled	src/weekly_report.rs	weekly_report_loop	match-err	match state.run_blocking(move |s| already_sent(s, now_secs)).await { Err .. }
 decoration	crates/birdnet-web/src/display.rs	load	ok	birdnet_db::settings::get(conn, key).ok()
