@@ -49,7 +49,7 @@ const hms = (t) => `${pad(Math.floor(t / 3600))}:${pad(Math.floor((t % 3600) / 6
 export function makeDay({ seed = 1, date = "2026-10-31", nowSec = 50820, sun = { rise: 6.8, set: 16.6, dawn: 6.2, dusk: 17.2 }, floor = 0.7, named, other = [], names = null, extra = null, speciesTotal = null, totalOverride = null, perSpeciesN = null }) {
   const r = rng(seed);
   const species = named.map(([name], i) => ({ name: names && names[name] ? names[name] : name, slot: i + 1 }));
-  if (other.length) species.push({ name: "Other species", slot: 0 });
+  if (other.length) species.push({ name: "Other species", slot: 0, other: true });
   const songs = [];
   const make = (bird, count, si) => {
     const spec = BIRDS[bird] || { when: [[10, 4, 1]], sure: [0.82, 0.07] };

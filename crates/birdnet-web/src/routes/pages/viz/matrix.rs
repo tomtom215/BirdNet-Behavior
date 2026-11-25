@@ -30,7 +30,7 @@
 use std::fmt::Write as _;
 
 use super::cograph::{CoGraph, chord_order, share_step};
-use super::kit::{slot_class, text_width, tip};
+use super::kit::{text_width, tip};
 use super::radial::{chord_diagram, pct};
 use super::{EMPTY, svg_a11y};
 use crate::routes::pages::escape_html;
@@ -142,7 +142,7 @@ pub fn cooccurrence_matrix(g: &CoGraph) -> String {
         let _ = write!(
             svg,
             r#"<circle class="{slot} ck-fill" cx="{cxd:.1}" cy="{y:.1}" r="3.5"/><text class="ladder-name" x="{x2:.1}" y="{y:.1}" dominant-baseline="central">{name}</text>"#,
-            slot = slot_class(i),
+            slot = g.class(i),
             cxd = p as f64 * CELL + 2.0,
             x2 = x + 6.0,
             name = escape_html(&names[i]),
@@ -277,6 +277,7 @@ mod tests {
             s[b][a] = v;
         }
         CoGraph {
+            slots: Default::default(),
             names: (0..n).map(|i| format!("Species {i}")).collect(),
             share: s
                 .iter()

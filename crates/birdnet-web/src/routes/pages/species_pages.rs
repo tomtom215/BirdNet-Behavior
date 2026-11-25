@@ -357,6 +357,8 @@ fn list_view(
             return super::error_states::could_not_load("your species list");
         }
     };
+    // A sparkline is in the colour its species owns on the station, as on every chart.
+    let slots = super::viz::kit::station_slots_or_neutral(state, "species list");
     if filter == "week" {
         species.retain(|s| active_this_week(sparks.get(&s.com_name)));
     }
@@ -370,7 +372,7 @@ fn list_view(
     let total: i64 = species.iter().map(|s| s.count).sum();
     let mut rows = String::new();
     for (i, s) in species.iter().enumerate() {
-        let color = species_color(&s.com_name);
+        let color = slots.colour(&s.com_name);
         let spark = sparks
             .get(&s.com_name)
             .map_or_default(|d| sparkline(d, 84.0, 22.0, Some(&color)));

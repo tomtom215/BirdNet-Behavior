@@ -521,15 +521,22 @@ class Terrain {
     const bySpecies = this.legend.querySelector(".tr-key-species");
     if (bySpecies) {
       bySpecies.textContent = "";
-      const n = Math.min(SPECIES_SLOTS, d.species.length);
-      for (let i = 0; i < n; i++) {
+      // Each species that owns a colour on the station, most heard first; everyone else is one
+      // "Other species" entry in the neutral.
+      let unowned = 0;
+      for (let i = 0; i < d.species.length; i++) {
+        const k = this.speciesColour(i);
+        if (k >= SPECIES_SLOTS) {
+          unowned += 1;
+          continue;
+        }
         const item = el("span", "bnb-meta viz-legend-item");
-        const sw = el("span", `viz-swatch ck-sw ck-c${i + 1}`);
+        const sw = el("span", `viz-swatch ck-sw ck-c${k + 1}`);
         item.appendChild(sw);
         item.appendChild(document.createTextNode(d.species[i]));
         bySpecies.appendChild(item);
       }
-      if (d.species.length > SPECIES_SLOTS) {
+      if (unowned > 0) {
         const item = el("span", "bnb-meta viz-legend-item");
         item.appendChild(el("span", "viz-swatch ck-sw ck-cother"));
         item.appendChild(document.createTextNode("Other species"));
@@ -544,6 +551,14 @@ class Terrain {
     }
   }
 
+  /** The palette index of species `t`: the colour it owns on the station (`slots`, 1 to 8, the
+   *  same on every chart), or the neutral. Never its rank in this range, which lent it a colour
+   *  another chart gives another bird. */
+  speciesColour(t) {
+    const s = this.data.slots ? Number(this.data.slots[t]) : 0;
+    return s >= 1 && s <= SPECIES_SLOTS ? s - 1 : SPECIES_SLOTS;
+  }
+
   // ── colours of one cell ──
   cellColour(day, hour) {
     const p = this.pal;
@@ -552,8 +567,7 @@ class Terrain {
     const n = this.data.n[i];
     if (this.colour === "species") {
       if (n === 0) return p.floor;
-      const t = this.data.top[i];
-      return p.species[t >= 0 && t < SPECIES_SLOTS ? t : SPECIES_SLOTS];
+      return p.species[this.speciesColour(this.data.top[i])];
     }
     if (n === 0) return p.floor;
     return mixRamp(p.seq, rampT(n, this.cells.max));
@@ -921,8 +935,7 @@ class Terrain {
         const cellIdx = f.cell[i];
         if (n[cellIdx] === 0) c = floor;
         else {
-          const t = this.data.top[cellIdx];
-          c = spLin[t >= 0 && t < SPECIES_SLOTS ? t : SPECIES_SLOTS];
+          c = spLin[this.speciesColour(this.data.top[cellIdx])];
         }
       } else if (f.values[i] <= 0) c = floor;
       else c = mixRamp(seqLin, f.values[i]);

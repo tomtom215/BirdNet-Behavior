@@ -128,10 +128,11 @@ pub(super) async fn analytics_sessions_partial(
     let (gap_minutes, limit) = (params.gap_minutes, params.limit);
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
+        let slots = station_slots(&state)?;
         state
             .with_analytics_read(|adb| {
                 adb.sessionize(&params)
-                    .map(|rows| (rows, adb.extension_version()))
+                    .map(|rows| (rows, adb.extension_version(), slots))
             })
             .unwrap_or_else(|| {
                 Err(
@@ -144,8 +145,8 @@ pub(super) async fn analytics_sessions_partial(
     .await;
 
     match result {
-        Ok(Ok((sessions, version))) => {
-            let mut html = render_bursts(&sessions, gap_minutes, limit, &names);
+        Ok(Ok((sessions, version, slots))) => {
+            let mut html = render_bursts(&sessions, gap_minutes, limit, &names, &slots);
             html.push_str(&method_panel(
                 "sessionize",
                 version.as_deref(),
@@ -167,6 +168,19 @@ pub(super) async fn analytics_sessions_partial(
             super::error_states::failed_partial("this station's listening sessions")
         }
     }
+}
+
+/// The station's species colours for a card whose errors are the analytics engine's: a
+/// failed read is that card's error, said on the card, and no colour is guessed.
+#[cfg(feature = "analytics")]
+fn station_slots(
+    state: &AppState,
+) -> Result<super::viz::kit::SpeciesSlots, birdnet_behavioral::connection::AnalyticsError> {
+    super::viz::kit::station_slots(state).map_err(|e| {
+        birdnet_behavioral::connection::AnalyticsError::InvalidData(format!(
+            "reading the station's species colours: {e}"
+        ))
+    })
 }
 
 /// A `DuckDB` timestamp (`2026-10-21 06:23:55`, with an optional fraction and either a space
@@ -209,6 +223,7 @@ fn render_bursts(
     gap_minutes: u32,
     limit: u32,
     names: &birdnet_core::i18n::NameLocalizer,
+    slots: &super::viz::kit::SpeciesSlots,
 ) -> String {
     use super::viz::bursts::{Burst, burst_timeline};
     const SHOWN: usize = 20;
@@ -221,30 +236,31 @@ fn render_bursts(
         );
     }
 
-    // Colours by how many bursts a species had in what is shown, busiest first; past the
-    // eighth they share the neutral.
+    // The key: the eight species with the most bursts in what is shown, and every species that
+    // owns a colour on the station, so each colour drawn is named; the rest are one "Other
+    // species" entry. A species is drawn in the colour it owns on the station (`slots`), the
+    // neutral if it owns none, so it is the same colour here as on every other chart.
     let mut tally: std::collections::BTreeMap<&str, usize> = std::collections::BTreeMap::new();
     for b in &bursts {
         *tally.entry(b.species.as_str()).or_insert(0) += 1;
     }
     let mut ranked: Vec<(&str, usize)> = tally.into_iter().collect();
     ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
-    let slot_of = |species: &str| {
-        ranked
-            .iter()
-            .position(|(n, _)| *n == species)
-            .map_or(super::atoms::CHART_SLOTS, |i| {
-                i.min(super::atoms::CHART_SLOTS)
-            })
-    };
-    let mut legend: Vec<(String, usize)> = ranked
+    let keyed: Vec<&str> = ranked
         .iter()
-        .take(super::atoms::CHART_SLOTS)
         .enumerate()
-        .map(|(i, (n, _))| (names.name_of_stored(n).to_owned(), i))
+        .filter(|&(i, (n, _))| i < super::viz::kit::SPECIES_SLOTS || slots.slot(n).is_some())
+        .map(|(_, (n, _))| *n)
         .collect();
-    if ranked.len() > super::atoms::CHART_SLOTS {
-        legend.push(("Other species".to_owned(), super::atoms::CHART_SLOTS));
+    let other = keyed.len();
+    let slot_of = |species: &str| keyed.iter().position(|n| *n == species).unwrap_or(other);
+    let mut legend: Vec<(String, usize)> = keyed
+        .iter()
+        .enumerate()
+        .map(|(i, n)| (names.name_of_stored(n).to_owned(), i))
+        .collect();
+    if ranked.len() > keyed.len() {
+        legend.push(("Other species".to_owned(), other));
     }
     let drawn: Vec<Burst> = bursts
         .iter()
@@ -291,7 +307,7 @@ fn render_bursts(
     if let Some(sentence) = glance::bursts_sentence(&found, &scope, format_duration) {
         html.push_str(&super::frame::takeaway(&sentence));
     }
-    html.push_str(&burst_timeline(&drawn, &legend, DAYS));
+    html.push_str(&burst_timeline(&drawn, &legend, DAYS, slots));
     html.push_str(
         r#"<details class="pt-disc"><summary>See the numbers — the bursts</summary><div class="viz-table-scroll"><table id="bt-table"><thead><tr><th>Species</th><th>Detections</th><th>Start</th><th>Duration</th></tr></thead><tbody>"#,
     );
@@ -541,8 +557,10 @@ pub(super) async fn analytics_next_partial(
     }
     let trigger_result = tokio::task::spawn_blocking({
         let s = state.clone();
-        move || {
-            s.with_read_db(|conn| {
+        move || -> Result<Option<(String, super::viz::kit::SpeciesSlots)>, birdnet_db::sqlite::DbError> {
+            // The bird in the middle is drawn in the colour it owns on the station.
+            let slots = super::viz::kit::station_slots(&s)?;
+            let trigger = s.with_read_db(|conn| {
                 // The most recent detection. Not `ORDER BY rowid`: this is a
                 // view, and the bundled SQLite (3.53) has no rowid on a view —
                 // "no such column: rowid". The error was swallowed by `.ok()`
@@ -555,13 +573,14 @@ pub(super) async fn analytics_next_partial(
                     |row| row.get::<_, String>(0),
                 )
                 .optional()
-            })
+            })?;
+            Ok(trigger.map(|t| (t, slots)))
         }
     })
     .await;
 
-    let trigger = match trigger_result {
-        Ok(Ok(Some(trigger))) => trigger,
+    let (trigger, slots) = match trigger_result {
+        Ok(Ok(Some(found))) => found,
         Ok(Ok(None)) => {
             return (
                 StatusCode::OK,
@@ -570,7 +589,7 @@ pub(super) async fn analytics_next_partial(
             );
         }
         Ok(Err(e)) => {
-            tracing::warn!(error = %e, "analytics next: could not read the latest detection");
+            tracing::warn!(error = %e, "analytics next: could not read the latest detection or the species colours");
             return super::error_states::failed_partial("what the station expects to hear next");
         }
         Err(e) => {
@@ -618,7 +637,7 @@ pub(super) async fn analytics_next_partial(
                 .iter()
                 .map(|p| (p.predicted_species.as_str(), p.probability, p.frequency))
                 .collect();
-            let mut html = render_neighbour_figure(&display, &before, &after, &names);
+            let mut html = render_neighbour_figure(&display, &before, &after, &names, &slots);
             let who = super::simple_url_encode(&display);
             html.push_str(&method_panel(
                 "sequence_next_node",
@@ -661,6 +680,7 @@ fn render_neighbour_figure(
     before: &[(&str, f64, u64)],
     after: &[(&str, f64, u64)],
     names: &birdnet_core::i18n::NameLocalizer,
+    slots: &super::viz::kit::SpeciesSlots,
 ) -> String {
     use super::viz::flow::{Neighbour, neighbours_flow};
     let to_neighbours = |rows: &[(&str, f64, u64)]| -> Vec<Neighbour> {
@@ -680,7 +700,7 @@ fn render_neighbour_figure(
         html.push_str(&super::frame::takeaway(&sentence));
     }
     html.push_str(r#"<div class="fl-fig">"#);
-    html.push_str(&neighbours_flow(shown, &b, &a));
+    html.push_str(&neighbours_flow(shown, &b, &a, &slots.class(trigger)));
     html.push_str(r#"<div class="fl-lists">"#);
     for (side, rows) in [("Before", &b), ("After", &a)] {
         let _ = write!(
@@ -802,10 +822,11 @@ pub(super) async fn analytics_answers_partial(
     let from_date = from.clone();
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
+        let slots = station_slots(&state)?;
         state
             .with_analytics_read(|adb| {
                 adb.answers(&from, 1, ANSWERS_SPECIES)
-                    .map(|a| (a, adb.extension_version()))
+                    .map(|a| (a, adb.extension_version(), slots))
             })
             .unwrap_or_else(|| {
                 Err(
@@ -817,14 +838,14 @@ pub(super) async fn analytics_answers_partial(
     })
     .await;
     match result {
-        Ok(Ok((a, version))) => {
+        Ok(Ok((a, version, slots))) => {
             let shown: Vec<String> = a
                 .species
                 .iter()
                 .map(|s| names.name_of_stored(s).to_owned())
                 .collect();
             let window = u32::try_from(ANSWERS_DAYS).unwrap_or(30);
-            let mut html = super::behavioral_answers::render(&a, &shown, window);
+            let mut html = super::behavioral_answers::render(&a, &shown, window, &slots);
             if a.species.len() >= 2 {
                 html.push_str(&method_panel(
                     "sequence_count",
@@ -886,6 +907,7 @@ pub(super) async fn analytics_assembly_partial(
         if voices.len() < asm::MIN_VOICES {
             return Ok(None);
         }
+        let slots = station_slots(&state)?;
         let params = birdnet_behavioral::types::AssemblyParams {
             species_sequence: voices.clone(),
             windows_minutes: birdnet_behavioral::types::ASSEMBLY_WINDOWS.to_vec(),
@@ -897,7 +919,7 @@ pub(super) async fn analytics_assembly_partial(
         state
             .with_analytics_read(|adb| {
                 let rows = adb.assembly(&params)?;
-                Ok((voices, params, rows, adb.extension_version()))
+                Ok((voices, params, rows, adb.extension_version(), slots))
             })
             .unwrap_or_else(|| {
                 Err(
@@ -911,7 +933,7 @@ pub(super) async fn analytics_assembly_partial(
     .await;
 
     match result {
-        Ok(Ok(Some((voices, params, rows, version)))) => {
+        Ok(Ok(Some((voices, params, rows, version, slots)))) => {
             let shown: Vec<String> = voices
                 .iter()
                 .map(|s| names.name_of_stored(s).to_owned())
@@ -924,6 +946,7 @@ pub(super) async fn analytics_assembly_partial(
                 hours: (DAWN_HOUR_START, DAWN_HOUR_END),
                 since: &params.since,
                 version: version.as_deref(),
+                slots: &slots,
             });
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
@@ -991,6 +1014,7 @@ pub(super) async fn analytics_dawn_sequence_partial(
         if sequence.len() < 2 {
             return Ok(None);
         }
+        let slots = station_slots(&state)?;
         let params = birdnet_behavioral::types::PatternParams {
             species_sequence: sequence.clone(),
             max_gap_minutes: None,
@@ -1017,7 +1041,14 @@ pub(super) async fn analytics_dawn_sequence_partial(
                 // window_funnel over the same sequence: how far each morning got
                 // down the chain, aggregated into the funnel picture.
                 let funnel = adb.funnel(&funnel_params)?;
-                Ok((sequence, counts, events, funnel, adb.extension_version()))
+                Ok((
+                    sequence,
+                    counts,
+                    events,
+                    funnel,
+                    adb.extension_version(),
+                    slots,
+                ))
             })
             .unwrap_or_else(|| {
                 Err(
@@ -1031,8 +1062,9 @@ pub(super) async fn analytics_dawn_sequence_partial(
     .await;
 
     match result {
-        Ok(Ok(Some((sequence, counts, events, funnel, version)))) => {
-            let mut html = render_dawn_sequence(&sequence, &counts, &events, &funnel, &names);
+        Ok(Ok(Some((sequence, counts, events, funnel, version, slots)))) => {
+            let mut html =
+                render_dawn_sequence(&sequence, &counts, &events, &funnel, &names, &slots);
             let shown = sequence
                 .iter()
                 .map(|s| names.name_of_stored(s).to_owned())
@@ -1252,6 +1284,7 @@ fn render_dawn_sequence(
     events: &[birdnet_behavioral::types::PatternMatchEvents],
     funnel: &[birdnet_behavioral::types::ChorusFunnel],
     names: &birdnet_core::i18n::NameLocalizer,
+    slots: &super::viz::kit::SpeciesSlots,
 ) -> String {
     let chain = sequence
         .iter()
@@ -1277,6 +1310,7 @@ fn render_dawn_sequence(
             &voices,
             &mornings,
             (DAWN_HOUR_START, DAWN_HOUR_END),
+            slots,
         ));
     }
 
@@ -1645,6 +1679,7 @@ mod tests {
             30,
             100,
             &birdnet_core::i18n::NameLocalizer::english(),
+            &Default::default(),
         );
         assert!(
             html.contains(
@@ -1665,6 +1700,7 @@ mod tests {
             30,
             100,
             &birdnet_core::i18n::NameLocalizer::english(),
+            &Default::default(),
         );
         assert!(html.contains("of 25 bursts.</p>"), "{html}");
         // Under the limit it is every session that was fetched, and says so.
@@ -1682,6 +1718,7 @@ mod tests {
             30,
             100,
             &birdnet_core::i18n::NameLocalizer::english(),
+            &Default::default(),
         );
         assert!(html.contains("within 30 minutes"), "{html}");
         assert!(!html.contains("20 minutes"), "{html}");

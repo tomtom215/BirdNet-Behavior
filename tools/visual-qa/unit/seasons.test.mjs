@@ -120,7 +120,9 @@ t("parseData never throws and rejects what it cannot draw", () => {
   const m = M.parseData({ thisMonth: 99, species: [{ name: "  ", slot: 99, counts: [1, "2", -4, NaN, null, true, 7.6] }] });
   assert.equal(m.thisMonth, null, "an impossible month means the year is complete");
   assert.equal(m.species[0].name, "Unknown bird");
-  assert.equal(m.species[0].slot, 1, "a slot outside 1..8 falls back to the position");
+  // UIR-01: a slot is the colour the species owns on the station; one outside 1..8 is the
+  // neutral (0), never the species' place in this list, which lent it another bird's colour.
+  assert.equal(m.species[0].slot, 0, "a slot outside 1..8 is the neutral");
   assert.deepEqual(m.species[0].counts.slice(0, 7), [1, 2, 0, null, null, null, 8]);
   assert.equal(M.parseData(JSON.stringify(C.year)).species.length, 8, "a JSON string works");
 });

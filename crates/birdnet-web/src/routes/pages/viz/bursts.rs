@@ -24,7 +24,7 @@
 
 use std::fmt::Write as _;
 
-use super::kit::{bar_path, slot_class, tip};
+use super::kit::{SpeciesSlots, bar_path, tip};
 use super::{EMPTY, svg_a11y};
 use crate::routes::pages::escape_html;
 
@@ -32,7 +32,8 @@ use crate::routes::pages::escape_html;
 pub struct Burst {
     /// The species as the station displays it.
     pub species: String,
-    /// Its colour slot in this chart.
+    /// Its series in this chart: the legend entry it belongs to, which hovering one dims the
+    /// others by. Its colour is its species' on the station, not this.
     pub slot: usize,
     /// The local date, `YYYY-MM-DD`.
     pub date: String,
@@ -108,9 +109,15 @@ fn short_day(date: &str) -> String {
 }
 
 /// The timeline of `bursts` over the `max_days` most recent days that have one, newest on top,
-/// with a legend of the species (`legend` holds `(name, slot)`, strongest first).
+/// with a legend of the species (`legend` holds `(name, series)`, strongest first). Each species
+/// is drawn in the colour it owns on the station (`slots`), the neutral if it owns none.
 #[must_use]
-pub fn burst_timeline(bursts: &[Burst], legend: &[(String, usize)], max_days: usize) -> String {
+pub fn burst_timeline(
+    bursts: &[Burst],
+    legend: &[(String, usize)],
+    max_days: usize,
+    slots: &SpeciesSlots,
+) -> String {
     if bursts.is_empty() {
         return EMPTY.to_string();
     }
@@ -215,7 +222,7 @@ pub fn burst_timeline(bursts: &[Burst], legend: &[(String, usize)], max_days: us
                     (
                         "Began",
                         &clock(b.start_secs),
-                        Some(&crate::routes::pages::atoms::series_color(b.slot, 0)),
+                        Some(&slots.colour(&b.species)),
                     ),
                     (
                         "Lasted",
@@ -229,7 +236,7 @@ pub fn burst_timeline(bursts: &[Burst], legend: &[(String, usize)], max_days: us
             let _ = write!(
                 s,
                 r#"<path class="bt-bar {slot}" d="{d}" data-tip="{data_tip}" data-ck-i="{index}" data-ck-s="{slot_n}" data-ck-f="{slot_n}"/>"#,
-                slot = slot_class(b.slot),
+                slot = slots.class(&b.species),
                 slot_n = b.slot,
                 d = bar_path(x0, by, w, BAR, 3.0),
             );
@@ -242,7 +249,7 @@ pub fn burst_timeline(bursts: &[Burst], legend: &[(String, usize)], max_days: us
         let _ = write!(
             s,
             r#"<button type="button" class="ck-leg bnb-meta viz-legend-item" data-ck-s="{slot}" aria-pressed="false"><span class="viz-swatch ck-sw {class}"></span>{name}</button>"#,
-            class = slot_class(*slot),
+            class = slots.class(name),
             name = escape_html(name),
         );
     }
@@ -253,6 +260,11 @@ pub fn burst_timeline(bursts: &[Burst], legend: &[(String, usize)], max_days: us
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The station's colours, with the Robin owning the first.
+    fn slots() -> SpeciesSlots {
+        SpeciesSlots::new([("American Robin", "Turdus migratorius", "American Robin")])
+    }
 
     fn burst(species: &str, slot: usize, date: &str, start: u32, end: u32) -> Burst {
         Burst {
@@ -302,7 +314,7 @@ mod tests {
 
     #[test]
     fn nothing_to_show_is_the_placeholder() {
-        assert_eq!(burst_timeline(&[], &[], 7), EMPTY);
+        assert_eq!(burst_timeline(&[], &[], 7, &slots()), EMPTY);
     }
 
     /// A bar starts where the burst began and is as long as it lasted: 06:00 to 07:00 on a
@@ -310,7 +322,7 @@ mod tests {
     #[test]
     fn a_bar_is_where_and_as_long_as_the_burst() {
         let b = [burst("American Robin", 0, "2026-10-21", 6 * 3600, 7 * 3600)];
-        let svg = burst_timeline(&b, &[("American Robin".to_owned(), 0)], 7);
+        let svg = burst_timeline(&b, &[("American Robin".to_owned(), 0)], 7, &slots());
         let d = svg
             .split("<path class=\"bt-bar ck-c1\" d=\"")
             .nth(1)
@@ -351,7 +363,7 @@ mod tests {
     #[test]
     fn a_very_short_burst_is_still_a_target_and_says_how_long_it_was() {
         let b = [burst("Blue Jay", 1, "2026-10-21", 8 * 3600, 8 * 3600 + 20)];
-        let svg = burst_timeline(&b, &[("Blue Jay".to_owned(), 1)], 7);
+        let svg = burst_timeline(&b, &[("Blue Jay".to_owned(), 1)], 7, &slots());
         assert!(svg.contains("20s"), "{svg:.300}");
     }
 
@@ -364,7 +376,7 @@ mod tests {
             burst("A", 0, "2026-10-20", 3600, 4000),
             burst("A", 0, "2026-10-19", 3600, 4000),
         ];
-        let svg = burst_timeline(&b, &[("A".to_owned(), 0)], 3);
+        let svg = burst_timeline(&b, &[("A".to_owned(), 0)], 3, &slots());
         let at = |d: &str| svg.find(d).unwrap_or(usize::MAX);
         assert!(at("21 Oct") < at("20 Oct") && at("20 Oct") < at("19 Oct"));
         assert!(!svg.contains("18 Oct"), "only three days");

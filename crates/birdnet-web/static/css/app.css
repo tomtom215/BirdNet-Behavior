@@ -848,13 +848,16 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
 .bnb-dotgrid { background-image: radial-gradient(circle at center, var(--border) 0.7px, transparent 0.8px); background-size: 18px 18px; }
 
 /* Sparkline. The rules, not the SVG's presentation attributes, set the colour
-   (a stylesheet rule always beats an attribute), so this is where it is the
-   chart palette's first slot. The dot at the end sits on the box's edge. */
+   (a stylesheet rule always beats an attribute): --c, which the sparkline sets to
+   its species' colour on the station (viz::kit::SpeciesSlots), the neutral for a
+   species that owns none, and the palette's first slot when it names none. It was
+   --chart-1 on every row, which made every species' sparkline the colour of the
+   station's most heard bird. The dot at the end sits on the box's edge. */
 .bnb-spark { overflow: visible; }
-.bnb-spark .line  { stroke: var(--chart-1); stroke-width: var(--chart-stroke); stroke-linecap: round; stroke-linejoin: round; fill: none; }
-.bnb-spark .area  { fill: var(--chart-1); opacity: 0.12; }
-.bnb-spark .pt    { fill: var(--chart-1); }
-.bnb-spark .end   { fill: var(--chart-1); stroke: var(--chart-gap); stroke-width: 1.5px; }
+.bnb-spark .line  { stroke: var(--c, var(--chart-1)); stroke-width: var(--chart-stroke); stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.bnb-spark .area  { fill: var(--c, var(--chart-1)); opacity: 0.12; }
+.bnb-spark .pt    { fill: var(--c, var(--chart-1)); }
+.bnb-spark .end   { fill: var(--c, var(--chart-1)); stroke: var(--chart-gap); stroke-width: 1.5px; }
 .bnb-spark .floor { stroke: var(--hairline); stroke-width: 1; fill: none; }
 
 /* Time-of-day heat ramp (dawn hue) */

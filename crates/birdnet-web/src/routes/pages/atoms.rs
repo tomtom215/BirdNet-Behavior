@@ -80,44 +80,12 @@ fn species_hue(name: &str) -> u32 {
 /// collapses in greyscale and for the common colour-vision deficiencies, where
 /// two series differing only in hue are two identical greys.
 ///
-/// Multi-series charts use [`series_color`] instead.
+/// A chart uses the station's species colours instead (`viz::kit::SpeciesSlots`): one colour a
+/// species, the same on every chart, from the eight graded chart tokens.
 #[must_use]
 pub(crate) fn species_color(name: &str) -> String {
     format!("oklch(62% 0.13 {})", species_hue(name))
 }
-
-/// Colour for series `index` in a multi-series chart: a reference to a chart
-/// token, so the theme chooses the value.
-///
-/// Assigned by **rank within the chart**, never by hashing the name: a hash puts
-/// pairs of species 2-3 degrees apart (see [`species_color`] for the measured
-/// collision rates). Eight slots, `--chart-1` ... `--chart-8`, in the order
-/// `app.css` defines them. The order is the palette: it is the one that opens
-/// with the brand's green and keeps every neighbouring pair apart for a reader
-/// who cannot tell red from green. So it is never cycled: the ninth series and
-/// every one after it is `--chart-other`, a neutral that says "everything else".
-/// The values, per theme, are graded by
-/// `tests/the_chart_palette_can_be_told_apart.rs`.
-///
-/// This used to compute `oklch({68|52}% 0.14 {index * 360 / total})`. At eight
-/// series two of the eight left sRGB (the browser painted something else),
-/// three sat under 3:1 against the card, and the dark theme used the same
-/// lightness, which is above the dark band. `total` is kept so the call sites
-/// read the same; it no longer changes the colour. (It used to spread the hues
-/// over `total`, so adding a ninth species to a chart repainted the first eight.)
-/// A species' slot still follows its rank in *this* chart; the legend, the band's
-/// `<title>` and the table name it, so the colour is never the only carrier.
-#[must_use]
-pub(crate) fn series_color(index: usize, _total: usize) -> String {
-    if index < CHART_SLOTS {
-        format!("var(--chart-{})", index + 1)
-    } else {
-        "var(--chart-other)".to_string()
-    }
-}
-
-/// How many categorical chart colours the stylesheet defines.
-pub(crate) const CHART_SLOTS: usize = 8;
 
 /// Circular avatar chip: the species' **photograph**, over its banding code in
 /// its own hue. `size` is one of `""` (default 28px), `"sm"`, or `"lg"`.
@@ -300,7 +268,7 @@ pub(crate) fn sparkline(data: &[i64], width: f64, height: f64, accent: Option<&s
     let end_x = if n > 1 { last_x } else { width };
 
     format!(
-        r#"<svg class="bnb-spark" width="{width:.0}" height="{height:.0}" viewBox="0 0 {width:.0} {height:.0}" aria-hidden="true"><line class="floor" x1="0" y1="{fy:.1}" x2="{width:.1}" y2="{fy:.1}" stroke="var(--hairline)" stroke-width="1"/><path class="area" d="{area}" fill="{stroke}" fill-opacity="0.10"/><path class="line" d="{path}" stroke="{stroke}" fill="none" stroke-width="1.4"/><circle class="end" cx="{end_x:.1}" cy="{end_y:.1}" r="1.9" fill="{stroke}"/></svg>"#,
+        r#"<svg class="bnb-spark" data-style="--c:{stroke}" width="{width:.0}" height="{height:.0}" viewBox="0 0 {width:.0} {height:.0}" aria-hidden="true"><line class="floor" x1="0" y1="{fy:.1}" x2="{width:.1}" y2="{fy:.1}" stroke="var(--hairline)" stroke-width="1"/><path class="area" d="{area}" fill="{stroke}" fill-opacity="0.10"/><path class="line" d="{path}" stroke="{stroke}" fill="none" stroke-width="1.4"/><circle class="end" cx="{end_x:.1}" cy="{end_y:.1}" r="1.9" fill="{stroke}"/></svg>"#,
         fy = height - 0.5,
     )
 }
@@ -330,29 +298,6 @@ mod tests {
         let a = species_color("Northern Cardinal");
         assert_eq!(a, species_color("Northern Cardinal"));
         assert!(a.starts_with("oklch("));
-    }
-
-    /// A series is a reference to the chart palette, in slot order, and the
-    /// ninth and later are the neutral. Nothing is computed here any more: the
-    /// values, in both themes, are graded by
-    /// `tests/the_chart_palette_can_be_told_apart.rs`, and a colour that is
-    /// computed per call is a colour that skips that grading.
-    #[test]
-    fn series_are_chart_slots_in_order_and_never_cycle() {
-        for (i, want) in (1..=8).enumerate() {
-            assert_eq!(series_color(i, 8), format!("var(--chart-{want})"));
-        }
-        for i in 8..20 {
-            assert_eq!(series_color(i, 20), "var(--chart-other)", "series {i}");
-        }
-        // The total does not move a colour: the old computation spread the hues
-        // over `total`, so adding one series repainted all the others.
-        for i in 0..8 {
-            assert_eq!(series_color(i, 3), series_color(i, 8));
-        }
-        let distinct: std::collections::BTreeSet<String> =
-            (0..8).map(|i| series_color(i, 8)).collect();
-        assert_eq!(distinct.len(), 8, "every slot is its own colour");
     }
 
     /// The bar and the pill use the one tier function; their classes agree for

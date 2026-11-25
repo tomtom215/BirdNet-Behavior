@@ -186,8 +186,10 @@ export function parseData(raw) {
         counts.push(Number.isFinite(n) ? Math.max(0, Math.round(n)) : null);
       }
     }
+    // The colour the species owns on the station (1 to 8, the same on every chart), or 0 for the
+    // neutral. Never its place in this list: that lent a colour another chart gives another bird.
     let slot = Math.trunc(Number(sp.slot));
-    if (!(slot >= 1 && slot <= MAX_SPECIES)) slot = species.length + 1;
+    if (!(slot >= 1 && slot <= MAX_SPECIES)) slot = 0;
     const name = String(sp.name === undefined || sp.name === null ? "" : sp.name).trim() || "Unknown bird";
     species.push({ name, slot, counts, total: counts.reduce((a, c) => a + (c || 0), 0) });
   }

@@ -345,9 +345,12 @@ fn compute_streamgraph(state: &AppState, days: u32) -> Option<String> {
     });
     let take = super::insight::leader_sentence(&named, total)
         .map_or_default(|s| super::frame::takeaway(&s));
+    // Each species in the colour it owns on the station. Unread, the figure is not drawn: the
+    // fragment's error says so, rather than a colour being guessed.
+    let slots = super::viz::kit::station_slots_for(state, "streamgraph")?;
     Some(format!(
         "{take}{}",
-        super::viz::streamgraph(&series, today.as_deref(), listened.as_deref())
+        super::viz::streamgraph(&series, today.as_deref(), listened.as_deref(), &slots)
     ))
 }
 

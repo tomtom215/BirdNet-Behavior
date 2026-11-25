@@ -176,10 +176,12 @@ fn compute_cooccurrence_matrix(state: &AppState, days: u32) -> Option<String> {
     let pairs = state
         .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 120, MIN_SHARED_BLOCKS))
         .ok()?;
+    let slots = super::viz::kit::station_slots_for(state, "co-occurrence ladder")?;
     Some(super::viz::cooccurrence_matrix(&build_graph(
         &pairs,
         MAX_SPECIES,
         state.names(),
+        slots,
     )))
 }
 
@@ -206,7 +208,8 @@ fn compute_acoustic_network(state: &AppState, days: u32, links: usize) -> Option
     if pairs.is_empty() {
         return Some(super::empty_states::no_co_signal());
     }
-    let graph = build_graph(&pairs, MAX_SPECIES, state.names());
+    let slots = super::viz::kit::station_slots_for(state, "co-occurrence chord")?;
+    let graph = build_graph(&pairs, MAX_SPECIES, state.names(), slots);
     Some(super::viz::co_figure(
         &graph,
         links,
@@ -232,8 +235,8 @@ async fn acoustic_network_partial(
 
 /// Reduce co-occurrence pairs to the graph over the `max_species` most connected species.
 ///
-/// Species are ranked by the sum of the overlap they take part in, busiest first, and that
-/// rank is their colour slot in every picture. Strength is the pair's overlap scaled to the
+/// Species are ranked by the sum of the overlap they take part in, busiest first; each is
+/// drawn in the colour it owns on the station (`slots`), the same in every picture. Strength is the pair's overlap scaled to the
 /// strongest pair among those species, so the pictures read as a relative picture; the
 /// overlap as measured and the blocks behind it travel along, because a reading must say
 /// "38 % of the blocks either was heard in", not "0.71 of the strongest".
@@ -241,6 +244,7 @@ fn build_graph(
     pairs: &[birdnet_db::sqlite::SpeciesPair],
     max_species: usize,
     names: &birdnet_core::i18n::NameLocalizer,
+    slots: super::viz::kit::SpeciesSlots,
 ) -> super::viz::CoGraph {
     use std::collections::HashMap;
 
@@ -281,6 +285,7 @@ fn build_graph(
             .iter()
             .map(|l| names.name_of_stored(l).to_owned())
             .collect(),
+        slots,
         strength,
         share,
         blocks,
@@ -545,7 +550,12 @@ mod tests {
             pair("Wren", "Jay", 6, 0.12),
             pair("Jay", "Owl", 3, 0.05),
         ];
-        let g = build_graph(&pairs, 3, &birdnet_core::i18n::NameLocalizer::english());
+        let g = build_graph(
+            &pairs,
+            3,
+            &birdnet_core::i18n::NameLocalizer::english(),
+            Default::default(),
+        );
         // Robin (0.90) and Wren (0.72) and Jay (0.47) are the three most connected; Owl is cut.
         assert_eq!(g.names, vec!["Robin", "Wren", "Jay"]);
         assert!(
@@ -585,7 +595,12 @@ mod tests {
         ];
         // X and Y (0.45 each) are less connected in total than A (0.70), B (0.60), C (0.50)
         // and are cut at three, though their pair is stronger than A-B.
-        let g = build_graph(&pairs, 3, &birdnet_core::i18n::NameLocalizer::english());
+        let g = build_graph(
+            &pairs,
+            3,
+            &birdnet_core::i18n::NameLocalizer::english(),
+            Default::default(),
+        );
         assert_eq!(g.names, vec!["A", "B", "C"]);
         assert!((g.strength[0][1] - 1.0).abs() < 1e-12, "{:?}", g.strength);
     }

@@ -48,9 +48,12 @@ pub enum Fill {
 
 /// Who was heard, hour by hour: what a column is made of when the chart says "who" and not only "how many".
 pub struct Stack<'a> {
-    /// The species named in the key, most heard first, at most eight: each is drawn in its own
-    /// chart colour, in this order, from the baseline up.
+    /// The species named in the key, most heard first, at most eight, drawn in this order from
+    /// the baseline up, each in the colour it owns on the station (`slots`; one it does not own
+    /// is the neutral).
     pub names: &'a [String],
+    /// The station's species colours, so a bird is the same colour here as on every other chart.
+    pub slots: &'a kit::SpeciesSlots,
     /// `counts[k][hour]`: how many of `names[k]` were heard in that hour. Whatever else was heard
     /// that hour is the rest of the column's true height, drawn as one more band ("Other species"),
     /// so a column is exactly as tall as the hour's count and never as tall as the named species' sum.
@@ -281,7 +284,8 @@ pub fn hourly(o: &Hourly<'_>) -> String {
             for (k, per_hour) in st.counts.iter().enumerate() {
                 let n = per_hour[h].clamp(0, c - acc);
                 if n > 0 {
-                    band(&mut svg, &kit::slot_class(k), n, acc);
+                    let name = st.names.get(k).map_or("", String::as_str);
+                    band(&mut svg, &st.slots.class(name), n, acc);
                     acc += n;
                 }
             }
@@ -500,11 +504,7 @@ pub fn hourly(o: &Hourly<'_>) -> String {
                     let n = st.counts.get(k).map_or(0, |per_hour| per_hour[h]);
                     if n > 0 {
                         named += n;
-                        rows.push((
-                            name.clone(),
-                            kit::thousands(n),
-                            Some(format!("var(--chart-{})", k + 1)),
-                        ));
+                        rows.push((name.clone(), kit::thousands(n), Some(st.slots.colour(name))));
                     }
                 }
                 if named < c {
@@ -578,7 +578,7 @@ pub fn hourly(o: &Hourly<'_>) -> String {
             let _ = write!(
                 svg,
                 r#"<span class="bnb-meta viz-legend-item"><span class="viz-swatch ck-sw {cls}"></span>{name}</span>"#,
-                cls = kit::slot_class(k),
+                cls = st.slots.class(&st.names[k]),
                 name = escape_html(&st.names[k]),
             );
         }

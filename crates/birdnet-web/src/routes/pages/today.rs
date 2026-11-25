@@ -1261,6 +1261,8 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     let today = today_date_string();
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
+        // The colour each species owns on the station, so the strip agrees with every chart.
+        let slots = super::viz::kit::station_slots(&state)?;
         state.with_read_db(|conn| {
             // The hour totals come from the database, not from counting the rows of a
             // page of the day's detections: that page stops at 1000, and a busy station
@@ -1278,13 +1280,13 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
                 conn.range(&from, &to).unwrap_or_default()
             };
             let solar = super::solar_times_local(conn);
-            Ok::<_, birdnet_db::sqlite::DbError>((rows, by_hour, samples, solar))
+            Ok::<_, birdnet_db::sqlite::DbError>((rows, by_hour, samples, solar, slots))
         })
     })
     .await;
 
     // See `error_states::failed_partial` for why this is a 200.
-    let Ok(Ok((rows, by_hour, samples, solar))) = result else {
+    let Ok(Ok((rows, by_hour, samples, solar, slots))) = result else {
         tracing::warn!("today daystrip: query or task failed");
         return super::error_states::failed_partial("today's timeline");
     };
@@ -1324,6 +1326,7 @@ async fn today_daystrip_partial(State(state): State<AppState>) -> impl IntoRespo
     let (stack_names, stack_counts) = day_stack(&by_hour, &names);
     let stack = (!stack_names.is_empty()).then_some(super::viz::bars::Stack {
         names: &stack_names,
+        slots: &slots,
         counts: &stack_counts,
     });
 

@@ -16,7 +16,6 @@ use std::fmt::Write as _;
 
 use super::kit;
 use super::{EMPTY, svg_a11y};
-use crate::routes::pages::atoms::series_color;
 use crate::routes::pages::escape_html;
 
 /// The largest 1, 2 or 5 times a power of ten that does not exceed `x` (never
@@ -170,14 +169,16 @@ pub fn axis_columns(days: usize, max: usize) -> Vec<usize> {
 /// the two, so smoothing cannot invent a peak that was not counted. Two bands share
 /// the same edge curve, so they never part or overlap.
 ///
-/// Colours are `--chart-1` … `--chart-8` by rank (a ninth series is `--chart-other`),
-/// with a surface-coloured seam between bands.
+/// Each species is drawn in the colour it owns on the station (`slots`), the same as on every
+/// other chart; a species that owns none, and the band of everyone else, is `--chart-other`.
+/// A surface-coloured seam runs between bands, so two neutral bands side by side stay two.
 #[must_use]
 #[allow(clippy::too_many_lines)]
 pub fn streamgraph(
     series: &[(String, Vec<i64>)],
     end_date: Option<&str>,
     listened: Option<&[bool]>,
+    slots: &kit::SpeciesSlots,
 ) -> String {
     let days = series.iter().map(|(_, v)| v.len()).max().unwrap_or(0);
     if series.is_empty() || days < 2 {
@@ -218,13 +219,13 @@ pub fn streamgraph(
     let edges = stack_edges(&counts, days, mid, scale);
     let off = |d: usize| listened.is_some_and(|l| l.get(d).is_some_and(|on| !on));
 
-    let band_classes: Vec<String> = (0..series.len().min(9)).map(kit::slot_class).collect();
-    let mut classes_for_defs = band_classes;
+    let band_classes: Vec<String> = series.iter().map(|(n, _)| slots.class(n)).collect();
+    let mut classes_for_defs = band_classes.clone();
+    classes_for_defs.sort();
     classes_for_defs.dedup();
     let names: Vec<(String, String)> = series
         .iter()
-        .enumerate()
-        .map(|(k, (n, _))| (n.clone(), series_color(k, series.len())))
+        .map(|(n, _)| (n.clone(), slots.colour(n)))
         .collect();
     let col_label = |d: usize| -> String {
         end_date
@@ -279,8 +280,8 @@ pub fn streamgraph(
         x2 = pad_l + plot_w,
     );
 
-    // Bands, lowest first. `series_color(rank)`, not a hash of the name: several species
-    // are shown together here, and a hash put pairs of them 2–3° apart in hue.
+    // Bands, lowest first, each in its species' station colour (never a hash of the name:
+    // several species are shown together here, and a hash put pairs of them 2–3° apart in hue).
     svg.push_str(r#"<g class="ck-reveal">"#);
     for (k, _) in series.iter().enumerate() {
         let top: Vec<(f64, f64)> = (0..days).map(|d| (x_at(d), edges[k + 1][d])).collect();
@@ -290,7 +291,7 @@ pub fn streamgraph(
             kit::monotone_path(&top, false),
             kit::monotone_path_reversed(&bottom)
         );
-        let band_cls = kit::slot_class(k);
+        let band_cls = &band_classes[k];
         let _ = write!(
             svg,
             r#"<path class="ck-seam" d="{path}" fill="url(#sg-{band_cls})" data-ck-s="{k}"/>"#,
@@ -437,7 +438,7 @@ pub fn streamgraph(
         let _ = write!(
             svg,
             r#"<button type="button" class="bnb-meta viz-legend-item ck-leg" data-ck-s="{rank}" aria-pressed="false"><span class="viz-swatch ck-sw {cls}"></span>{n}</button>"#,
-            cls = kit::slot_class(rank),
+            cls = band_classes[rank],
             n = escape_html(name),
         );
     }
@@ -464,7 +465,7 @@ pub fn streamgraph(
         let _ = write!(
             svg,
             r#"<tr><th scope="row"><span class="viz-swatch ck-sw {cls}"></span> {n}</th><td class="num">{total}</td><td>{when}</td><td class="num">{best}</td></tr>"#,
-            cls = kit::slot_class(rank),
+            cls = band_classes[rank],
             n = escape_html(name),
         );
     }
@@ -710,14 +711,22 @@ pub fn day_strip(
 mod tests {
     use super::*;
 
+    /// The station's colours as if its most heard species were these series, in this order:
+    /// the order the tests below were written for, when a series' colour was its rank.
+    fn owners(series: &[(String, Vec<i64>)]) -> kit::SpeciesSlots {
+        kit::SpeciesSlots::new(series.iter().map(|(n, _)| (n.as_str(), "", n.as_str())))
+    }
+
     #[test]
     fn streamgraph_empty_and_basic() {
-        assert!(streamgraph(&[], None, None).contains("Not enough data"));
+        assert!(
+            streamgraph(&[], None, None, &kit::SpeciesSlots::default()).contains("Not enough data")
+        );
         let series = vec![
             ("Blue Jay".to_string(), vec![1, 3, 2, 5, 4]),
             ("American Robin".to_string(), vec![0, 2, 4, 3, 1]),
         ];
-        let svg = streamgraph(&series, Some("2026-08-17"), None);
+        let svg = streamgraph(&series, Some("2026-08-17"), None, &owners(&series));
         assert!(svg.contains("<svg") && svg.contains("<path"));
         assert!(svg.contains("Blue Jay"));
         assert!(svg.contains("<title>Activity streamgraph</title>"));
@@ -762,7 +771,7 @@ mod tests {
             ("Blue Jay".to_string(), vec![1, 3, 2, 26, 4]),
             ("American Robin".to_string(), vec![0, 2, 4, 3, 1]),
         ];
-        let svg = streamgraph(&series, Some("2026-08-17"), None);
+        let svg = streamgraph(&series, Some("2026-08-17"), None, &owners(&series));
         // Busiest day is 26 + 3 = 29; two fifths of it is 11.6, so the bar is 10.
         assert!(
             svg.contains("The bar at the left is 10 detections in a day. The busiest day had 29."),
@@ -796,7 +805,7 @@ mod tests {
         let series: Vec<(String, Vec<i64>)> = (0..9)
             .map(|i| (format!("Species {i}"), vec![i + 1, 2, 3]))
             .collect();
-        let svg = streamgraph(&series, None, None);
+        let svg = streamgraph(&series, None, None, &owners(&series));
         for n in 1..=8 {
             assert!(
                 svg.contains(&format!(r#"fill="url(#sg-ck-c{n})""#)),
@@ -931,7 +940,7 @@ mod tests {
         let mut series: Vec<(String, Vec<i64>)> =
             vec![(long.to_string(), vec![1_600_000, 2, 900_000])];
         series.extend((0..60).map(|i| (format!("Species number {i}"), vec![i, 3, 4])));
-        let svg = streamgraph(&series, Some("2026-10-21"), None);
+        let svg = streamgraph(&series, Some("2026-10-21"), None, &owners(&series));
         assert!(
             svg.contains("<svg") && svg.contains("1.6M"),
             "peak is compacted: {svg}"
@@ -974,7 +983,7 @@ mod tests {
     #[test]
     fn streamgraph_dates_cross_a_month_boundary() {
         let series = vec![("Blue Jay".to_string(), vec![1, 2, 3, 4, 5])];
-        let svg = streamgraph(&series, Some("2026-03-02"), None);
+        let svg = streamgraph(&series, Some("2026-03-02"), None, &owners(&series));
         assert!(
             svg.contains(">26 Feb<"),
             "five days ending 2026-03-02 start on 26 Feb: {svg}"
@@ -986,7 +995,7 @@ mod tests {
         let series = vec![("Blue Jay".to_string(), vec![1, 2])];
         // A render-path panic is a station outage (panic = abort, no catch
         // layer), so a malformed date must degrade rather than crash.
-        let svg = streamgraph(&series, Some("not-a-date"), None);
+        let svg = streamgraph(&series, Some("not-a-date"), None, &owners(&series));
         assert!(svg.contains("<svg"));
     }
 

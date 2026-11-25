@@ -6,7 +6,7 @@ use axum::extract::State;
 use axum::http::{StatusCode, header};
 use serde::Deserialize;
 
-use crate::routes::pages::atoms::{avatar, conf_bar, sparkline, species_color, waveform};
+use crate::routes::pages::atoms::{avatar, conf_bar, sparkline, waveform};
 use crate::routes::pages::charts::{
     render_confidence_chart, render_daily_chart, render_hourly_chart,
 };
@@ -327,16 +327,18 @@ pub(super) async fn top_species_partial(
     let today = today_date_string();
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
+        // A sparkline is in the colour its species owns on the station, as on every chart.
+        let slots = crate::routes::pages::viz::kit::station_slots_or_neutral(&state, "top species");
         state.with_read_db(|conn| {
             let species = todays_top_species(conn, &today, TOP_SPECIES_ROWS)?;
             let sparklines = birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default();
-            Ok::<_, birdnet_db::sqlite::DbError>((species, sparklines))
+            Ok::<_, birdnet_db::sqlite::DbError>((species, sparklines, slots))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((species, sparklines))) => {
+        Ok(Ok((species, sparklines, slots))) => {
             if species.is_empty() {
                 return (
                     StatusCode::OK,
@@ -348,7 +350,7 @@ pub(super) async fn top_species_partial(
             for (com_name, sci_name, count) in &species {
                 let enc = simple_url_encode(com_name);
                 let shown = names.name(sci_name, com_name);
-                let color = crate::routes::pages::atoms::species_color(com_name);
+                let color = slots.colour(com_name);
                 let spark = sparklines
                     .get(com_name)
                     .map_or_default(|data| sparkline(data, 56.0, 16.0, Some(&color)));
@@ -397,6 +399,8 @@ pub(super) async fn species_list_partial(
     let names_for_search = state.names_handle();
 
     let result = tokio::task::spawn_blocking(move || {
+        let slots =
+            crate::routes::pages::viz::kit::station_slots_or_neutral(&state, "species list");
         state.with_read_db(|conn| {
             let species = if has_search {
                 crate::routes::pages::name_search::search_species(
@@ -410,13 +414,13 @@ pub(super) async fn species_list_partial(
             };
             let sparklines = birdnet_db::sqlite::species_sparklines(conn, 7).unwrap_or_default();
             let floor = crate::routes::pages::confidence::station_floor(conn);
-            Ok::<_, birdnet_db::sqlite::DbError>((species, sparklines, floor))
+            Ok::<_, birdnet_db::sqlite::DbError>((species, sparklines, floor, slots))
         })
     })
     .await;
 
     match result {
-        Ok(Ok((species, sparklines, floor))) => {
+        Ok(Ok((species, sparklines, floor, slots))) => {
             if species.is_empty() {
                 let body = if has_search {
                     r#"<p class="bnb-meta">No matching species found.</p>"#.to_string()
@@ -431,7 +435,7 @@ pub(super) async fn species_list_partial(
             for (i, s) in species.iter().enumerate() {
                 let enc = simple_url_encode(&s.com_name);
                 let shown = names.name(&s.sci_name, &s.com_name);
-                let color = species_color(&s.com_name);
+                let color = slots.colour(&s.com_name);
                 let spark = sparklines
                     .get(&s.com_name)
                     .map_or_default(|data| sparkline(data, 84.0, 22.0, Some(&color)));

@@ -109,8 +109,14 @@ fn headline(a: &Answers, names: &[String]) -> Option<String> {
 
 /// The card's body: a sentence, the grid, what a disc means, and the table of the same numbers.
 ///
-/// `shown` are the species' names in the station's language, in the order of `a.species`.
-pub(super) fn render(a: &Answers, shown: &[String], window_days: u32) -> String {
+/// `shown` are the species' names in the station's language, in the order of `a.species`; each
+/// bird's mark is the colour its species owns on the station (`slots`), as on every other chart.
+pub(super) fn render(
+    a: &Answers,
+    shown: &[String],
+    window_days: u32,
+    slots: &kit::SpeciesSlots,
+) -> String {
     let n = a.species.len();
     if n < 2 || shown.len() != n {
         return String::from(
@@ -152,7 +158,7 @@ pub(super) fn render(a: &Answers, shown: &[String], window_days: u32) -> String 
         let _ = write!(
             svg,
             r#"<circle class="ck-ring {slot}" cx="{cx:.1}" cy="9" r="4.5"/><text class="mono ck-lbl" x="{cx:.1}" y="25" text-anchor="middle" font-size="10">{code}</text>"#,
-            slot = kit::slot_class(j),
+            slot = slots.class(name),
             code = escape_html(&super::atoms::species_code(name)),
         );
     }
@@ -165,7 +171,7 @@ pub(super) fn render(a: &Answers, shown: &[String], window_days: u32) -> String 
         let _ = write!(
             svg,
             r#"<circle class="ck-ring {slot}" cx="10" cy="{cy:.1}" r="4.5"/><text class="ck-lbl" x="22" y="{ty:.1}" font-size="10.5">{name}</text><line class="ck-grid" x1="{gx0:.1}" y1="{cy:.1}" x2="{gx1:.1}" y2="{cy:.1}"/>"#,
-            slot = kit::slot_class(i),
+            slot = slots.class(&a.species[i]),
             ty = cy + 3.5,
             name = escape_html(&short(&shown[i])),
             gx0 = label_w + cell / 2.0,
@@ -345,7 +351,7 @@ mod tests {
     #[test]
     fn a_cell_is_a_disc_an_outline_or_empty_by_how_much_there_is_to_say() {
         let (a, names) = answers(vec![vec![0, 30, 2], vec![4, 0, 0], vec![0, 0, 0]]);
-        let html = render(&a, &names, 30);
+        let html = render(&a, &names, 30, &kit::SpeciesSlots::default());
         assert_eq!(
             html.matches(r#"class="ck-disc "#).count(),
             2,
@@ -369,7 +375,8 @@ mod tests {
         // A best pair at the floor is a hint, not a standout, and the grid says so.
         let (a, names) = answers(vec![vec![0, 3], vec![1, 0]]);
         assert!(
-            render(&a, &names, 30).contains("Nothing stands out yet"),
+            render(&a, &names, 30, &kit::SpeciesSlots::default())
+                .contains("Nothing stands out yet"),
             "a pair at the floor is not a headline"
         );
     }
@@ -412,13 +419,16 @@ mod tests {
     #[test]
     fn nothing_to_say_is_said_and_one_bird_is_no_grid() {
         let (a, names) = answers(vec![vec![0, 2], vec![1, 0]]);
-        let html = render(&a, &names, 30);
+        let html = render(&a, &names, 30, &kit::SpeciesSlots::default());
         assert!(
             html.contains("No pair was heard within a minute of each other at least 3 times"),
             "{html}"
         );
         let (one, names) = answers(vec![vec![0]]);
-        assert!(render(&one, &names, 30).contains("Not enough different birds"));
+        assert!(
+            render(&one, &names, 30, &kit::SpeciesSlots::default())
+                .contains("Not enough different birds")
+        );
     }
 
     /// A name is data: markup in it is escaped, and a long one is cut for the label but kept whole
@@ -428,7 +438,7 @@ mod tests {
         let (mut a, mut names) = answers(vec![vec![0, 9], vec![9, 0]]);
         names[0] = "<i>Extraordinarily Long-named Warbler</i>".to_string();
         a.species[0] = names[0].clone();
-        let html = render(&a, &names, 30);
+        let html = render(&a, &names, 30, &kit::SpeciesSlots::default());
         assert!(!html.contains("<i>Extra"), "{html}");
         assert!(
             html.contains("&lt;i&gt;Extraordinarily Long-named Warbler&lt;/i&gt;"),

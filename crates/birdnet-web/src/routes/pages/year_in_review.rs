@@ -45,6 +45,8 @@ pub(super) async fn content(state: AppState) -> String {
     let start = year_start(&today);
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
+        // Each species in "who led" is in the colour it owns on the station, as on every chart.
+        let slots = super::viz::kit::station_slots(&state)?;
         state.with_read_db(|conn| {
             let daily = birdnet_db::sqlite::range_daily_counts(conn, &start, &today)?;
             // 1000 is more species than any station has heard.
@@ -55,12 +57,12 @@ pub(super) async fn content(state: AppState) -> String {
             // When the station was listening, so a day it was off is not a quiet one in the
             // calendar. Unreadable means unknown, which draws nothing.
             let effort = super::listening::effort_by_date(conn, &start, &today).ok();
-            Ok::<_, birdnet_db::sqlite::DbError>((today, daily, top, new, effort, monthly))
+            Ok::<_, birdnet_db::sqlite::DbError>((today, daily, top, new, effort, monthly, slots))
         })
     })
     .await;
 
-    let (today, daily, top, new, effort, monthly) = match result {
+    let (today, daily, top, new, effort, monthly, slots) = match result {
         Ok(Ok(v)) => v,
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "year in review: query failed");
@@ -80,6 +82,7 @@ pub(super) async fn content(state: AppState) -> String {
         effort.as_ref(),
         &monthly,
         &names,
+        &slots,
     )
 }
 
@@ -102,6 +105,7 @@ fn render_content(
     effort: Option<&std::collections::BTreeMap<String, f64>>,
     monthly: &[(String, String, u32, i64)],
     names: &birdnet_core::i18n::NameLocalizer,
+    slots: &super::viz::kit::SpeciesSlots,
 ) -> String {
     let year = today.get(0..4).unwrap_or("----");
     let total: i64 = daily.iter().map(|d| d.count).sum();
@@ -204,7 +208,7 @@ fn render_content(
     html.push_str("</div>");
 
     // ── Month by month: who led, and when that changed ───────────────────
-    html.push_str(&seasons_card(today, top, monthly, names));
+    html.push_str(&seasons_card(today, top, monthly, names, slots));
 
     // ── Leaderboard + milestones (two columns) ───────────────────────────
     html.push_str(r#"<div class="yir-cols">"#);
@@ -409,13 +413,14 @@ impl Seasons {
         }
     }
 
-    /// The JSON `static/seasons.js` reads.
-    fn json(&self, year: i32) -> serde_json::Value {
+    /// The JSON `static/seasons.js` reads. A species' `slot` is the colour it owns on the
+    /// station (1 to 8, as on every other chart), or 0 for the neutral.
+    fn json(&self, year: i32, slots: &super::viz::kit::SpeciesSlots) -> serde_json::Value {
         serde_json::json!({
             "year": year,
             "thisMonth": self.this_month,
-            "species": self.species.iter().enumerate().map(|(i, (name, counts))| {
-                serde_json::json!({ "name": name, "slot": i + 1, "counts": counts })
+            "species": self.species.iter().map(|(name, counts)| {
+                serde_json::json!({ "name": name, "slot": slots.number(name), "counts": counts })
             }).collect::<Vec<_>>(),
         })
     }
@@ -427,6 +432,7 @@ fn seasons_card(
     top: &[(String, String, i64)],
     monthly: &[(String, String, u32, i64)],
     names: &birdnet_core::i18n::NameLocalizer,
+    slots: &super::viz::kit::SpeciesSlots,
 ) -> String {
     let Some(data) = seasons_data(today, top, monthly, names) else {
         return String::new();
@@ -437,7 +443,7 @@ fn seasons_card(
         html,
         r#"<div class="bnb-card pad" id="seasons"><div class="section-header"><div><div class="bnb-eyebrow">Month by month</div><h2 class="sh-h">Who led, and when it changed</h2></div></div><p class="fig-take">{sentence}</p><div class="ssn" data-ssn data-ssn-json="{json}"></div>"#,
         sentence = escape_html(&data.sentence()),
-        json = escape_html(&data.json(year).to_string()),
+        json = escape_html(&data.json(year, slots).to_string()),
     );
     html.push_str(r#"<details class="pt-disc"><summary>See the numbers — detections by month</summary><div class="viz-table-scroll"><table class="pt-tbl"><caption class="sr-only">Detections for each of the year's busiest species in each month</caption><thead><tr><th scope="col">Species</th>"#);
     for m in super::viz::kit::MONTHS {
@@ -556,7 +562,7 @@ mod tests {
         let top = top_of(&[("Aa a", "Alpha <b>", 30), ("Bb b", "Beta", 12)]);
         let monthly = vec![m("Aa a", "Alpha <b>", 1, 10), m("Bb b", "Beta", 2, 12)];
         let en = birdnet_core::i18n::NameLocalizer::english();
-        let html = seasons_card("2026-03-05", &top, &monthly, &en);
+        let html = seasons_card("2026-03-05", &top, &monthly, &en, &Default::default());
         assert!(
             html.contains(r#"data-ssn-json=""#) && html.contains("&quot;thisMonth&quot;:2"),
             "{html}"
@@ -569,7 +575,10 @@ mod tests {
             html.contains("Alpha &lt;b&gt;") && html.contains("not yet"),
             "{html}"
         );
-        assert_eq!(seasons_card("2026-03-05", &top[..1], &monthly, &en), "");
+        assert_eq!(
+            seasons_card("2026-03-05", &top[..1], &monthly, &en, &Default::default()),
+            ""
+        );
     }
 
     #[test]
@@ -591,6 +600,7 @@ mod tests {
             None,
             &[],
             &birdnet_core::i18n::NameLocalizer::english(),
+            &Default::default(),
         );
         assert!(html.contains("Your year in"));
         assert!(html.contains("rp-stats"));
@@ -629,6 +639,7 @@ mod tests {
             Some(&effort),
             &[],
             &birdnet_core::i18n::NameLocalizer::english(),
+            &Default::default(),
         );
         assert!(
             html.contains("Tue 19 May 2026&#10;The station was not listening"),
@@ -664,6 +675,7 @@ mod tests {
                 effort,
                 &[],
                 &birdnet_core::i18n::NameLocalizer::english(),
+                &Default::default(),
             )
         };
         let html = render(Some(&effort));
@@ -697,6 +709,7 @@ mod tests {
             None,
             &[],
             &birdnet_core::i18n::NameLocalizer::english(),
+            &Default::default(),
         );
         assert!(html.contains("2026-03-01 · 5 · the loudest"), "{html}");
     }
