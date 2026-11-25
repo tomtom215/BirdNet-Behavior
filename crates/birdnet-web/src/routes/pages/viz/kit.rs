@@ -312,6 +312,43 @@ pub fn monotone_path_reversed(pts: &[(f64, f64)]) -> String {
     d
 }
 
+/// A rendered chart reduced to `(length, FNV-1a 64)`, for the tests that pin a renderer's
+/// output byte for byte across a refactor (UIC-18). FNV and not `DefaultHasher`, whose output
+/// the standard library does not promise to keep from one release to the next.
+/// With `BNB_PIN_DUMP` set to a directory, the drawing is also written there as `{name}.svg`,
+/// so the pictures before and after a change can be compared line by line.
+#[cfg(test)]
+pub fn pin(name: &str, s: &str) -> (usize, u64) {
+    if let Some(dir) = std::env::var_os("BNB_PIN_DUMP") {
+        let _ = std::fs::write(std::path::Path::new(&dir).join(format!("{name}.svg")), s);
+    }
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    (s.len(), h)
+}
+
+/// Every colour a species owns that `svg` paints with: a class `ck-c1` .. `ck-c8`, a token
+/// `--chart-1` .. `--chart-8`, or a gradient made from either. For the tests that hold a mark
+/// that is not a species to the colours no species owns (N25-06).
+#[cfg(test)]
+pub fn species_colours_in(svg: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for k in 1..=8 {
+        for word in [format!("ck-c{k}"), format!("--chart-{k})")] {
+            if svg
+                .match_indices(&word)
+                .any(|(i, _)| !svg[i + word.len()..].starts_with(|c: char| c.is_ascii_digit()))
+            {
+                out.push(word);
+            }
+        }
+    }
+    out
+}
+
 /// The value of the monotone curve through `pts` at `x` (for tests and for placing
 /// a mark on a curve rather than on the polyline). `None` outside the data's span.
 #[cfg(test)]
@@ -592,17 +629,38 @@ pub fn id_safe(s: &str) -> String {
         .collect()
 }
 
-/// The class for categorical slot `i` (0-based): `ck-c1` … `ck-c8`, then `ck-cother`.
-///
-/// For a category that is **not a species**: a single series (`Fill::Slot(0)`, a day chart's
-/// one colour). A species takes its colour from the station's [`SpeciesSlots`], never from its
-/// position in a chart; `tests/a_species_keeps_its_colour_on_every_chart.rs` lists the callers
-/// this is allowed in.
-pub fn slot_class(i: usize) -> String {
-    if i < 8 {
-        format!("ck-c{}", i + 1)
+/// A time of day given as hours since midnight (`6.35`) as `HH:MM`, to the nearest minute, wrapped
+/// onto one day (`24.0` is `00:00`). Plain text, for a chart's `<title>` and `data-tip`; a time
+/// printed where the reader sees it goes through `crate::display`, which the reader's 12- or
+/// 24-hour choice re-prints. The one clock the charts share (UIC-18): `bars`, `bursts`, `funnel`
+/// and the dawn chorus each had their own.
+#[must_use]
+#[allow(clippy::cast_possible_truncation)]
+pub fn clock_of_hours(h: f64) -> String {
+    let total = (h * 60.0).round() as i64;
+    format!(
+        "{:02}:{:02}",
+        (total / 60).rem_euclid(24),
+        total.rem_euclid(60)
+    )
+}
+
+/// Seconds after midnight as `HH:MM`, the minute it falls in (never rounded up), as
+/// [`clock_of_hours`].
+#[must_use]
+pub fn clock_of_secs(secs: u32) -> String {
+    format!("{:02}:{:02}", secs / 3600 % 24, secs % 3600 / 60)
+}
+
+/// `v` in `0..=1` as a percentage for a reading: whole numbers, and "<1%" for what rounds to
+/// nothing but is not nothing.
+#[must_use]
+pub fn pct(v: f64) -> String {
+    let p = v * 100.0;
+    if p > 0.0 && p < 1.0 {
+        "<1%".to_owned()
     } else {
-        "ck-cother".to_string()
+        format!("{:.0}%", p.round())
     }
 }
 

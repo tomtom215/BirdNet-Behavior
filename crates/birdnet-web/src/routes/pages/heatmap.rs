@@ -114,7 +114,7 @@ pub(super) fn content(terrain: &str) -> String {
             topic: "Hour by hour",
             title: "Detections by hour",
             action: Some(("/patterns?tab=dawn", "See who sings when →")),
-            note: "Totals for every hour of the day over the chosen range. Dawn (05:00 to 09:00) and dusk (18:00 to 22:00) bars are green; the rest are grey.",
+            note: "Totals for every hour of the day over the chosen range. The bars in the stronger ink are the hours around today's sunrise and sunset, for a range of up to two weeks at a station with a location, and otherwise fixed morning and evening clock hours; the key under the chart names them.",
             body: "",
         },
         "hourly-totals",
@@ -234,7 +234,7 @@ async fn heatmap_grid_partial(
         &state,
         format!("heatmap-grid:{days}"),
         FRAGMENT_ERR,
-        move |s| compute_heatmap_grid(s, days),
+        move |s| compute_heatmap_grid(s, days).map(with_as_of),
     )
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -270,7 +270,7 @@ async fn hourly_totals_partial(
         &state,
         format!("hourly-totals:{days}"),
         FRAGMENT_ERR,
-        move |s| compute_hourly_totals(s, days),
+        move |s| compute_hourly_totals(s, days).map(with_as_of),
     )
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -363,7 +363,7 @@ async fn streamgraph_partial(
         &state,
         format!("streamgraph:{days}"),
         FRAGMENT_ERR,
-        move |s| compute_streamgraph(s, days),
+        move |s| compute_streamgraph(s, days).map(with_as_of),
     )
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -379,13 +379,13 @@ async fn streamgraph_partial(
 /// read, so the first visit (and each background refresh) is instant.
 pub fn prewarm(state: &AppState) {
     let cache = state.analytics_cache();
-    if let Some(h) = compute_streamgraph(state, DEFAULT_DAYS) {
+    if let Some(h) = compute_streamgraph(state, DEFAULT_DAYS).map(with_as_of) {
         cache.put(format!("streamgraph:{DEFAULT_DAYS}"), h);
     }
-    if let Some(h) = compute_heatmap_grid(state, DEFAULT_DAYS) {
+    if let Some(h) = compute_heatmap_grid(state, DEFAULT_DAYS).map(with_as_of) {
         cache.put(format!("heatmap-grid:{DEFAULT_DAYS}"), h);
     }
-    if let Some(h) = compute_hourly_totals(state, DEFAULT_DAYS) {
+    if let Some(h) = compute_hourly_totals(state, DEFAULT_DAYS).map(with_as_of) {
         cache.put(format!("hourly-totals:{DEFAULT_DAYS}"), h);
     }
 }
@@ -474,18 +474,19 @@ fn render_hourly_bars(
             .to_string();
     }
     let by_hour = hour_array(totals);
-    // One hue for the hours the page is about (dawn 5-8, dusk 18-21), a neutral for
-    // the rest. It was amber against green, which is the pair a reader who cannot
-    // tell red from green cannot tell apart.
+    // The annotation ink for the hours around sunrise and sunset (by the station's sun when it
+    // is known, by fixed clock hours when it is not: `bars::sun_hour`), a neutral for the rest.
+    // It was amber against green, which is the pair a reader who cannot tell red from green
+    // cannot tell apart, and then the brand green a species owns (N25-06).
     super::viz::bars::hourly(&super::viz::bars::Hourly {
         id: "hourly-totals",
         name: "Detections by hour of the day",
         desc: &format!(
-            "Detections for each hour of the day over the last {window_days} days; dawn and dusk hours are in colour, the rest grey."
+            "Detections for each hour of the day over the last {window_days} days; the hours around sunrise and sunset are in a stronger ink, the rest grey."
         ),
         unit: "detections",
         counts: by_hour,
-        fill: super::viz::bars::Fill::DawnDusk,
+        fill: super::viz::bars::Fill::SunHours,
         width: 760.0,
         plot_h: 150.0,
         solar,
@@ -497,6 +498,12 @@ fn render_hourly_bars(
         class: "",
         compact: false,
     })
+}
+
+/// A figure from the analytics cache ends with the line that says how old it is (UIC-23).
+#[allow(clippy::needless_pass_by_value)]
+fn with_as_of(html: String) -> String {
+    html + crate::analytics_cache::AS_OF_LINE
 }
 
 #[cfg(test)]
@@ -606,6 +613,6 @@ mod tests {
         let svg = render_hourly_bars(&totals, Some((6.5, 18.5)), 7);
         assert!(svg.contains("<svg"));
         assert!(svg.contains("Detections&#9;20"), "{svg}");
-        assert!(svg.contains("sunrise 6:30"), "{svg}");
+        assert!(svg.contains("sunrise 06:30"), "{svg}");
     }
 }

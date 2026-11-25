@@ -4763,10 +4763,10 @@ svg[data-ck="marks"] { cursor: default; }
 .ck-track       { fill: var(--chart-track); }
 .ck-seam        { stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); stroke-linejoin: round; vector-effect: non-scaling-stroke; }
 .ck-halo        { paint-order: stroke; stroke: var(--chart-gap); stroke-width: 3px; stroke-linejoin: round; }
-.ck-line        { fill: none; stroke: var(--c, var(--chart-1)); stroke-width: var(--chart-stroke); stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 1px 3px color-mix(in oklab, var(--c, var(--chart-1)) 38%, transparent)); }
+.ck-line        { fill: none; stroke: var(--c, var(--chart-annot)); stroke-width: var(--chart-stroke); stroke-linecap: round; stroke-linejoin: round; filter: drop-shadow(0 1px 3px color-mix(in oklab, var(--c, var(--chart-annot)) 38%, transparent)); }
 .ck-ghost       { fill: none; stroke: var(--chart-axis); stroke-width: var(--chart-stroke); stroke-linecap: round; stroke-linejoin: round; opacity: .7; }
 .ck-area        { stroke: none; }
-.ck-ring        { fill: var(--c, var(--chart-1)); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); }
+.ck-ring        { fill: var(--c, var(--chart-annot)); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); }
 .ck-hit         { fill: none; pointer-events: all; }
 .ck-future      { fill: none; stroke: var(--chart-grid-strong); stroke-width: 1px; vector-effect: non-scaling-stroke; }
 .ck-peak        { fill: none; stroke: var(--chart-annot); stroke-width: 2px; pointer-events: none; }
@@ -4774,7 +4774,7 @@ svg[data-ck="marks"] { cursor: default; }
 .ck-pill-t      { fill: var(--chart-gap); }
 .ck-bandlbl     { fill: var(--fg); font-weight: var(--fw-medium); pointer-events: none; }
 .ck-cursor      { stroke: var(--chart-crosshair); stroke-width: 1px; vector-effect: non-scaling-stroke; pointer-events: none; }
-.ck-dot         { fill: var(--c, var(--chart-1)); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); pointer-events: none; }
+.ck-dot         { fill: var(--c, var(--chart-annot)); stroke: var(--chart-gap); stroke-width: var(--chart-gap-w); pointer-events: none; }
 
 /* The chart vocabulary beyond the bar: a painted sky, notched columns, discs, notes in the margin and a
    rail for the sun. Each is drawn from the chart tokens only, so the theme chooses every value. */
@@ -4795,7 +4795,7 @@ svg[data-ck="marks"] { cursor: default; }
 .ck-ov      { pointer-events: none; }
 .ck-outline { fill: none; pointer-events: none; }
 /* A disc is a cell of a heat grid: its area and its colour are the same number. */
-.ck-disc  { fill: var(--c, var(--chart-1)); }
+.ck-disc  { fill: var(--c, var(--chart-annot)); }
 .ck-hg .a { stop-color: var(--c); stop-opacity: .22; }
 :root[data-theme="dark"] .ck-hg .a { stop-opacity: .4; }
 .ck-hg .b { stop-color: var(--c); stop-opacity: 0; }
@@ -7055,3 +7055,17 @@ input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
 .rt-table td.rt-cell .rt-n { display: block; font-size: var(--fs-2xs); line-height: 1.2; }
 .rt-table td.rt-cell { white-space: nowrap; }
 /* /Lane G */
+/* Lane L1 (batch 3) */
+/* A mark that is not a species (a total, an emphasis, a second measure, a season) is drawn in the
+   annotation ink against the neutral, never in a colour a species owns (N25-06). */
+.ck-cink { --c: var(--chart-annot); }
+/* The seam between two bands of one column, in the card's colour, so two bands of one colour read
+   as two. */
+.ck-seg-seam { stroke: var(--chart-gap); stroke-width: 1px; vector-effect: non-scaling-stroke; pointer-events: none; }
+/* The migration ridgeline's windows and its weekly bars were tinted with --chart-1 (spring) and
+   --chart-5 (fall); a window is not a species. */
+.rd-band-spring, .rd-band-fall { fill: color-mix(in oklab, var(--chart-annot) 7%, var(--chart-gap)); }
+.rd-bar-spring, .rd-bar-fall { fill: var(--chart-annot); }
+/* The line under a figure from the analytics cache that says when it was worked out (UIC-23). */
+.ck-asof { margin: var(--space-6) 0 0; }
+/* /Lane L1 */

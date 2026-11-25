@@ -40,6 +40,39 @@ pub const DEFAULT_TTL: Duration = Duration::from_secs(600);
 /// parameters (e.g. `?days=`) cannot grow the map without bound.
 const MAX_ENTRIES: usize = 256;
 
+/// Where a cached figure says how old it is (UIC-23).
+///
+/// A figure served from this cache can be up to [`DEFAULT_TTL`] old, and its own "now" marks
+/// (the heat grid's current hour) are as old as that; the figure says so. A renderer ends its HTML with [`AS_OF_LINE`] (or writes [`AS_OF`]
+/// where its caption is), and the cache replaces the marker with the time the figure was worked
+/// out **when it stores it**, so every reader of the stored copy is told that time and not the
+/// time of its own request. A value with no marker (a JSON body, the species slots) is stored as
+/// it was.
+pub const AS_OF: &str = "<!--bnb:as-of-->";
+
+/// [`AS_OF`] as the line under a figure.
+pub const AS_OF_LINE: &str = r#"<p class="bnb-meta ck-asof"><!--bnb:as-of--></p>"#;
+
+/// The local wall clock, seconds since the epoch shifted by the UTC offset.
+fn local_now() -> i64 {
+    crate::routes::pages::unix_secs() + crate::routes::pages::local_utc_offset_secs()
+}
+
+/// `value` with its [`AS_OF`] marker replaced by "As of HH:MM", the minute of `local_secs`,
+/// through the reader's clock (`display::clock`).
+fn stamp(value: String, local_secs: i64) -> String {
+    if !value.contains(AS_OF) {
+        return value;
+    }
+    let of_day = u32::try_from(local_secs.rem_euclid(86_400)).unwrap_or(0);
+    let at = crate::display::clock(&crate::routes::pages::viz::kit::clock_of_secs(of_day));
+    value.replacen(
+        AS_OF,
+        &format!("As of {at}; worked out again at most every ten minutes."),
+        1,
+    )
+}
+
 /// One cached fragment plus the instant it was stored.
 #[derive(Debug)]
 struct Entry {
@@ -52,15 +85,25 @@ struct Entry {
 pub struct AnalyticsCache {
     entries: Mutex<HashMap<String, Entry>>,
     ttl: Duration,
+    /// The local wall clock a stored figure is stamped with ([`AS_OF`]); a test sets its own.
+    clock: fn() -> i64,
 }
 
 impl AnalyticsCache {
     /// Create a cache with the given freshness window.
     #[must_use]
     pub fn new(ttl: Duration) -> Self {
+        Self::with_clock(ttl, local_now)
+    }
+
+    /// A cache whose stamps ([`AS_OF`]) read `clock` (local seconds since the epoch) instead of
+    /// the wall clock.
+    #[must_use]
+    pub fn with_clock(ttl: Duration, clock: fn() -> i64) -> Self {
         Self {
             entries: Mutex::new(HashMap::new()),
             ttl,
+            clock,
         }
     }
 
@@ -88,11 +131,19 @@ impl AnalyticsCache {
         }
     }
 
-    /// Store `value` under `key`, replacing any existing entry.
+    /// Store `value` under `key`, replacing any existing entry, stamped with the time it is
+    /// stored (see [`AS_OF`]).
     ///
     /// When the cache is at capacity and the key is new, one entry is evicted
     /// first — preferring an already-expired entry, otherwise the oldest.
     pub fn put(&self, key: String, value: String) {
+        let _ = self.store(key, value);
+    }
+
+    /// [`Self::put`], returning the value as stored (stamped), for the request that worked it
+    /// out: it is served what every later reader is served.
+    pub fn store(&self, key: String, value: String) -> String {
+        let value = stamp(value, (self.clock)());
         let now = Instant::now();
         let mut map = self.lock();
         if map.len() >= MAX_ENTRIES
@@ -101,7 +152,14 @@ impl AnalyticsCache {
         {
             map.remove(&victim);
         }
-        map.insert(key, Entry { value, stored: now });
+        map.insert(
+            key,
+            Entry {
+                value: value.clone(),
+                stored: now,
+            },
+        );
+        value
     }
 
     /// Get a cached fragment or compute, store, and return it.
@@ -117,10 +175,7 @@ impl AnalyticsCache {
             return hit;
         }
         let (cacheable, body) = compute();
-        if let Some(value) = cacheable {
-            self.put(key.to_string(), value);
-        }
-        body
+        cacheable.map_or(body, |value| self.store(key.to_string(), value))
     }
 
     /// Number of entries currently held (fresh or stale). Diagnostic aid.
@@ -215,16 +270,45 @@ where
     .flatten();
     computed.map_or_else(
         || fallback.to_string(),
-        |html| {
-            state.analytics_cache().put(key, html.clone());
-            html
-        },
+        |html| state.analytics_cache().store(key, html),
     )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static NOW: std::sync::atomic::AtomicI64 = std::sync::atomic::AtomicI64::new(0);
+    fn fake_clock() -> i64 {
+        NOW.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// UIC-23: a stored figure carries the time it was worked out, and a reader minutes later is
+    /// told that time and not the time of its own request.
+    #[test]
+    fn a_cached_figure_carries_the_time_it_was_worked_out() {
+        let set = |s: i64| NOW.store(s, std::sync::atomic::Ordering::SeqCst);
+        let cache = AnalyticsCache::with_clock(DEFAULT_TTL, fake_clock);
+        set(7 * 3600 + 15 * 60 + 40);
+        let served = cache.store("k".into(), format!("<svg/>{AS_OF_LINE}"));
+        assert!(served.contains(r#"data-clk="07:15">07:15<"#), "{served}");
+        assert!(!served.contains(AS_OF), "the marker is replaced: {served}");
+        set(7 * 3600 + 21 * 60);
+        let later = cache.get("k").expect("fresh");
+        assert_eq!(later, served, "a later reader is served the stored copy");
+        assert!(!later.contains("07:21"), "{later}");
+        // Counterpart: worked out again, it says the new time.
+        cache.put("k".into(), format!("<svg/>{AS_OF_LINE}"));
+        assert!(
+            cache
+                .get("k")
+                .expect("fresh")
+                .contains(r#"data-clk="07:21""#)
+        );
+        // A value with no marker (a JSON body) is stored as it was.
+        cache.put("j".into(), "{\"a\":1}".into());
+        assert_eq!(cache.get("j").as_deref(), Some("{\"a\":1}"));
+    }
 
     #[test]
     fn miss_returns_none() {

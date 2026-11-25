@@ -98,6 +98,8 @@ for (const [name, route, theme, selector] of PAGES) {
     isMobile: true,
     hasTouch: true,
     colorScheme: theme,
+    // The charts at rest, never mid-entrance (UIR-33).
+    reducedMotion: 'reduce',
   });
   await ctx.addInitScript((t) => {
     try { localStorage.setItem('theme', t); localStorage.setItem('bnb-density', 'regular'); } catch (e) {}

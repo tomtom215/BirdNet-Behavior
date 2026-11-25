@@ -17,6 +17,12 @@
 // dot pulses and the skeletons shimmer, and the run must find them. A probe
 // that finds none in the control is not looking, and exits 1 for that.
 //
+// A fourth case (UIR-33): a chart's entrance plays once. With nothing asked for, each chart
+// route is opened at 1280 px, left to finish arriving, then resized to a phone and back; no
+// chart entrance (ck-grow, ck-reveal, ck-draw, ck-fade, dc-bloom) may be running after either
+// resize. Its control: at least one of those routes must have been seen running an entrance
+// on load, or the probe is not looking.
+//
 // Usage:  BASE=http://127.0.0.1:8611 CHROMIUM_PATH=... node motion.mjs
 //         MUTATE=1 node motion.mjs   (self-test: puts a 5 s animation on <body>
 //                                     through the CSSOM, which no preference
@@ -94,6 +100,49 @@ for (const mode of MODES) {
   summary.push(`${mode.name.padEnd(9)} ${pages} pages, ${loud} with a running animation`);
   await context.close();
 }
+// ---- a resize does not replay a chart's entrance (UIR-33) ----------------------------
+const ENTRANCES = ['ck-grow', 'ck-reveal', 'ck-draw', 'ck-fade', 'dc-bloom'];
+const CHART_ROUTES = ['/', '/patterns', '/patterns?tab=dawn', '/patterns?tab=migration', '/reports?tab=year', '/species?view=lifelist'];
+let entrancesSeen = 0;
+{
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, reducedMotion: 'no-preference' });
+  const page = await context.newPage();
+  const entrances = () => page.evaluate((names) => document.getAnimations()
+    .filter((a) => a.playState === 'running' && names.includes(a.animationName))
+    .map((a) => {
+      const t = a.effect && a.effect.target;
+      return `${a.animationName} on ${t ? t.tagName.toLowerCase() + '.' + String(t.className && t.className.baseVal !== undefined ? t.className.baseVal : t.className).trim().split(/\s+/).slice(0, 2).join('.') : '?'}`;
+    }), ENTRANCES);
+  for (const route of CHART_ROUTES) {
+    try {
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.goto(BASE + route, { waitUntil: 'domcontentloaded', timeout: 25000 });
+      // Count the entrance while it plays, for the control, then let it finish.
+      for (let i = 0; i < 20 && !entrancesSeen; i++) {
+        if ((await entrances()).length) entrancesSeen++;
+        await page.waitForTimeout(50);
+      }
+      await page.waitForLoadState('networkidle', { timeout: 9000 }).catch(() => {});
+      await page.waitForTimeout(2500);
+      for (const width of [390, 1280]) {
+        await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
+        await page.waitForTimeout(120);
+        const replay = await entrances();
+        if (replay.length) {
+          failures.push(`resize ${route} to ${width} px: ${replay.length} chart entrances play again: ${replay.slice(0, 3).join('; ')}`);
+        }
+      }
+    } catch (e) {
+      failures.push(`resize ${route}: ${String(e).slice(0, 100)}`);
+    }
+  }
+  await context.close();
+  summary.push(`resize    ${CHART_ROUTES.length} chart pages resized twice each`);
+}
+if (!entrancesSeen && !MUTATE) {
+  failures.push('the resize check never saw a chart entrance play on load: it is not looking, so a quiet resize means nothing');
+}
+
 await browser.close();
 
 console.log(summary.join('\n'));
