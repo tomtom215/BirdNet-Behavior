@@ -274,20 +274,20 @@ fn render_calendar(
         } else {
             ""
         };
-        let body = if count > 0 {
-            format!(r#"<span class="dc">{count}</span><span class="dsp">{species} sp</span>"#)
-        } else {
-            String::new()
-        };
         // A real link to the day's page, which htmx enhances by loading the day beside the
-        // calendar; and the cell says in words what its colour says (UIC-28).
-        let label = match (count, species) {
-            (0, _) => format!("{day} {month_label}, no detections"),
-            (c, s) => format!(
-                "{day} {month_label}, {} detection{}, {s} species",
-                super::group_thousands(c),
-                if c == 1 { "" } else { "s" }
-            ),
+        // calendar; and the cell says in words what its colour says (UIC-28). The words are its
+        // own text, with what the eye takes from the grid ("May", "detections") written for a
+        // screen reader only, so the visible label is part of its name (WCAG 2.5.3): an
+        // `aria-label` replaced the visible "23 sp" with "23 species" and axe reported every cell.
+        let month_sr = format!(r#"<span class="sr-only"> {month_label},</span>"#);
+        let body = if count > 0 {
+            format!(
+                r#"<span class="dc"> {count}<span class="sr-only"> detection{s},</span></span><span class="dsp"> {species} sp<span class="sr-only">ecies</span></span>"#,
+                count = super::group_thousands(count),
+                s = if count == 1 { "" } else { "s" },
+            )
+        } else {
+            r#"<span class="sr-only"> no detections</span>"#.to_string()
         };
         let current = if sel_cls.is_empty() {
             ""
@@ -296,8 +296,7 @@ fn render_calendar(
         };
         let _ = write!(
             html,
-            r#"<a class="rp-day{sel_cls}" href="/reports/day?date={date}" hx-get="/pages/history-chart?date={date}" hx-target='#rp-daydetail' hx-swap="innerHTML" aria-label="{label}"{current} data-style="background:{heat}"><span class="dn">{day}</span>{body}</a>"#,
-            label = escape_html(&label),
+            r#"<a class="rp-day{sel_cls}" href="/reports/day?date={date}" hx-get="/pages/history-chart?date={date}" hx-target='#rp-daydetail' hx-swap="innerHTML"{current} data-style="background:{heat}"><span class="dn">{day}{month_sr}</span>{body}</a>"#,
         );
     }
     html.push_str("</div>");
@@ -804,13 +803,40 @@ mod tests {
                 "{date}: htmx still loads the day beside the calendar: {tag}"
             );
         }
-        let label = |tag: &str| -> String {
-            let at = tag.find("aria-label=\"").expect("a label") + "aria-label=\"".len();
-            tag[at..at + tag[at..].find('"').expect("closed")].to_owned()
+        // What a screen reader hears is the cell's own text, all of it; what the eye reads is
+        // that text less the screen-reader-only words. The second must be part of the first
+        // (WCAG 2.5.3, axe's label-content-name-mismatch), so there is no `aria-label`.
+        let whole: Vec<&str> = html
+            .split("<a class=\"rp-day")
+            .skip(1)
+            .map(|c| &c[..c.find("</a>").expect("a closed link")])
+            .collect();
+        let text = |el: &str, sr: bool| -> String {
+            let mut out = String::new();
+            let mut rest = &el[el.find('>').expect("a tag") + 1..];
+            while let Some(lt) = rest.find('<') {
+                out.push_str(&rest[..lt]);
+                let gt = rest[lt..].find('>').expect("a tag") + lt;
+                if !sr && rest[lt..gt].contains("sr-only") {
+                    // Skip the hidden words, up to this span's end.
+                    let end = rest[gt..].find("</span>").expect("closed") + gt;
+                    rest = &rest[end + "</span>".len()..];
+                } else {
+                    rest = &rest[gt + 1..];
+                }
+            }
+            out.push_str(rest);
+            out.split_whitespace().collect::<Vec<_>>().join(" ")
         };
-        assert_eq!(label(cells[11]), "12 May, 140 detections, 23 species");
-        assert_eq!(label(cells[30]), "31 May, 1 detection, 1 species");
-        assert_eq!(label(cells[0]), "1 May, no detections");
+        for (cell, (heard, seen)) in [
+            (11, ("12 May, 140 detections, 23 species", "12 140 23 sp")),
+            (30, ("31 May, 1 detection, 1 species", "31 1 1 sp")),
+            (0, ("1 May, no detections", "1")),
+        ] {
+            assert_eq!(text(whole[cell], true), heard, "{}", whole[cell]);
+            assert_eq!(text(whole[cell], false), seen, "{}", whole[cell]);
+            assert!(!cells[cell].contains("aria-label"), "{}", cells[cell]);
+        }
         // The selected day says so to a screen reader too, and only that day.
         assert!(cells[11].starts_with(" sel\""), "{}", cells[11]);
         assert!(cells[11].contains("aria-current=\"date\""), "{}", cells[11]);
