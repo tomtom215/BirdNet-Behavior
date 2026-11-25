@@ -1586,7 +1586,18 @@ impl AppState {
                     // NULL for a row quarantined before it was recorded, in
                     // both stores.
                     source: row.source.as_deref(),
-                })
+                })?;
+                // And the verdict `approve_quarantine` gives it: SQLite admits
+                // the row as `confirmed` (N24-02). Without this the copy
+                // counted an approved detection as one nobody had looked at.
+                adb.set_review_verdict(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                    row.file_name.as_deref(),
+                    Some(birdnet_db::sqlite::ReviewStatus::Confirmed.as_str()),
+                )
+                .map(drop)
             })
         {
             tracing::warn!(error = %e, "quarantined detection approved into SQLite but not into the analytics copy");
