@@ -234,7 +234,7 @@ async fn heatmap_grid_partial(
         &state,
         format!("heatmap-grid:{days}"),
         FRAGMENT_ERR,
-        move |s| compute_heatmap_grid(s, days),
+        move |s| compute_heatmap_grid(s, days).map(with_as_of),
     )
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -270,7 +270,7 @@ async fn hourly_totals_partial(
         &state,
         format!("hourly-totals:{days}"),
         FRAGMENT_ERR,
-        move |s| compute_hourly_totals(s, days),
+        move |s| compute_hourly_totals(s, days).map(with_as_of),
     )
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -363,7 +363,7 @@ async fn streamgraph_partial(
         &state,
         format!("streamgraph:{days}"),
         FRAGMENT_ERR,
-        move |s| compute_streamgraph(s, days),
+        move |s| compute_streamgraph(s, days).map(with_as_of),
     )
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -379,13 +379,13 @@ async fn streamgraph_partial(
 /// read, so the first visit (and each background refresh) is instant.
 pub fn prewarm(state: &AppState) {
     let cache = state.analytics_cache();
-    if let Some(h) = compute_streamgraph(state, DEFAULT_DAYS) {
+    if let Some(h) = compute_streamgraph(state, DEFAULT_DAYS).map(with_as_of) {
         cache.put(format!("streamgraph:{DEFAULT_DAYS}"), h);
     }
-    if let Some(h) = compute_heatmap_grid(state, DEFAULT_DAYS) {
+    if let Some(h) = compute_heatmap_grid(state, DEFAULT_DAYS).map(with_as_of) {
         cache.put(format!("heatmap-grid:{DEFAULT_DAYS}"), h);
     }
-    if let Some(h) = compute_hourly_totals(state, DEFAULT_DAYS) {
+    if let Some(h) = compute_hourly_totals(state, DEFAULT_DAYS).map(with_as_of) {
         cache.put(format!("hourly-totals:{DEFAULT_DAYS}"), h);
     }
 }
@@ -498,6 +498,12 @@ fn render_hourly_bars(
         class: "",
         compact: false,
     })
+}
+
+/// A figure from the analytics cache ends with the line that says how old it is (UIC-23).
+#[allow(clippy::needless_pass_by_value)]
+fn with_as_of(html: String) -> String {
+    html + crate::analytics_cache::AS_OF_LINE
 }
 
 #[cfg(test)]

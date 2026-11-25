@@ -7074,4 +7074,6 @@ input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
    --chart-5 (fall); a window is not a species. */
 .rd-band-spring, .rd-band-fall { fill: color-mix(in oklab, var(--chart-annot) 7%, var(--chart-gap)); }
 .rd-bar-spring, .rd-bar-fall { fill: var(--chart-annot); }
+/* The line under a figure from the analytics cache that says when it was worked out (UIC-23). */
+.ck-asof { margin: var(--space-6) 0 0; }
 /* /Lane L1 */

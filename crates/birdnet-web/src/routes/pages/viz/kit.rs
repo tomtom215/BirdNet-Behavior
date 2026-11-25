@@ -647,7 +647,6 @@ pub fn clock_of_hours(h: f64) -> String {
 
 /// Seconds after midnight as `HH:MM`, the minute it falls in (never rounded up), as
 /// [`clock_of_hours`].
-#[cfg(feature = "analytics")]
 #[must_use]
 pub fn clock_of_secs(secs: u32) -> String {
     format!("{:02}:{:02}", secs / 3600 % 24, secs % 3600 / 60)
