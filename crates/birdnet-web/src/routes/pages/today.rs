@@ -1441,9 +1441,14 @@ fn render_detection_card(
                 .file_name()
                 .map_or_default(|n| n.to_string_lossy().to_string());
             let safe = escape_html(&basename);
+            // Named for what it plays (UIC-12): the name and the time the card shows.
+            let label = escape_html(&format!(
+                "Play {shown}, {}",
+                crate::display::clock(&d.time)
+            ));
             format!(
                 "<button type=\"button\" class=\"x-fplay tdl-play\" data-play-src=\"/api/v2/recordings/{safe}\" \
-                 title=\"Play clip\" aria-label=\"Play clip\">▶</button>"
+                 title=\"Play clip\" aria-label=\"{label}\">▶</button>"
             )
         });
 
