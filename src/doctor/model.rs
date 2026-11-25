@@ -4,6 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use birdnet_core::config::Config;
+use birdnet_core::inference::model_state::ClassifierState;
 
 use super::Check;
 use crate::cli::Cli;
@@ -239,11 +240,12 @@ fn check_model_loads(
 ///
 /// Built from the same [`crate::helpers::models::plan`] and
 /// [`birdnet_core::inference::registry::ClassifierRegistry::load`] the daemon
-/// runs, so a route naming a classifier that is not configured, a second
-/// classifier whose file will not load, or two classifiers with one id fail
-/// here before a restart instead of only in the journal after it. A classifier
-/// the plan declined (no memory to spare, no labels) is a warning: the station
-/// runs without it. Nothing is reported for a station with one classifier and
+/// runs, so a route naming a classifier that is not configured, or two
+/// classifiers with one id, fail here before a restart instead of only in the
+/// journal after it. A classifier the plan declined (no memory to spare, no
+/// labels) or the registry left out (its file will not load, its labels are
+/// missing or the wrong length) is a warning: the station runs without it
+/// (MDL-01). Nothing is reported for a station with one classifier and
 /// no routes, which `check_model_loads` has already covered.
 ///
 /// `ceiling_mib` is the machine's memory ceiling, as the daemon reads it.
@@ -261,16 +263,21 @@ fn check_classifiers(
         labels.to_path_buf(),
         ceiling_mib,
     );
-    if plan.specs.len() == 1 && plan.routes.is_empty() && plan.notes.is_empty() {
+    if plan.specs.len() == 1
+        && plan.routes.is_empty()
+        && plan.notes.is_empty()
+        && plan.left_out.is_empty()
+    {
         return Vec::new();
     }
     let mut out = Vec::new();
-    let declined: Vec<&str> = plan
+    let mut declined: Vec<String> = plan
         .notes
         .iter()
-        .map(String::as_str)
         .filter(|n| !n.contains("` admitted: "))
+        .cloned()
         .collect();
+    declined.extend(plan.left_out.iter().map(ClassifierState::message));
     if !declined.is_empty() {
         out.push(Check::warn(
             "Classifier plan",
@@ -292,32 +299,35 @@ fn check_classifiers(
             out.push(Check::fail(
                 NAME,
                 format!("the detection daemon will refuse to start: {e}"),
-                "correct the MODEL_2_* / MODEL_3_* / MODEL_ROUTES setting it names; until \
+                "correct the MODEL_PATH / LABELS_PATH / MODEL_ROUTES setting it names; until \
                  then the web interface runs and nothing is detected",
             ));
             return out;
         }
     };
-    for idx in 1..registry.len() {
-        let Some(m) = registry.model(idx) else {
-            continue;
-        };
-        if let Some(width) = m.model.output_dimension()
-            && width != m.model.label_count()
-        {
-            out.push(Check::fail(
-                NAME,
-                format!(
-                    "classifier `{}` scores {width} classes and its labels file names {}; \
-                     species are assigned by position, so its detections would carry the \
-                     wrong names",
-                    m.id,
-                    m.model.label_count()
-                ),
-                "install the labels file that shipped with that model",
-            ));
-            return out;
-        }
+    // An extra classifier the registry leaves out (its file will not load,
+    // its labels are missing or not its model's length) no longer stops the
+    // detector (MDL-01): the station runs without it, which is a warning, and
+    // the reason is the one to act on.
+    if !registry.left_out().is_empty() {
+        let why: Vec<String> = registry
+            .left_out()
+            .iter()
+            .map(ClassifierState::message)
+            .collect();
+        out.push(Check::warn(
+            NAME,
+            format!(
+                "the detector will start without {}: {}",
+                if registry.left_out().len() == 1 {
+                    "one classifier"
+                } else {
+                    "some classifiers"
+                },
+                why.join("; ")
+            ),
+            "install the file it names, or remove that classifier's MODEL_n_* settings",
+        ));
     }
     let loaded: Vec<String> = registry
         .info()
@@ -362,7 +372,8 @@ fn check_classifiers(
                  nothing",
                 names.join(" or ")
             ),
-            "name a source for it in MODEL_ROUTES (`<source id>:<primary>+<classifier>`), \
+            "name a source for it in MODEL_ROUTES (`<source id>:<primary>+<classifier>`, or \
+             `local:<primary>+<classifier>` for a microphone set in the configuration file), \
              or remove its MODEL_n_* settings to free the memory",
         ));
     }
@@ -866,18 +877,23 @@ mod tests {
         );
     }
 
-    /// MMP-02: a second classifier whose file will not load stops the
-    /// detection daemon at startup; the doctor said nothing about it.
+    /// MMP-02 and MDL-01: a second classifier whose file will not load is
+    /// named by the doctor. It used to stop the detection daemon at startup,
+    /// and was a failure here; the daemon now starts without it, so the doctor
+    /// says that — a warning naming the classifier and why — rather than
+    /// predicting a refusal that no longer happens.
     #[test]
-    fn a_second_classifier_that_will_not_load_fails_the_doctor() {
+    fn a_second_classifier_that_will_not_load_is_a_warning_naming_it() {
         let dir = tempfile::tempdir().unwrap();
         let config = station(dir.path(), "");
         std::fs::write(dir.path().join("perch.onnx"), b"not an onnx file").unwrap();
         let checks = classifier_checks(dir.path(), &config);
-        let failed = failures(&checks);
+        assert!(failures(&checks).is_empty(), "{checks:#?}");
         assert!(
-            failed.iter().any(|c| c.message.contains("perch")),
-            "no failing check names the broken classifier: {checks:#?}"
+            checks.iter().any(|c| c.status == Status::Warn
+                && c.message.contains("`perch`")
+                && c.message.contains("will not load")),
+            "no warning names the broken classifier: {checks:#?}"
         );
     }
 
@@ -926,7 +942,7 @@ mod tests {
             .find(|c| c.name == "Classifier plan")
             .unwrap_or_else(|| panic!("no warning names the declined classifier: {checks:#?}"));
         assert_eq!(plan.status, Status::Warn);
-        assert!(plan.message.contains("`perch` skipped"), "{plan:?}");
+        assert!(plan.message.contains("`perch` is not running"), "{plan:?}");
     }
 
     /// A station with one classifier and no routes gets no classifier check:

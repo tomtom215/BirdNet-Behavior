@@ -271,7 +271,7 @@ pub fn derive_source_label(source_file: &std::path::Path) -> String {
         .unwrap_or("");
     birdnet_core::detection::types::RecordingFile::parse(name)
         .and_then(|rf| rf.rtsp_id)
-        .unwrap_or_else(|| "local".to_owned())
+        .unwrap_or_else(|| birdnet_core::inference::registry::LOCAL_SOURCE.to_owned())
 }
 
 #[cfg(test)]

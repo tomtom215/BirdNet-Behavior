@@ -631,6 +631,11 @@ async fn serve(
 
     let daemon_handle = if cli.web_only {
         tracing::info!("running in web-only mode (no detection daemon)");
+        state.metrics().set_detector_state(
+            birdnet_core::inference::model_state::DetectorState::WebOnly {
+                why: web_only_why(&config_decision),
+            },
+        );
         None
     } else {
         daemon::start_detection_daemon(
@@ -692,6 +697,7 @@ async fn serve(
         daemon::mirror_liveness(
             handle.running_flag(),
             state.detection_status_flag(),
+            state.metrics(),
             std::time::Duration::from_secs(5),
         );
     }
@@ -1147,6 +1153,18 @@ async fn serve(
     sd_notify::stopping();
     tracing::info!("BirdNet-Behavior stopped");
     Ok(())
+}
+
+/// Why a web-only station is web-only: the configuration's errors forced it,
+/// or it was asked for.
+fn web_only_why(decision: &helpers::startup_config::ConfigDecision) -> String {
+    if decision.forces_web_only() {
+        "the configuration file has errors and there is no last good copy to fall back to; \
+         run `birdnet-behavior --doctor` for what to correct"
+            .to_owned()
+    } else {
+        "the station was started with --web-only".to_owned()
+    }
 }
 
 /// How long shutdown waits for the detection loop to finish the segment it is

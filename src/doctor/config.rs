@@ -204,7 +204,7 @@ pub(super) fn check_occurrence_filter(cli: &Cli, config: Option<&Config>) -> Che
         return Check::fail(
             NAME,
             format!("metadata label file {} does not exist", labels.display()),
-            "the station refuses to start on a label file it cannot read: fix METADATA_LABELS_PATH or remove it if the model is indexed like the classifier",
+            "the detector starts with the occurrence filter off until the label file is there (MDL-02): fix METADATA_LABELS_PATH, or remove it if the model is indexed like the classifier",
         );
     }
 
@@ -1851,7 +1851,10 @@ mod occurrence_filter_gates {
     }
 
     /// A metadata label file that is configured but absent is the same class
-    /// of error as an absent model: the daemon refuses to start on it.
+    /// of error as an absent model: the occurrence filter cannot run. (The
+    /// daemon used to refuse to start on it; it now starts with the filter
+    /// off, MDL-02, and this stays a failure because the filter the station
+    /// was set up with is not running.)
     #[test]
     fn a_configured_but_missing_label_file_fails() {
         let dir = tempfile::tempdir().unwrap();

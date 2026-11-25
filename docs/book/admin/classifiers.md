@@ -177,14 +177,20 @@ A second classifier runs only where a route sends it: every audio source is judg
 MODEL_ROUTES=pond:perch,garden:birdnet+perch
 ```
 
-The source is its `audio_sources` row id — the same label `GET /api/v2/system/capture` lists, and the one each source's recordings carry in their file names, which is how the detection loop knows where a recording came from. To run both classifiers on your only microphone, name that microphone's id: `MODEL_ROUTES=<id>:birdnet+perch`. That needs the microphone to be listed on the **Audio** page, which is what gives it an id; a single microphone set only in `birdnet.conf` records without one, and gets the primary alone. Use `+` for more than one classifier on one source, and commas between sources.
+The source is its `audio_sources` row id — the same label `GET /api/v2/system/capture` lists, and the one each source's recordings carry in their file names, which is how the detection loop knows where a recording came from. A microphone set only in `birdnet.conf` records without an id in its file names, and is the source `local`: its detections are recorded under that name, and a route written for it reaches it. To run both classifiers on your only microphone:
+
+```ini
+MODEL_ROUTES=local:birdnet+perch
+```
+
+A microphone listed on the **Audio** page has an id of its own; name that id instead. Use `+` for more than one classifier on one source, and commas between sources.
 
 Two rules here exist because a station runs unattended for months:
 
 - **A source you do not name gets the primary classifier**, never nothing. Silence must not be reachable by forgetting to write a line.
 - **A route naming a classifier you have not configured stops the station at startup**, where the journal and `--doctor` will show it. Accepting `pond:pecrh` and discovering at runtime that the pond routes to nothing would cost months of recordings from that microphone, and the station would look identical to one having a quiet season.
 
-A classifier you configured but that is not running — the memory rule below declined it — is not a typo: a route naming it falls back to the other classifiers the route names, or to the primary, and the journal says so. A classifier that loads but that no route names judges nothing and still holds its memory; the start-up log and `--doctor` warn about it. `--doctor` loads every configured classifier and route the way the station will, in its *Classifiers* check, so a route typo or a second model that will not load fails there before a restart.
+A classifier you configured but that is not running — the memory rule below declined it, its file is missing or will not load, or its labels file is missing or does not have one row per class the model scores — is not a typo, and it does not stop the others: the station starts without it, a route naming it falls back to the other classifiers the route names, or to the primary, and the journal (at WARN) and `birdnet_classifier_state` say which classifier and why. Only the primary classifier is one the detector cannot start without, and it too is refused when its labels file is not its model's length, rather than naming every species by another's row. A classifier that loads but that no route names judges nothing and still holds its memory; the start-up log and `--doctor` warn about it. `--doctor` loads every configured classifier and route the way the station will, in its *Classifiers* check, so a route typo or a second model that will not load fails there before a restart.
 
 ## What the station does with two opinions
 

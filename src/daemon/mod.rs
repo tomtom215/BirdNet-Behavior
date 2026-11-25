@@ -21,6 +21,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use birdnet_core::audio::extraction::Extractor;
+use birdnet_core::inference::model_state::{ClassifierState, DetectorState, FilterState};
 use birdnet_core::inference::registry::ModelSpec;
 use birdnet_integrations::notification::{NotificationFilter, NotificationTemplate};
 
@@ -323,6 +324,11 @@ pub fn start_detection_daemon(
         state.set_watch_dir(dir);
     }
     let Some((model_path, labels_path, watch_dir)) = resolve_required_paths(cli, config) else {
+        state
+            .metrics()
+            .set_detector_state(DetectorState::NotConfigured {
+                why: not_configured_why(cli, config),
+            });
         tracing::warn!(
             "detection daemon NOT started: model, labels, or watch_dir not configured — the web \
              UI will run but NO audio will be analysed and NO detections recorded"
@@ -500,6 +506,12 @@ pub fn start_detection_daemon(
     for note in &model_plan.notes {
         tracing::info!("{note}");
     }
+    // Said at WARN, not INFO (MDL-06): the station is running on fewer
+    // classifiers than it was given, and the journal is where that is read.
+    for left in &model_plan.left_out {
+        tracing::warn!(classifier = %left.id, "{}", left.message());
+    }
+    let model_state = model_state_observer(&state, model_plan.left_out, model_plan.declared);
     let (primary, extra_models, model_thresholds) =
         split_plan(model_plan.specs, &model_path, &labels_path);
 
@@ -577,16 +589,9 @@ pub fn start_detection_daemon(
         metadata_model_path,
         metadata_labels_path,
         species_aliases_path,
-        // Publish the occurrence filter's real state to Prometheus. This is
-        // the number that would have made the inert-filter defect visible from
-        // a dashboard instead of from reading the code: 0 means every species
-        // the classifier knows is a candidate, wherever the station is.
-        on_species_filter_state: Some(birdnet_core::detection::daemon::SpeciesFilterObserver::new(
-            {
-                let metrics = state.metrics();
-                move |active, candidates| metrics.set_occurrence_filter(active, candidates)
-            },
-        )),
+        // What became of each classifier and of the occurrence filter, into
+        // the station's published model state (MDL-01 to MDL-16).
+        on_model_state: Some(model_state),
         // Count what the pipeline actually gets through. Nothing did, and
         // without it a station whose model answers nothing is indistinguishable
         // from one whose pipeline is not running: every other series is
@@ -627,10 +632,11 @@ pub fn start_detection_daemon(
     // `analysis_runs` on the processor thread before it consumes an event —
     // paths only here, because the hashing reads 541 MB and does not belong
     // on the async runtime.
-    let manifest = run::RunManifest {
+    let mut manifest = run::RunManifest {
         model_path: daemon_config.model_path.clone(),
         labels_path: daemon_config.labels_path.clone(),
-        geomodel_path: daemon_config.metadata_model_path.clone(),
+        // Decided once the daemon has said whether the filter runs: see below.
+        geomodel_path: None,
         app_version: env!("CARGO_PKG_VERSION"),
         confidence: f64::from(confidence),
         sensitivity: f64::from(sensitivity),
@@ -646,6 +652,17 @@ pub fn start_detection_daemon(
     match birdnet_core::detection::daemon::run_daemon(&daemon_config, event_tx) {
         Ok(handle) => {
             tracing::info!("detection daemon started");
+            state.metrics().set_detector_state(DetectorState::Running);
+            // The run records the geomodel it filters with, and only that one:
+            // a filter that is off — its model missing or damaged, its labels
+            // missing, the station without a position — filters nothing, and a
+            // missing file made the run impossible to register, which stopped every
+            // detection being recorded (MDL-05).
+            if state.models_state().occurrence_filter.is_active() {
+                manifest
+                    .geomodel_path
+                    .clone_from(&daemon_config.metadata_model_path);
+            }
             let rt_handle = tokio::runtime::Handle::current();
             tokio::task::spawn_blocking(move || {
                 // No run, no rows: returning here drops the receiver, the
@@ -684,9 +701,78 @@ pub fn start_detection_daemon(
         }
         Err(e) => {
             tracing::error!(error = %e, "failed to start detection daemon");
+            state
+                .metrics()
+                .set_detector_state(DetectorState::Failed { why: e.to_string() });
             None
         }
     }
+}
+
+/// Why the detector is not set up, naming each setting that is missing.
+fn not_configured_why(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> String {
+    let set = |flag: Option<&PathBuf>, key: &str| {
+        flag.is_some() || config.and_then(|c| c.get(key)).is_some()
+    };
+    let missing: Vec<&str> = [
+        (
+            set(cli.model.as_ref(), "MODEL_PATH"),
+            "the classifier (MODEL_PATH)",
+        ),
+        (
+            set(cli.labels.as_ref(), "LABELS_PATH"),
+            "its labels (LABELS_PATH)",
+        ),
+        (
+            set(cli.watch_dir.as_ref(), "RECS_DIR"),
+            "the recordings folder (RECS_DIR)",
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(present, what)| (!present).then_some(what))
+    .collect();
+    format!(
+        "no {} is configured. Install the classifier from the setup page (Settings → \
+         Capture) and restart from there, or set them in the configuration file",
+        missing.join(", ")
+    )
+}
+
+/// Where the daemon's report of its models goes: the station's published
+/// model state (MDL-01 to MDL-16).
+///
+/// The registry reports the classifiers it was handed; `planned_out` holds
+/// the ones the plan did not hand it (no labels setting, an unreadable file,
+/// no memory to spare). Each report is the two together, in the order the
+/// configuration declares them, so the published list is every classifier
+/// the configuration names, whichever step left it out.
+fn model_state_observer(
+    state: &birdnet_web::state::AppState,
+    planned_out: Vec<ClassifierState>,
+    declared: Vec<String>,
+) -> birdnet_core::detection::daemon::ModelStateObserver {
+    let classifiers = {
+        let metrics = state.metrics();
+        move |loaded: &[ClassifierState]| {
+            metrics.set_classifier_states(declared_order(loaded, &planned_out, &declared));
+        }
+    };
+    let filter = {
+        let metrics = state.metrics();
+        move |filter: &FilterState| metrics.set_occurrence_filter(filter.clone())
+    };
+    birdnet_core::detection::daemon::ModelStateObserver::new(classifiers, filter)
+}
+
+/// The registry's states and the plan's left-out ones, in declaration order.
+fn declared_order(
+    loaded: &[ClassifierState],
+    planned_out: &[ClassifierState],
+    declared: &[String],
+) -> Vec<ClassifierState> {
+    let mut states: Vec<ClassifierState> = loaded.iter().chain(planned_out).cloned().collect();
+    states.sort_by_key(|s| declared.iter().position(|id| *id == s.id));
+    states
 }
 
 /// Keep the health endpoint's daemon flag true only while the loop thread is
@@ -705,9 +791,14 @@ pub fn start_detection_daemon(
 /// 15-minute alerting debounce and costs one atomic load. The task ends once
 /// it has recorded the exit: a daemon is not restarted in-process, so there
 /// is nothing further to mirror.
+///
+/// The published model state follows it down too: the detector becomes
+/// [`DetectorState::Stopped`], and the classifiers and filter it ran are
+/// published as not running.
 pub fn mirror_liveness(
     source: Arc<AtomicBool>,
     target: Arc<AtomicBool>,
+    metrics: birdnet_web::metrics::SharedMetrics,
     every: Duration,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
@@ -716,8 +807,10 @@ pub fn mirror_liveness(
             tick.tick().await;
             if !source.load(Ordering::Acquire) {
                 target.store(false, Ordering::Relaxed);
+                metrics.set_detector_state(DetectorState::Stopped);
                 tracing::error!(
-                    "detection daemon thread has exited; /api/v2/health?strict=1 now reports it                      stopped. The web UI keeps serving; restart the service to resume detection"
+                    "detection daemon thread has exited; /api/v2/health?strict=1 now reports it \
+                     stopped. The web UI keeps serving; restart the service to resume detection"
                 );
                 return;
             }
@@ -753,9 +846,17 @@ mod liveness_mirror_tests {
     async fn the_health_flag_follows_the_loop_thread_down_and_not_before() {
         let source = Arc::new(AtomicBool::new(true));
         let target = Arc::new(AtomicBool::new(true));
-        let task = mirror_liveness(Arc::clone(&source), Arc::clone(&target), TICK);
+        let metrics = birdnet_web::metrics::new_shared();
+        metrics.set_detector_state(DetectorState::Running);
+        let task = mirror_liveness(
+            Arc::clone(&source),
+            Arc::clone(&target),
+            Arc::clone(&metrics),
+            TICK,
+        );
 
         settle().await;
+        assert_eq!(metrics.models_state().detector, DetectorState::Running);
         assert!(
             target.load(Ordering::Relaxed),
             "a running daemon must keep reading as running"
@@ -775,13 +876,23 @@ mod liveness_mirror_tests {
             task.is_finished(),
             "nothing is left to mirror once the exit is recorded"
         );
+        assert_eq!(
+            metrics.models_state().detector,
+            DetectorState::Stopped,
+            "the published state follows the loop thread down"
+        );
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_daemon_that_never_came_up_is_reported_at_the_first_tick() {
         let source = Arc::new(AtomicBool::new(false));
         let target = Arc::new(AtomicBool::new(true));
-        let task = mirror_liveness(Arc::clone(&source), Arc::clone(&target), TICK);
+        let task = mirror_liveness(
+            Arc::clone(&source),
+            Arc::clone(&target),
+            birdnet_web::metrics::new_shared(),
+            TICK,
+        );
         settle().await;
         assert!(!target.load(Ordering::Relaxed));
         assert!(task.is_finished());
