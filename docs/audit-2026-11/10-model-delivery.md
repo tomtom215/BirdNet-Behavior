@@ -267,3 +267,34 @@ The Rust catalogue has exactly 4 entries (`crates/birdnet-integrations/src/model
 - Perch end to end.
 - macOS.
 - Real-network failure paths: exit 75, the Docker start-without-model loop, filter-off retrofits.
+
+
+## What a real station did (2026-11-25)
+
+Run by the session itself, not a lane: the binary built from `15a5d15`, the live network, the real files,
+nothing stubbed. The scripts were scratch and are not in the tree; turning them into repository tests is row
+MDL-18. Each station was started on its own port with its own database and handed
+`tests/testdata/Pica_pica_30s.wav` through its watch directory.
+
+| Check | Result |
+|---|---|
+| `--install-model` for birdnet-v24, birdnet-v24-range-v2, birdnet-v3, perch-v2 into an empty directory | all exit 0; each file's size and sha256 equals its pin |
+| The installer's `download_geomodel`, called from its own library files | both files verified against the installer's pins |
+| Origins used | this project's releases for all but Perch (Hugging Face, its only origin) |
+| A second install of V2.4 | exit 0, nothing downloaded |
+| V2.4 with eight bytes overwritten (same size) | replaced; hash restored |
+| `--from-file` with the real file / with the range filter's file | installed / refused, nothing installed |
+| V2.4 with its range filter, 51.48 N 0.0 E | 3 detections of Pica pica; filter active, 137 candidates |
+| V3.0, no filter configured | 4 detections |
+| V3.0 with the geomodel, London / Kansas (38.5 N 98.0 W) | 4 detections / 0 |
+| V3.0 with the geomodel, no coordinates | 4 detections; Health page "Species filter: on · admitting" |
+| V3.0, the geomodel's labels file missing | detector did not start; 0 files analysed; health 200, strict 503 |
+| V3.0 in Kansas, the geomodel truncated | 4 detections; Health page "off"; nothing on Today |
+| V2.4 with Perch as a second classifier, its file missing | 3 detections from V2.4; Perch skipped at INFO |
+| V2.4 with Perch, its file truncated | detector did not start; 0 files analysed; strict health 503 |
+| V2.4 with Perch, no route | Perch loaded, 0 windows |
+| V2.4 with Perch, `MODEL_ROUTES=local:birdnet+perch`, a recording named as a local microphone names it | Perch loaded, 0 windows |
+| V2.4 with Perch, `MODEL_ROUTES=RTSP_1:birdnet+perch`, a recording carrying `RTSP_1` in its name | Perch ran 10 windows; 6 detections recorded under Perch, V2.4 agreeing on 3 |
+
+Not covered by this run: the installer scripts under systemd, the container, the dashboard's install button, a
+network that really fails (every download took seconds), macOS.
