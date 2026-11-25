@@ -94,11 +94,11 @@ print_admin_login() {
 # failure this repository warns about most; the exit status says the same to a
 # script (EXIT_NO_CLASSIFIER, 10-config.sh).
 #
-# It does not offer the dashboard's install button. That button installs the
-# default classifier only where the configuration names no model, and this
-# installer's configuration names the classifier's files (that is how a re-run
-# knows which classifier the station runs), so on such a station the dashboard
-# reports the file missing instead of offering to fetch it.
+# It does not name the dashboard's install button, which is there for some
+# stations and not others: the button installs the default classifier (V2.4)
+# where the configuration names no model or names the place that classifier
+# installs to, so a V2.4 station has it and a V3.0 station is told its file is
+# missing instead. The commands below work for both.
 print_classifier_missing() {
     [ "${CLASSIFIER_MISSING}" = 1 ] || return 0
     local local_hint="${MODEL_FILE}"

@@ -47,7 +47,7 @@ The download is tried three times, 30 seconds and then 90 seconds apart. If it s
 sudo bash install.sh repair
 ```
 
-The dashboard's install button (Settings → Capture) does not appear on a station the installer set up this way: the installer's configuration names the model's file, and the page offers to install the default model only on a station whose configuration names none. It says the named file is missing instead. Docker follows the same rule: the container retries, then starts without the model and says so in its log; every later start tries again. `BIRDNET_MODEL_RETRY_WAITS` sets the waits (`"30 90"` by default; `""` for a single attempt).
+On a station set up for the default classifier (BirdNET V2.4), the dashboard offers the same install as a button under Settings → Capture. A station set up for the V3.0 preview has no button: the page says its model file is missing, and `install.sh repair` is the way. Docker follows the same rule: the container retries, then starts without the model and says so in its log; every later start tries again. `BIRDNET_MODEL_RETRY_WAITS` sets the waits (`"30 90"` by default; `""` for a single attempt).
 
 ### Installing without internet
 

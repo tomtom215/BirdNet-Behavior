@@ -293,7 +293,7 @@ impl ClassifierSetup {
 
         // Not started on this start.
         snap.range_filter = range_installed;
-        if let Some(configured) = layout.model.as_deref() {
+        if let Some(configured) = own_model(layout, model) {
             // The operator's own model: the default would not be what runs, and
             // an install button here would put 84 MB beside a file nothing reads.
             if !configured.is_file() {
@@ -345,7 +345,7 @@ impl ClassifierSetup {
             if layout.web_only {
                 return Err(StartError::WebOnly);
             }
-            if layout.started || layout.model.is_some() {
+            if layout.started || own_model(layout, model).is_some() {
                 return Err(StartError::NotNeeded);
             }
             if matches!(inner.job, Some(Job::Running { .. })) {
@@ -425,6 +425,21 @@ impl ClassifierSetup {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .job = Some(job);
     }
+}
+
+/// The configured model, when it is the operator's own and not the place the
+/// default classifier installs to.
+///
+/// The installers always write `MODEL_PATH`, naming `<model dir>/<default
+/// id>.onnx`. A station whose download failed therefore has a configured path
+/// and no file, and is a station that needs the default installed, not one
+/// running its own model. The same file name in any other directory is the
+/// operator's: an install would not put a file there.
+fn own_model<'a>(layout: &'a Layout, default: &CatalogEntry) -> Option<&'a Path> {
+    let configured = layout.model.as_deref()?;
+    let (default_path, _) =
+        birdnet_integrations::model_catalog::installed_paths(default, &layout.model_dir);
+    (configured != default_path).then_some(configured)
 }
 
 /// Why an install did not start.
@@ -562,6 +577,50 @@ mod tests {
             ..layout(dir.path())
         };
         assert_eq!(setup(web).begin_install(ok), Err(StartError::WebOnly));
+    }
+
+    /// The installers always write `MODEL_PATH`, naming the place the default
+    /// classifier installs to. When its download failed, that is a station with
+    /// a configured model and no file, and it read as the operator's own model:
+    /// no install button, and advice to put a file there by hand (OOB-20).
+    #[test]
+    fn a_configured_path_that_is_the_default_install_is_the_default_classifier() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ok = |_: &str, _: &Path, _: &mut dyn FnMut(&Progress)| Ok(());
+        let default_path = dir.path().join(format!("{DEFAULT_CLASSIFIER_ID}.onnx"));
+        let named = || Layout {
+            model: Some(default_path.clone()),
+            ..layout(dir.path())
+        };
+
+        // Not there yet: offered, and installable.
+        let snap = setup(named()).snapshot(false);
+        assert_eq!(snap.phase, Phase::Missing);
+        assert!(snap.missing_path.is_none());
+        assert_eq!(setup(named()).begin_install(ok), Ok(()));
+
+        // There, and this start did not load it.
+        put_default(dir.path());
+        assert_eq!(setup(named()).snapshot(false).phase, Phase::NeedsRestart);
+
+        // The same file name somewhere an install would not put it is still the
+        // operator's own: installing would leave the configured path empty.
+        let elsewhere = Layout {
+            model: Some(
+                dir.path()
+                    .join("other")
+                    .join(format!("{DEFAULT_CLASSIFIER_ID}.onnx")),
+            ),
+            ..layout(dir.path())
+        };
+        assert_eq!(
+            setup(elsewhere.clone()).snapshot(false).phase,
+            Phase::Configured
+        );
+        assert_eq!(
+            setup(elsewhere).begin_install(ok),
+            Err(StartError::NotNeeded)
+        );
     }
 
     /// The whole job, against a stand-in installer: both files are fetched in
