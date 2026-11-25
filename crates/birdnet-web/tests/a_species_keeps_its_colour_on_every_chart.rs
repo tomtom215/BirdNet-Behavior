@@ -359,7 +359,10 @@ fn walk(dir: &std::path::Path, ext: &str, recurse: bool, out: &mut Vec<std::path
 /// The kinds of colour-making each file holds.
 fn colour_sites(rel: &str, text: &str) -> BTreeSet<&'static str> {
     let mut kinds = BTreeSet::new();
-    if rel.ends_with(".rs") {
+    if std::path::Path::new(rel)
+        .extension()
+        .is_some_and(|e| e == "rs")
+    {
         if text.matches("slot_class(").count() > text.matches("fn slot_class(").count() {
             kinds.insert("slot_class");
         }
@@ -409,7 +412,7 @@ fn every_colour_made_by_position_is_named_and_is_not_a_species() {
             .to_string_lossy()
             .replace('\\', "/");
         let src = std::fs::read_to_string(p).unwrap();
-        let text = if rel.ends_with(".rs") {
+        let text = if p.extension().is_some_and(|e| e == "rs") {
             served_rust(&src)
         } else {
             src

@@ -562,7 +562,13 @@ mod tests {
         let top = top_of(&[("Aa a", "Alpha <b>", 30), ("Bb b", "Beta", 12)]);
         let monthly = vec![m("Aa a", "Alpha <b>", 1, 10), m("Bb b", "Beta", 2, 12)];
         let en = birdnet_core::i18n::NameLocalizer::english();
-        let html = seasons_card("2026-03-05", &top, &monthly, &en, &Default::default());
+        let html = seasons_card(
+            "2026-03-05",
+            &top,
+            &monthly,
+            &en,
+            &crate::routes::pages::viz::kit::SpeciesSlots::default(),
+        );
         assert!(
             html.contains(r#"data-ssn-json=""#) && html.contains("&quot;thisMonth&quot;:2"),
             "{html}"
@@ -576,7 +582,13 @@ mod tests {
             "{html}"
         );
         assert_eq!(
-            seasons_card("2026-03-05", &top[..1], &monthly, &en, &Default::default()),
+            seasons_card(
+                "2026-03-05",
+                &top[..1],
+                &monthly,
+                &en,
+                &crate::routes::pages::viz::kit::SpeciesSlots::default()
+            ),
             ""
         );
     }
@@ -600,7 +612,7 @@ mod tests {
             None,
             &[],
             &birdnet_core::i18n::NameLocalizer::english(),
-            &Default::default(),
+            &crate::routes::pages::viz::kit::SpeciesSlots::default(),
         );
         assert!(html.contains("Your year in"));
         assert!(html.contains("rp-stats"));
@@ -639,7 +651,7 @@ mod tests {
             Some(&effort),
             &[],
             &birdnet_core::i18n::NameLocalizer::english(),
-            &Default::default(),
+            &crate::routes::pages::viz::kit::SpeciesSlots::default(),
         );
         assert!(
             html.contains("Tue 19 May 2026&#10;The station was not listening"),
@@ -675,7 +687,7 @@ mod tests {
                 effort,
                 &[],
                 &birdnet_core::i18n::NameLocalizer::english(),
-                &Default::default(),
+                &crate::routes::pages::viz::kit::SpeciesSlots::default(),
             )
         };
         let html = render(Some(&effort));
@@ -709,7 +721,7 @@ mod tests {
             None,
             &[],
             &birdnet_core::i18n::NameLocalizer::english(),
-            &Default::default(),
+            &crate::routes::pages::viz::kit::SpeciesSlots::default(),
         );
         assert!(html.contains("2026-03-01 · 5 · the loudest"), "{html}");
     }

@@ -636,8 +636,11 @@ mod tests {
     fn the_json_is_flat_and_complete() {
         let rows = [row("2026-10-20", 6, "<b>Robin</b>", 4)];
         let t = build(&rows, "2026-10-21", 2, 9, Some(&[false, true]), &ident);
-        let v: serde_json::Value =
-            serde_json::from_str(&to_json(&t, &Default::default())).expect("json");
+        let v: serde_json::Value = serde_json::from_str(&to_json(
+            &t,
+            &crate::routes::pages::viz::kit::SpeciesSlots::default(),
+        ))
+        .expect("json");
         assert_eq!(v["days"], 2);
         assert_eq!(v["n"].as_array().expect("n").len(), 48);
         assert_eq!(v["top"].as_array().expect("top").len(), 48);
@@ -776,7 +779,11 @@ mod tests {
     #[test]
     fn the_json_carries_the_sun_and_the_finding_and_nulls_without_them() {
         let t = sunny(10, 6.0, &[4, 5, 6, 7], 10);
-        let v: serde_json::Value = serde_json::from_str(&to_json(&t, &Default::default())).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&to_json(
+            &t,
+            &crate::routes::pages::viz::kit::SpeciesSlots::default(),
+        ))
+        .unwrap();
         assert_eq!(v["sun"].as_array().unwrap().len(), 10);
         assert_eq!(v["sun"][0], serde_json::json!([6.0, 18.0]));
         assert!(
@@ -787,8 +794,11 @@ mod tests {
         );
         let mut bare = t;
         bare.sun.clear();
-        let v: serde_json::Value =
-            serde_json::from_str(&to_json(&bare, &Default::default())).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&to_json(
+            &bare,
+            &crate::routes::pages::viz::kit::SpeciesSlots::default(),
+        ))
+        .unwrap();
         assert!(v["sun"].is_null() && v["take"].is_null(), "{v}");
     }
 

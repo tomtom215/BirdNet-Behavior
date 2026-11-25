@@ -1679,7 +1679,7 @@ mod tests {
             30,
             100,
             &birdnet_core::i18n::NameLocalizer::english(),
-            &Default::default(),
+            &crate::routes::pages::viz::kit::SpeciesSlots::default(),
         );
         assert!(
             html.contains(
@@ -1700,7 +1700,7 @@ mod tests {
             30,
             100,
             &birdnet_core::i18n::NameLocalizer::english(),
-            &Default::default(),
+            &crate::routes::pages::viz::kit::SpeciesSlots::default(),
         );
         assert!(html.contains("of 25 bursts.</p>"), "{html}");
         // Under the limit it is every session that was fetched, and says so.
@@ -1718,7 +1718,7 @@ mod tests {
             30,
             100,
             &birdnet_core::i18n::NameLocalizer::english(),
-            &Default::default(),
+            &crate::routes::pages::viz::kit::SpeciesSlots::default(),
         );
         assert!(html.contains("within 30 minutes"), "{html}");
         assert!(!html.contains("20 minutes"), "{html}");

@@ -277,7 +277,7 @@ mod tests {
             s[b][a] = v;
         }
         CoGraph {
-            slots: Default::default(),
+            slots: crate::routes::pages::viz::kit::SpeciesSlots::default(),
             names: (0..n).map(|i| format!("Species {i}")).collect(),
             share: s
                 .iter()

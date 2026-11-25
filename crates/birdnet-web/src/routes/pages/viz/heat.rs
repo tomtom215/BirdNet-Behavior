@@ -670,10 +670,15 @@ mod tests {
     /// no weekday stands out.
     #[test]
     fn a_weekday_the_sentence_leaves_out_has_no_margin_bar() {
+        // A row's margin: what is drawn before its label (the bar, if any).
+        fn margin(row: &str) -> &str {
+            let end = row.find(r#"class="mono ck-annot""#).expect("a label");
+            &row[..end]
+        }
         let mut g = grid();
         g.counts = [[0; 24]; 7];
-        for d in 0..7 {
-            g.counts[d][8] = if d == 5 { 30 } else { 40 };
+        for (d, row) in g.counts.iter_mut().enumerate() {
+            row[8] = if d == 5 { 30 } else { 40 };
         }
         g.occurrences = [4, 4, 4, 4, 4, 2, 4];
         g.window_days = 30;
@@ -705,11 +710,6 @@ mod tests {
         };
         let (_, fri) = label(rows[5]);
         assert_eq!(fri, "too few days", "Friday's margin: {}", rows[5]);
-        // The margin bar is drawn before its label, after the row's discs and hit boxes.
-        fn margin(row: &str) -> &str {
-            let end = row.find(r#"class="mono ck-annot""#).expect("a label");
-            &row[..end]
-        }
         assert!(
             !margin(rows[5]).contains("ck-cother"),
             "Friday has no bar: {}",

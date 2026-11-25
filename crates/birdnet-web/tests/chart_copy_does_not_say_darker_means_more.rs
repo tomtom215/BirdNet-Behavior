@@ -63,13 +63,11 @@ fn strip_spans(src: &str, open: &str, close: &str) -> String {
     let mut rest = src;
     while let Some(i) = rest.find(open) {
         out.push_str(&rest[..i]);
-        match rest[i + open.len()..].find(close) {
-            Some(j) => rest = &rest[i + open.len() + j + close.len()..],
-            None => {
-                rest = "";
-                break;
-            }
-        }
+        let Some(j) = rest[i + open.len()..].find(close) else {
+            rest = "";
+            break;
+        };
+        rest = &rest[i + open.len() + j + close.len()..];
     }
     out.push_str(rest);
     out
@@ -100,14 +98,22 @@ fn test_module_start(src: &str) -> usize {
     src.len()
 }
 
+/// The extension of `rel`, as written.
+fn ext(rel: &str) -> &str {
+    Path::new(rel)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or_default()
+}
+
 /// The text a file can put in front of a reader, joined onto one line.
 fn served_text(rel: &str, src: &str) -> String {
-    let text = if rel.ends_with(".rs") {
+    let text = if ext(rel) == "rs" {
         // The unit tests at the foot of a module are not served (a single
         // `#[cfg(test)]` item elsewhere in the file is left in the scan).
         let src = &src[..test_module_start(src)];
         strip_line_comments(&strip_spans(src, "/*", "*/"))
-    } else if rel.ends_with(".js") {
+    } else if ext(rel) == "js" {
         strip_line_comments(&strip_spans(src, "/*", "*/"))
     } else {
         strip_spans(&strip_spans(src, "<!--", "-->"), "{#", "#}")
@@ -119,7 +125,7 @@ fn served_text(rel: &str, src: &str) -> String {
     while let Some(line) = lines.next() {
         let trimmed = line.trim_start();
         joined.push_str(trimmed);
-        if joined.ends_with('\\') && rel.ends_with(".rs") {
+        if joined.ends_with('\\') && ext(rel) == "rs" {
             joined.pop();
         } else if lines.peek().is_some() {
             joined.push(' ');
@@ -212,8 +218,7 @@ fn every_exemption_still_matches_and_the_scanner_sees_a_wrapped_word() {
         let src = files
             .iter()
             .find(|(r, _)| r == file)
-            .map(|(_, s)| s.as_str())
-            .unwrap_or_else(|| panic!("exempt file {file} is gone"));
+            .map_or_else(|| panic!("exempt file {file} is gone"), |(_, s)| s.as_str());
         assert!(
             served_text(file, src).contains(phrase),
             "exemption ({file}, {phrase}) no longer matches anything: remove it"

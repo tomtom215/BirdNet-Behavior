@@ -71,15 +71,15 @@ pub(super) fn songs_json(
         .map(|(com, (n, sci))| (com, n, sci))
         .collect();
     ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-    let named: Vec<&(&str, usize, &str)> = ranked
+    let keyed: Vec<&(&str, usize, &str)> = ranked
         .iter()
         .enumerate()
         .filter(|&(i, r)| i < NAMED || slots.slot(r.0).is_some())
         .map(|(_, r)| r)
         .collect();
-    let index_of: HashMap<&str, usize> = named.iter().enumerate().map(|(i, r)| (r.0, i)).collect();
+    let index_of: HashMap<&str, usize> = keyed.iter().enumerate().map(|(i, r)| (r.0, i)).collect();
 
-    let mut species: Vec<Value> = named
+    let mut species: Vec<Value> = keyed
         .iter()
         .map(|(com, _, sci)| json!({ "name": names.name(sci, com), "slot": slots.number(com) }))
         .collect();
@@ -93,7 +93,7 @@ pub(super) fn songs_json(
                 .copied()
                 .unwrap_or_else(|| {
                     other_used = true;
-                    named.len()
+                    keyed.len()
                 });
             Some(json!({
                 "t": t,

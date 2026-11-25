@@ -554,7 +554,7 @@ mod tests {
             &pairs,
             3,
             &birdnet_core::i18n::NameLocalizer::english(),
-            Default::default(),
+            crate::routes::pages::viz::kit::SpeciesSlots::default(),
         );
         // Robin (0.90) and Wren (0.72) and Jay (0.47) are the three most connected; Owl is cut.
         assert_eq!(g.names, vec!["Robin", "Wren", "Jay"]);
@@ -599,7 +599,7 @@ mod tests {
             &pairs,
             3,
             &birdnet_core::i18n::NameLocalizer::english(),
-            Default::default(),
+            crate::routes::pages::viz::kit::SpeciesSlots::default(),
         );
         assert_eq!(g.names, vec!["A", "B", "C"]);
         assert!((g.strength[0][1] - 1.0).abs() < 1e-12, "{:?}", g.strength);

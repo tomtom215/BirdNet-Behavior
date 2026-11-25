@@ -34,7 +34,7 @@ pub const MIN_WEEKDAY_WINDOW_DAYS: u32 = 28;
 /// Fewest occurrences of a weekday (listened days of that name) before it is compared: by the
 /// sentence here, and by the margin of the activity grid (`viz::heat::hour_by_weekday`), which
 /// draws no bar for a weekday with fewer and says "too few days".
-pub(crate) const MIN_WEEKDAY_OCCURRENCES: u32 = 3;
+pub const MIN_WEEKDAY_OCCURRENCES: u32 = 3;
 
 /// A weekday must beat the average day by this factor to be said to stand out.
 const STANDS_OUT: f64 = 1.25;
