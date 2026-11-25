@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use birdnet_core::config::Config;
 use birdnet_core::config::validate::{self as cfg_validate, Severity as ConfigSeverity};
 use birdnet_core::detection::corroboration::REFERENCE_SPAN;
-use birdnet_core::detection::pipeline::PipelineConfig;
 
 use super::Check;
 use crate::cli::Cli;
@@ -438,18 +437,48 @@ fn describe_alignment(stats: &birdnet_core::inference::vocabulary::AlignmentStat
     )
 }
 
+/// The checks that reason about how recordings are cut into analysis windows:
+/// the repeat-confirmation filter, overlapping windows (MSC-09) and the
+/// segment length (MSC-08).
+///
+/// One family, so the classifiers are loaded once for all three: each check
+/// needs the window the daemon will actually cut, which is the loaded
+/// classifiers' own and not an assumed 3 s (N24-06). [`super::model::station_windows`]
+/// fits it with the daemon's own function.
+pub(super) fn check_windows(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
+    let overlap = crate::daemon::resolve_f32_with_default(
+        cli.overlap,
+        0.0,
+        config.and_then(|c| c.get_parsed::<f32>("OVERLAP").ok()),
+    );
+    let windows = super::model::station_windows(cli, config, overlap);
+    let mut out = vec![confirmation_filter(cli, config, overlap, &windows)];
+    out.extend(overlap_duplicates(cli, config, overlap, &windows));
+    out.extend(segment_length(cli, config, &windows));
+    out
+}
+
 /// Is the repeat-confirmation filter set to something that can actually reject?
 ///
 /// The one defect worth a check of its own: `CONFIRMATION_LEVEL=lenient` with
 /// the default overlap of zero is accepted, logged as enabled, and rejects
-/// nothing — a six-second neighbourhood holds two 3-second windows, and 20% of
-/// two rounds up to one, which every detection already satisfies. The operator
-/// sees no change and has no way to tell whether that is the filter working or
-/// the filter idle.
+/// nothing — a six-second neighbourhood holds three 3-second windows, and 20%
+/// of three rounds up to one, which every detection already satisfies. The
+/// operator sees no change and has no way to tell whether that is the filter
+/// working or the filter idle.
+///
+/// Judged as the daemon's startup warning judges it: at the chunk length and
+/// the overlap the fitted pipeline cuts, so a 4.5 s window, whose
+/// neighbourhood at no overlap is itself alone, is not graded as a 3 s one.
 ///
 /// The daemon warns about this at startup too, but the daemon is not running
 /// when somebody is editing the config file, which is when this matters.
-pub(super) fn check_confirmation_filter(cli: &Cli, config: Option<&Config>) -> Check {
+fn confirmation_filter(
+    cli: &Cli,
+    config: Option<&Config>,
+    overlap: f32,
+    windows: &super::model::StationWindows,
+) -> Check {
     const NAME: &str = "Repeat-confirmation filter";
 
     let (level, warning) = crate::daemon::resolve_confirmation_level(
@@ -473,20 +502,18 @@ pub(super) fn check_confirmation_filter(cli: &Cli, config: Option<&Config>) -> C
         );
     }
 
-    let overlap = crate::daemon::resolve_f32_with_default(
-        cli.overlap,
-        0.0,
-        config.and_then(|c| c.get_parsed::<f32>("OVERLAP").ok()),
-    );
-    let chunk_secs = PipelineConfig::default().chunk_duration_secs;
+    let chunk_secs = windows.chunk_secs();
+    let effective = windows.effective_overlap_secs();
+    let caveat = windows.caveat();
 
-    if level.is_effective_at(overlap, chunk_secs) {
-        let required = level.required_confirmations_at(overlap, chunk_secs);
+    if level.is_effective_at(effective, chunk_secs) {
+        let required = level.required_confirmations_at(effective, chunk_secs);
         return Check::pass(
             NAME,
             format!(
                 "{} — a species must be heard in {required} of the windows within \
-                 {REFERENCE_SPAN:.0}s to be recorded (overlap {overlap}s)",
+                 {REFERENCE_SPAN:.0}s to be recorded (overlap {overlap}s, {chunk_secs} s \
+                 windows){caveat}",
                 level.as_str()
             ),
         );
@@ -494,22 +521,24 @@ pub(super) fn check_confirmation_filter(cli: &Cli, config: Option<&Config>) -> C
 
     let fix = level.minimum_overlap(chunk_secs).map_or_else(
         || {
-            "no overlap makes this level bite at the current window length; raise \
-             CONFIRMATION_LEVEL instead"
-                .to_owned()
+            format!(
+                "no overlap makes this level bite with {chunk_secs} s windows; raise \
+                 CONFIRMATION_LEVEL instead"
+            )
         },
         |need| {
             format!(
                 "set OVERLAP (or --overlap) to at least {need}s, or raise \
-                 CONFIRMATION_LEVEL — `balanced` and `strict` reject at any overlap"
+                 CONFIRMATION_LEVEL"
             )
         },
     );
     Check::warn(
         NAME,
         format!(
-            "{} is set but rejects nothing at overlap {overlap}s — a single window is \
-             already the whole neighbourhood it is asked to agree with",
+            "{} is set but rejects nothing at overlap {overlap}s with {chunk_secs} s \
+             windows — a single window is already the whole neighbourhood it is asked to \
+             agree with{caveat}",
             level.as_str()
         ),
         fix,
@@ -527,44 +556,167 @@ pub(super) fn check_confirmation_filter(cli: &Cli, config: Option<&Config>) -> C
 /// is the operator's choice.
 ///
 /// `None` when there is no overlap, or the interval is on. The interval is
-/// resolved as the daemon resolves it (the flag when it is not its default
-/// of 0, else the config file), and is on only above zero, as the daemon's
-/// gate reads it.
-pub(super) fn check_overlap_duplicates(cli: &Cli, config: Option<&Config>) -> Option<Check> {
+/// resolved by the daemon's own resolver, and is on only above zero, as the
+/// daemon's gate reads it. The count and the remedy are the configured
+/// classifier's window and step, not an assumed 3 s (N24-06).
+fn overlap_duplicates(
+    cli: &Cli,
+    config: Option<&Config>,
+    overlap: f32,
+    windows: &super::model::StationWindows,
+) -> Option<Check> {
     const NAME: &str = "Overlapping windows";
 
-    let overlap = crate::daemon::resolve_f32_with_default(
-        cli.overlap,
-        0.0,
-        config.and_then(|c| c.get_parsed::<f32>("OVERLAP").ok()),
+    let interval = crate::daemon::resolve_i64_with_default(
+        cli.duplicate_interval_secs,
+        0,
+        config.and_then(|c| c.get_parsed::<i64>("DUPLICATE_INTERVAL_SECS").ok()),
     );
-    let interval = if cli.duplicate_interval_secs == 0 {
-        config
-            .and_then(|c| c.get_parsed::<i64>("DUPLICATE_INTERVAL_SECS").ok())
-            .unwrap_or(0)
-    } else {
-        cli.duplicate_interval_secs
-    };
-    let chunk_secs = PipelineConfig::default().chunk_duration_secs;
+    let chunk_secs = windows.chunk_secs();
     if overlap <= 0.0 || interval > 0 || overlap >= chunk_secs {
         return None;
     }
     // A short call is inside every window that starts within one window
-    // length of it, one every `chunk - overlap` seconds.
-    let windows = (chunk_secs / (chunk_secs - overlap)).ceil();
+    // length of it, one every step.
+    let window_count = (chunk_secs / windows.step_secs()).ceil();
+    // The interval is whole seconds, and must cover the whole window.
+    let need = chunk_secs.ceil();
+    let caveat = windows.caveat();
     Some(Check::warn(
         NAME,
         format!(
             "OVERLAP is {overlap}s and DUPLICATE_INTERVAL_SECS is off, so a call heard in \
              overlapping windows is recorded as several detections, one per window that hears \
-             it (up to {windows:.0} for a short call), and every count is that much higher"
+             it (up to {window_count:.0} for a short call), and every count is that much \
+             higher{caveat}"
         ),
         format!(
             "to keep one detection per call, set DUPLICATE_INTERVAL_SECS (or \
-             --duplicate-interval-secs) to at least the window length, {chunk_secs:.0}s; or set \
+             --duplicate-interval-secs) to at least the window length, {need:.0}s; or set \
              OVERLAP to 0. Either changes how many rows the station records from then on"
         ),
     ))
+}
+
+/// Does every recording segment end on whole windows (MSC-08)?
+///
+/// Each segment is analysed on its own, cut by the pipeline's own layout
+/// ([`birdnet_core::detection::pipeline::chunk_layout`]). Two things go wrong at
+/// its end when its length is not a whole number of steps: a remainder under
+/// the minimum tail is never analysed at all, or the last window runs past
+/// the end and is padded with silence. Either happens to every segment, so a
+/// warning names how much audio it touches and the nearest setting that avoids
+/// it. A warning, never an error: the station runs as configured, and an
+/// error finding fails the start gate's report.
+fn segment_length(
+    cli: &Cli,
+    config: Option<&Config>,
+    windows: &super::model::StationWindows,
+) -> Option<Check> {
+    use birdnet_core::config::validate::{SEGMENT_DURATION_MAX, SEGMENT_DURATION_MIN};
+    use birdnet_core::detection::pipeline::{ChunkLayout, PipelineConfig, chunk_layout};
+    const NAME: &str = "Segment length";
+
+    let segment = crate::helpers::resolve::setting::<u32>(
+        cli,
+        "segment_duration",
+        cli.segment_duration,
+        config,
+        "SEGMENT_DURATION",
+    );
+    let rate = windows.pipeline.target_sample_rate;
+    let layout_at = |pipeline: &PipelineConfig, secs: u64| -> ChunkLayout {
+        let len = usize::try_from(secs.saturating_mul(u64::from(rate))).unwrap_or(usize::MAX);
+        chunk_layout(pipeline, len)
+    };
+    let clean = |l: &ChunkLayout| l.unanalysed_tail() == 0 && l.padded_tail() == 0;
+    let layout = layout_at(&windows.pipeline, u64::from(segment));
+    if clean(&layout) {
+        return None;
+    }
+
+    #[allow(clippy::cast_precision_loss)]
+    let secs = |samples: usize| samples as f32 / rate as f32;
+    let chunk = windows.chunk_secs();
+    let step = windows.step_secs();
+    let caveat = windows.caveat();
+    let message = if layout.unanalysed_tail() > 0 {
+        let lost = secs(layout.unanalysed_tail());
+        let share = lost / secs(layout.len) * 100.0;
+        format!(
+            "the last {lost:.1} s of every {segment} s recording segment ({share:.0}% of the \
+             audio) is never analysed: {chunk} s windows start every {step} s, and what is left \
+             after the last one is shorter than the {min:.1} s a window needs{caveat}",
+            min = secs(layout.min_tail),
+        )
+    } else {
+        let last = layout.starts.last().copied().unwrap_or(0);
+        let pad = secs(layout.padded_tail());
+        format!(
+            "the last window of every {segment} s recording segment starts at {start:.1} s and \
+             holds {audio:.1} s of audio and {pad:.1} s of silence, so a call that runs on past \
+             the end of the segment is judged on the part of it in this one, against \
+             silence{caveat}",
+            start = secs(last),
+            audio = chunk - pad,
+        )
+    };
+
+    // The nearest whole-second lengths either side that end on whole windows.
+    let below = (SEGMENT_DURATION_MIN..u64::from(segment))
+        .rev()
+        .find(|&s| clean(&layout_at(&windows.pipeline, s)));
+    let above = (u64::from(segment) + 1..=SEGMENT_DURATION_MAX)
+        .find(|&s| clean(&layout_at(&windows.pipeline, s)));
+    let lengths: Vec<String> = [below, above]
+        .into_iter()
+        .flatten()
+        .map(|s| format!("{s} s"))
+        .collect();
+    let fix = if lengths.is_empty() {
+        // No length avoids it at this overlap: the overlap itself pads every
+        // segment. Offer the nearest overlap, in tenths within the settings
+        // page's range, that does not at this length.
+        let overlap = windows.pipeline.chunk_overlap_secs;
+        let mut best: Option<f32> = None;
+        for tenths in 0_u16..=29 {
+            let candidate = f32::from(tenths) / 10.0;
+            if candidate >= chunk {
+                break;
+            }
+            let fitted = PipelineConfig {
+                chunk_overlap_secs: candidate,
+                ..windows.pipeline.clone()
+            };
+            if clean(&layout_at(&fitted, u64::from(segment)))
+                && best.is_none_or(|b| (candidate - overlap).abs() < (b - overlap).abs())
+            {
+                best = Some(candidate);
+            }
+        }
+        best.map_or_else(
+            || {
+                "no segment length or overlap avoids it with these windows; it is how the \
+                 classifiers' windows divide a segment"
+                    .to_owned()
+            },
+            |o| {
+                format!(
+                    "no segment length avoids it at OVERLAP {overlap}; OVERLAP {o} does, at \
+                     {segment} s. That changes which audio is analysed from then on, and \
+                     nothing already recorded"
+                )
+            },
+        )
+    } else {
+        format!(
+            "set SEGMENT_DURATION (or --segment-duration) to {}, the nearest lengths whose \
+             windows end with the segment. That changes which audio is analysed from then on, and \
+             nothing already recorded",
+            lengths.join(" or ")
+        )
+    };
+    Some(Check::warn(NAME, message, fix))
 }
 
 /// Coordinates as stored by the dashboard, read directly from SQLite.

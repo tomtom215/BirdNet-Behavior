@@ -70,7 +70,7 @@ pub fn resolve_f32_with_default(
 /// is a claim about clap's default for *that* flag — `0` for one of these
 /// and `60` for the other.
 #[must_use]
-pub(super) fn resolve_i64_with_default(
+pub fn resolve_i64_with_default(
     cli_value: i64,
     cli_default: i64,
     config_value: Option<i64>,

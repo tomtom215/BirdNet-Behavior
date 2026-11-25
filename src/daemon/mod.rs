@@ -44,7 +44,7 @@ mod config;
 /// runtime ignores reports on a station that does not exist.
 pub use config::{
     clip_format, resolve_confidence, resolve_confirmation_level, resolve_f32_with_default,
-    resolve_station_coords,
+    resolve_i64_with_default, resolve_station_coords,
 };
 mod alert_cooldown;
 mod alert_rules;

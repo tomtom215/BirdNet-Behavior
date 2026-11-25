@@ -701,7 +701,7 @@ fn effective_overlap_secs(pipeline_config: &PipelineConfig) -> f32 {
 /// the shape-guessed rate and cut chunks from it, so a declared rate changed
 /// the log line and nothing else — the classifier was fed audio at the wrong
 /// rate, with a window of the wrong length in seconds.
-fn fit_pipeline_to_classifiers(
+pub fn fit_pipeline_to_classifiers(
     pipeline_config: &mut PipelineConfig,
     registry: &ClassifierRegistry,
 ) {
