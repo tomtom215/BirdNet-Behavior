@@ -40,9 +40,11 @@ pub use duckdb;
 #[cfg(feature = "analytics")]
 pub mod connection;
 pub mod gating;
+pub mod interval;
 pub mod memory;
 pub mod phenology;
 pub mod queries;
+pub mod reporting;
 pub mod types;
 
 // The build script embeds only the extension builds this file names; compiling

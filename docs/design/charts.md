@@ -47,6 +47,14 @@ These are the reason the charts are not simply "prettier". Each one is held by a
 9. **Text never wears a series colour.** The mark carries the identity; the label stays
    in `--chart-label` or `--chart-annot`. (A label set on a band uses `--fg` with a
    `--chart-gap` halo.)
+10. **A share or a rate is drawn with its n and its interval, or not drawn.** The interval
+   is the Wilson score interval for a share and the exact Poisson interval for a rate
+   (`viz::uncertainty::Interval`); below `uncertainty::TOO_FEW_BELOW` (three) trials the
+   value is not drawn at all and the figure says "too few to say" with the count. Where the
+   trials are not independent (the retention table's anchor days are consecutive days of one
+   bird's stay), the n is printed and no interval is drawn, and the Method panel says why.
+   Held for the reporting-frequency figure and the retention table by their tests; the
+   other figures that print a share do not follow it yet (CHT-23).
 
 ## The vocabulary beyond the bar
 
@@ -84,6 +92,41 @@ a promise a test holds.
   the day's length written between them when the captions leave room. The strip on Today is drawn twice, 960
   units for a card and 360 for a phone (the same pair the daily chart uses), and the phone's rail carries bare
   times.
+
+## Uncertainty and "too few to say"
+
+`viz/uncertainty.rs` holds the one rule and the three marks every figure that draws a share or
+a rate uses, so they look and read the same everywhere.
+
+* **The interval** (`uncertainty::whisker`, `.ck-ci`): a quiet bar from the lower to the upper
+  bound, behind the estimate, in `--seq-moss-2`; a zero-width interval is still a visible cap.
+  The **estimate** (`uncertainty::estimate`, `.ck-est`) is a `--moss` dot ringed in the card's
+  colour. Both carry the mark's `data-ck-i`, and what they say is in the mark's `data-tip`
+  and the table, in the words `uncertainty::interval_words` writes ("95% interval 16% to 75%").
+* **Too few to say** (`uncertainty::too_few`, `few_mark`, `.ck-few`): fewer than three trials.
+  A hollow ring in axis ink, set in a strip under the plot's baseline, on no scale, so it is
+  never read as a zero; the tooltip and the table say "2 listened days: too few to say". Three
+  because the Wilson interval of 0 of 2 reaches 66 % and that of 2 of 2 falls to 34 %: one or
+  two trials are consistent with anything.
+* **The key** (`uncertainty::key`) names the three states under every figure that draws them.
+
+The arithmetic is `birdnet_behavioral::interval::wilson` (shares) and the existing
+`phenology::abundance::poisson_interval_exact` (rates), each tested against values worked by
+hand.
+
+## Reporting frequency (species page)
+
+"In which weeks can I expect this bird?" (`routes/pages/species_reporting.rs`, CHT-16). For each
+of 48 parts of the year (four a month: days 1–7, 8–14, 15–21, 22 to the end), the share of the
+station's *listened* days on which the species was heard at least once, pooled over years. A
+listened day is a date the `recording_effort` ledger credits with at least half the typical day
+(the trend queries' `EFFORT_FLOOR_SHARE` and typical day); a date the ledger does not cover is
+left out of both sides, and the days heard on such dates are counted in the Method panel. Four
+states, four marks: a share (dot and interval), too few to say (ring), not listening (the hatch
+of honesty rule 3), and, for the whole figure, "never heard" or "no ledger" as a sentence with
+no picture. Drawn at 700 units for a card and 360 for a phone. The reading above it names the
+part whose interval's lower bound is highest, not the highest dot. It lives on the species page
+because the question is about one bird; a figure comparing many species belongs on Patterns.
 
 ## Choosing the form
 

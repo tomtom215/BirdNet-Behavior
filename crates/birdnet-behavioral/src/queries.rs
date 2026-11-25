@@ -326,6 +326,20 @@ pub fn sessionize_sql(params: &SessionizeParams) -> String {
 /// Averaging the boolean array across a species' anchors gives its retention
 /// rate at each interval.
 ///
+/// **The end of the record is not an absence (CHT-11).** An anchor is
+/// eligible for an interval of N days only when the record runs at least N
+/// days past it: `anchor + N <= last_day`, where `last_day` is the last day
+/// the station heard any bird. Before this, an anchor three days from the end
+/// was averaged in as "not heard again within a month" although nobody could
+/// have known, so every long-interval rate was biased down, most for recent
+/// arrivals and on young stations. Each rate now comes with the number of
+/// eligible anchors (the `eligible` column, one count per interval), and an
+/// interval no anchor is eligible for has a NULL rate, not 0. The last day
+/// heard is the conservative end: a station that listened on after it and
+/// heard nothing could follow a little further, and this does not use those
+/// days. The last day may also be today, which is not over; a species heard
+/// yesterday and not yet today is counted as not returning within one day.
+///
 /// The residency classification is **not** drawn from those rates. "Seen
 /// again within N days" holds on every day of a species' presence except the
 /// last of each run, so a passage migrant, a vagrant and a summer breeder all
@@ -355,8 +369,25 @@ pub fn retention_sql(params: &RetentionParams) -> String {
         )
         .collect();
     // retention()[1] is the anchor; interval `i` (0-based) is retention()[i+2].
-    let rate_exprs: Vec<String> = (0..params.intervals.len())
-        .map(|i| format!("AVG(CASE WHEN r[{}] THEN 1.0 ELSE 0.0 END)", i + 2))
+    // An anchor counts towards an interval only when the record reaches that
+    // far past it; with none eligible, AVG over no rows is NULL, not 0.
+    let eligible = |days: u32| format!("anchor + INTERVAL '{days} day' <= last_day");
+    let rate_exprs: Vec<String> = params
+        .intervals
+        .iter()
+        .enumerate()
+        .map(|(i, &days)| {
+            format!(
+                "AVG(CASE WHEN r[{}] THEN 1.0 ELSE 0.0 END) FILTER (WHERE {})",
+                i + 2,
+                eligible(days)
+            )
+        })
+        .collect();
+    let eligible_exprs: Vec<String> = params
+        .intervals
+        .iter()
+        .map(|&days| format!("COUNT(*) FILTER (WHERE {})", eligible(days)))
         .collect();
     // No condition looks past the longest interval, so a day further on than
     // that can change no result. Joining every pair of a species' active days
@@ -379,9 +410,12 @@ pub fn retention_sql(params: &RetentionParams) -> String {
             FROM detections_ts
             GROUP BY Com_Name
         ),
+        record AS (
+            SELECT MAX(d) AS last_day FROM sd
+        ),
         rates AS (
-            SELECT species, [{rates}] AS retention_rates
-            FROM cohort
+            SELECT species, [{rates}] AS retention_rates, [{eligible}] AS eligible
+            FROM cohort CROSS JOIN record
             GROUP BY species
         ),
         presence AS (
@@ -394,7 +428,7 @@ pub fn retention_sql(params: &RetentionParams) -> String {
         station AS (
             SELECT COUNT(DISTINCT date_trunc('week', d)) AS weeks FROM sd
         )
-        SELECT r.species, r.retention_rates, p.weeks_present, s.weeks, p.span_days
+        SELECT r.species, r.retention_rates, p.weeks_present, s.weeks, p.span_days, r.eligible
         FROM rates r
         JOIN presence p ON p.species = r.species
         JOIN detections n ON n.species = r.species
@@ -403,6 +437,7 @@ pub fn retention_sql(params: &RetentionParams) -> String {
         ORDER BY p.weeks_present DESC, r.species",
         conditions = conditions.join(", "),
         rates = rate_exprs.join(", "),
+        eligible = eligible_exprs.join(", "),
         min = params.min_detections,
     )
 }

@@ -31,8 +31,27 @@ fn reference_sql(params: &RetentionParams) -> String {
                 .map(|days| format!("b.d > a.d AND b.d <= a.d + INTERVAL '{days} day'")),
         )
         .collect();
-    let rate_exprs: Vec<String> = (0..params.intervals.len())
-        .map(|i| format!("AVG(CASE WHEN r[{}] THEN 1.0 ELSE 0.0 END)", i + 2))
+    // The end of the record is censored in both queries alike (CHT-11): an
+    // anchor counts at N days only when the record runs N days past it. That
+    // is a change to what is computed, not to how far the join reaches, so
+    // the reference carries it too and the comparison still isolates the reach.
+    let eligible = |days: u32| format!("anchor + INTERVAL '{days} day' <= last_day");
+    let rate_exprs: Vec<String> = params
+        .intervals
+        .iter()
+        .enumerate()
+        .map(|(i, &days)| {
+            format!(
+                "AVG(CASE WHEN r[{}] THEN 1.0 ELSE 0.0 END) FILTER (WHERE {})",
+                i + 2,
+                eligible(days)
+            )
+        })
+        .collect();
+    let eligible_exprs: Vec<String> = params
+        .intervals
+        .iter()
+        .map(|&days| format!("COUNT(*) FILTER (WHERE {})", eligible(days)))
         .collect();
     format!(
         "WITH sd AS (
@@ -49,9 +68,12 @@ fn reference_sql(params: &RetentionParams) -> String {
             FROM detections_ts
             GROUP BY Com_Name
         ),
+        record AS (
+            SELECT MAX(d) AS last_day FROM sd
+        ),
         rates AS (
-            SELECT species, [{rates}] AS retention_rates
-            FROM cohort
+            SELECT species, [{rates}] AS retention_rates, [{eligible}] AS eligible
+            FROM cohort CROSS JOIN record
             GROUP BY species
         ),
         presence AS (
@@ -64,7 +86,7 @@ fn reference_sql(params: &RetentionParams) -> String {
         station AS (
             SELECT COUNT(DISTINCT date_trunc('week', d)) AS weeks FROM sd
         )
-        SELECT r.species, r.retention_rates, p.weeks_present, s.weeks, p.span_days
+        SELECT r.species, r.retention_rates, p.weeks_present, s.weeks, p.span_days, r.eligible
         FROM rates r
         JOIN presence p ON p.species = r.species
         JOIN detections n ON n.species = r.species
@@ -73,6 +95,7 @@ fn reference_sql(params: &RetentionParams) -> String {
         ORDER BY p.weeks_present DESC, r.species",
         conditions = conditions.join(", "),
         rates = rate_exprs.join(", "),
+        eligible = eligible_exprs.join(", "),
         min = params.min_detections,
     )
 }
@@ -96,18 +119,20 @@ fn store() -> (tempfile::TempDir, AnalyticsDb) {
     (dir, db)
 }
 
-type Row = (String, String, i64, i64, i64);
+type Row = (String, String, i64, i64, i64, String);
 
 fn rows(db: &AnalyticsDb, sql: &str) -> Vec<Row> {
     let mut stmt = db.conn().prepare(sql).expect("the query is valid");
     stmt.query_map([], |r| {
         let rates: duckdb::types::Value = r.get(1)?;
+        let eligible: duckdb::types::Value = r.get(5)?;
         Ok((
             r.get(0)?,
             format!("{rates:?}"),
             r.get(2)?,
             r.get(3)?,
             r.get(4)?,
+            format!("{eligible:?}"),
         ))
     })
     .expect("runs")

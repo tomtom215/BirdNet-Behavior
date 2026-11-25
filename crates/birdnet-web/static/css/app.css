@@ -7036,3 +7036,27 @@ input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
 @media (prefers-reduced-motion: reduce) { .ss-chip, .ss-sw { transition: none; } }
 :root[data-motion="reduced"] .ss-chip, :root[data-motion="reduced"] .ss-sw { transition: none; }
 /* /skysong */
+
+/* ── Lane G (batch 2): uncertainty marks and the reporting-frequency figure ─────────
+   The marks of `viz/uncertainty.rs` (CHT-23), the retention table's "of n" line
+   (CHT-11) and the species page's reporting-frequency figure (`species_reporting.rs`,
+   CHT-16). One block, appended; nothing above it is changed. Colours are chart tokens
+   only, so the theme chooses every value. */
+/* The interval: a quiet bar behind its estimate (a pale moss in light, a deep one in dark). */
+.ck-ci  { fill: var(--seq-moss-2); }
+/* The estimate: the moss dot, ringed in the card's colour so it stands off its interval. */
+.ck-est { fill: var(--moss); stroke: var(--chart-gap); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+/* Too few to say: a hollow ring in axis ink, no fill, so it cannot be read as a value. */
+.ck-few { fill: none; stroke: var(--chart-axis); stroke-width: 1.25px; vector-effect: non-scaling-stroke; }
+.ck-unc-key { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-12); margin-top: var(--space-8); }
+.ck-unc-key + .ck-unc-key { margin-top: var(--space-4); }
+.ck-unc-item { display: inline-flex; align-items: center; }
+.ck-unc-sw { display: inline-block; width: 10px; height: 10px; margin-right: var(--space-6); vertical-align: -1px; flex: none; }
+.ck-unc-sw-est { border-radius: 50%; background: var(--moss); }
+.ck-unc-sw-ci  { width: 6px; height: 14px; border-radius: var(--r-2xs); background: var(--seq-moss-2); vertical-align: -3px; }
+.ck-unc-sw-few { border-radius: 50%; border: 1.25px solid var(--chart-axis); }
+.ck-unc-sw-off { background: repeating-linear-gradient(45deg, var(--chart-grid-strong) 0 2px, transparent 2px 5px); border: 1px solid var(--chart-grid-strong); }
+/* The retention table: the number of days a share is of, on its own line in the cell. */
+.rt-table td.rt-cell .rt-n { display: block; font-size: var(--fs-2xs); line-height: 1.2; }
+.rt-table td.rt-cell { white-space: nowrap; }
+/* /Lane G */
