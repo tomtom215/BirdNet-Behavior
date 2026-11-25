@@ -26,6 +26,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **How often a species is heard, through the year (CHT-16).** The species page has a new card: for each quarter
+  of each month, the share of the days the station listened on which the bird was heard, as a dot with its 95%
+  Wilson interval. Fewer than three listened days is drawn as a ring and says "too few to say"; a part of the
+  year the station did not listen in is hatched and is never a zero. Years are pooled. The interval treats each
+  day as a separate trial, which neighbouring days are not, so the bar is the narrowest the uncertainty can be;
+  the Method panel says so. `GET /pages/species-reporting`, with a table and a CSV.
+- **`RETAIN_REVIEWED_AUDIO` (RES-10).** On by default: the age limit, the per-species cap and the disk-full purge
+  keep the clip of any detection someone has confirmed, rejected or commented on, as they keep a locked one.
+  `--retain-reviewed-audio false` (`BIRDNET_RETAIN_REVIEWED_AUDIO=false`) lets them reclaim it.
+- **Interval marks in the chart kit (CHT-23).** One Wilson interval for a share, the exact Poisson interval for a
+  rate, and one floor (three trials) below which a figure says "too few to say" instead of drawing a value.
+- **Two gates.** `tools/visual-qa/species-colours.mjs` (one species, one colour, on every page; a step in the
+  accessibility workflow) and a test that refuses chart copy naming a lightness.
 - **Every review verdict is kept, with who gave it and when (RES-06 of the 2026-11 audit).** A new append-only
   history (`review_events`, schema 64) is written with each verdict from the review queue and the detection
   page, and the 180-day audit-log pruning does not touch it, so a second reviewer no longer erases the first.
@@ -150,6 +163,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **One colour per species, on every chart (UIR-01).** A species' colour was its rank within each chart, so one
+  bird was painted in up to five colours across the pages. The station's eight most-heard species over the 90
+  days to yesterday now own one colour each everywhere, and every other species is drawn in the neutral.
+- **Reviewed audio is kept by default (RES-10).** A station with an age limit or a per-species cap will keep more
+  audio than before: every clip with a verdict or a comment. See `RETAIN_REVIEWED_AUDIO` above.
+- **The retention table prints what each share is of (CHT-11).** Each cell shows "of n" under its share, "too
+  soon" where no day is far enough from the end of the record, and "too few" under three days.
+  `/api/v2/analytics/retention`: `retention_rates[].rate` may now be `null`, and each entry has `eligible`.
+- **"Reviewer verdicts" replaces "Model vs. human" on the Data tab (ACC-07).** The confirmed share of reviewed
+  detections per species with a 95% Wilson interval; species with fewer than 20 verdicts are listed and not
+  ranked. The comparison with mean confidence and the "overconfident false positives" claim are gone.
+- **Review history cannot be deleted, and follows a relabel (N24-01, schema 66).** A relabelled detection gets a
+  linked event under its new name; earlier events are not rewritten.
+- **Who reviewed is recorded on three more paths (N24-04).** Bulk review on Search and quarantine approval record
+  the signed-in user; verdicts through the API are recorded as `via=api` with no name.
+- **Companion species are ranked by the share of their days in common (UIC-04)**, and each row says on how many
+  of the bird's days the companion was there.
+- **History's day cells are links to the day's page (UIC-28)**, and each play button on Today is named for its
+  species and time (UIC-12).
 - **An `APPRISE_TRIGGER` that names no rule means `new-species`, not every detection (N14-01).** A typo, or
   an empty value, used to select `each`, the chattiest mode. It now selects the documented default, and the
   journal and `--doctor` say which mode is in force. **A station that relied on an empty or misspelt value to
@@ -227,6 +259,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Retention no longer counts the end of the record as a bird that did not return (CHT-11).** A day near the end
+  of the record could not have been followed for a month, and was averaged in as "not heard again"; every long
+  interval read low, most for recent arrivals.
+- **An approved quarantined detection is confirmed in the analytics copy too (N24-02).**
+- **Withdrawing the verdict of a clip that names no detection answers 404 (N24-03).** It answered 200 and was
+  audited as done.
+- **Every sparkline on the species list was painted in the first chart colour**, whatever its species.
+- **Chart copy no longer says "darker" means more (UIR-04).** In the dark theme the ramps run the other way.
+- **The activity grid's margin drew a bar for a weekday its sentence had left out for too few listened days
+  (N05-04).**
+- **The clip player wrote "Play clip" back over every button's own label.**
 - **A damaged packet in an uploaded MP3 or FLAC no longer shifts everything after it (ACC-13).** The decoder
   dropped a packet it could not read, so later detections were stamped and clipped a packet early. The packet
   is replaced by silence of its own length, and one warning per file reports the damage.

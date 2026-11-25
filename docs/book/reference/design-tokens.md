@@ -409,7 +409,7 @@ what a chart draws that is not data. A chart renderer reads these and nothing el
 
 | The data says | Use | Why |
 |---|---|---|
-| Identity: which species, which source | `--chart-1` … `--chart-8`, then `--chart-other` | Fixed order, never cycled. |
+| Identity: which species, which source | `--chart-1` … `--chart-8`, then `--chart-other` | For species, the station's eight most-heard own one each on every chart and the rest take `--chart-other`; never cycled. |
 | Magnitude: how many, how loud | `--seq-1` … `--seq-7` | One hue family, lightness moves one way. |
 | Magnitude on a cell that prints its own number | `--seq-moss-1` … `--seq-moss-7` | Pale enough that the number keeps 4.5:1. |
 | Polarity: above or below a baseline | `--div-neg-3` … `--div-pos-3` | Two hues and a neutral middle. |

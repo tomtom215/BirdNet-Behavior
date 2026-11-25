@@ -77,10 +77,11 @@ impl<'conn> TimeSeriesDb<'conn> {
     /// Whether this store holds the `recording_effort` ledger the trend
     /// queries judge days by.
     ///
-    /// The analytics copy of the ledger is created by its first sync
-    /// (`AnalyticsDb::sync_recording_effort`), so a store that has never been
-    /// synced has no such table, and a query naming it would not bind. Without
-    /// it every day is judged as listened, as before the ledger existed.
+    /// A store opened through `AnalyticsDb::open` has the table from the
+    /// start, empty until the first sync (`AnalyticsDb::sync_recording_effort`).
+    /// A connection built any other way may not, and a query naming a missing
+    /// table would not bind. Without it every day is judged as listened, as
+    /// before the ledger existed.
     pub(super) fn has_effort_ledger(&self) -> Result<bool, TimeSeriesError> {
         let n: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM duckdb_tables() \
