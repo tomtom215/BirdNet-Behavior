@@ -316,6 +316,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start. The behaviour is unchanged; neither installer sets the directories equal.
 - **A PulseAudio source at "-inf dB" is graded silent (N24-05)**, as ALSA's minus infinity was.
 - **Resizing the window no longer replays chart entrances (UIR-33).**
+- **Numbers and labels that ran into each other or off their chart.** History's day cells read "2818 sp" for
+  28 detections and 18 species; a cell now has three lines. On a phone, the dawn dial's "18:00" and "06:00" were
+  written over its ring, and Today's temperature ticks were cut to ".°". On the Sequences chart the middle
+  species heard again ran off the right edge and lost its share; that row now reads "calls again". The layout
+  gate has a 1280 px width and three checks for these (numbers touching, labels cut, hour names on the dial).
 - **Focus follows a swap that removed the focused control's container (UIC-29)**, on the review queue's filters
   and pager; it fell to the page body.
 - **Small encodings (UIR-23).** A count of new species is not painted in the fault red; Today's temperatures

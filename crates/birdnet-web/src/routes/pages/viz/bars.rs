@@ -192,6 +192,31 @@ pub fn hourly(o: &Hourly<'_>) -> String {
         .iter()
         .map(|&v| kit::text_width(&kit::compact(v), 10.0))
         .fold(0.0_f64, f64::max);
+    // The temperature strip's two ticks stand in the same margin and are wider than a count
+    // ("11°" beside "8"; "-12°" or "104°" in the reader's other unit). Sized for the counts
+    // alone, the margin left them end-anchored 8 units from the edge on a phone, where the
+    // card cut them to ".°".
+    let widest = if o.temps.len() >= 2 {
+        let lo = o.temps.iter().map(|t| t.1).fold(f64::INFINITY, f64::min);
+        let hi = o
+            .temps
+            .iter()
+            .map(|t| t.1)
+            .fold(f64::NEG_INFINITY, f64::max);
+        [lo, hi]
+            .into_iter()
+            .flat_map(|t| {
+                [
+                    crate::display::TemperatureUnit::Celsius,
+                    crate::display::TemperatureUnit::Fahrenheit,
+                ]
+                .map(|unit| crate::display::format_temperature(t, 0, unit, false))
+            })
+            .map(|label| kit::text_width(&label, 10.0))
+            .fold(widest, f64::max)
+    } else {
+        widest
+    };
     let w = o.width;
     let (pad_l, pad_r) = (kit::axis_margin(widest, w), 6.0);
     let plot_w = w - pad_l - pad_r;

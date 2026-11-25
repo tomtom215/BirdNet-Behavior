@@ -4024,9 +4024,12 @@ a.spp-inherit    { color: inherit; }
 .rp-day { aspect-ratio: 1/0.92; border-radius: var(--r-sm); border: var(--bw) solid var(--hairline); padding: 7px 9px; cursor: pointer; position: relative; transition: transform var(--dur-fast); text-decoration: none; color: inherit; display: block; }
 .rp-day:hover { border-color: var(--fg-4); }
 .rp-day.empty { border: 0; background: transparent; cursor: default; }
-.rp-day .dn { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg); }
-.rp-day .dc { position: absolute; left: 9px; bottom: 7px; font-family: var(--font-display); font-size: 17px; color: var(--fg); }
-.rp-day .dsp { position: absolute; right: 8px; bottom: 8px; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--fg); }
+/* Three lines down the left of a cell: the date, the count, the species. The count and the
+   species stood side by side at the foot, where a two-digit count ran into a two-digit species
+   count in a 62px cell ("2818 sp" for 28 detections and 18 species), at every desktop width. */
+.rp-day .dn { display: block; line-height: 1; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--fg); }
+.rp-day .dc { position: absolute; left: 9px; top: 21px; line-height: 1; font-family: var(--font-display); font-size: 17px; color: var(--fg); }
+.rp-day .dsp { position: absolute; left: 9px; bottom: 5px; line-height: 1; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--fg); }
 .rp-day.sel { border-color: var(--moss); box-shadow: 0 0 0 var(--bw-strong) var(--moss); }
 .rp-legend { display: flex; align-items: center; gap: 5px; margin-top: var(--space-12); justify-content: flex-end; font-size: var(--fs-xs); color: var(--fg-4); }
 .rp-legend span { width: 13px; height: 13px; border-radius: var(--r-2xs); }

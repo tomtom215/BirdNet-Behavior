@@ -1484,7 +1484,7 @@ mod tests {
             );
         }
         assert!(
-            html.contains("the spring one or the fall one, and the key under the chart names them"),
+            html.contains("where the peak stands says which, the spring one or the fall one"),
             "{html}"
         );
     }

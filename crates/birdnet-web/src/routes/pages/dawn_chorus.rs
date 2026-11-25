@@ -330,11 +330,15 @@ const RING_MAX: f64 = 222.0;
 const SKY_IN: f64 = RING_MAX + 14.0;
 const SKY_OUT: f64 = SKY_IN + 7.0;
 const LABEL_R: f64 = SKY_OUT + 30.0;
-/// Room left and right of the dial for the hour ticks at 06:00 and 18:00, which stand on the
-/// horizontal and, as marked times in 12-hour form ("6:00 PM", UIR-19), are wider than the 30
-/// units outside the ring; on a phone, where the labels are enlarged, they ran past the drawing
-/// and the text fitter cut them to "6. PM".
-const LABEL_PAD: f64 = 45.0;
+/// Where a name beside the dial starts: past its 11-unit tick, with room to spare.
+const LABEL_GAP: f64 = 18.0;
+/// Room left and right of the dial for the hour names at 06:00 and 18:00, which stand on the
+/// horizontal and run outward from the ring (UIR-19). On a 390 px phone the drawing is about
+/// 304 px wide and `chart-text.js` sets a name at about 11 px, so "6:00 PM" is 47 px: with 80
+/// units either side the drawing is 760 wide, a pixel is 2.5 units, the name 118, and the room
+/// outside the ring is 57 + 80 = 137 against the 18 + 118 it needs. At 45 the names were cut
+/// ("6. PM"), or, centred, written over the ring.
+const LABEL_PAD: f64 = 80.0;
 
 /// Steps each hour's curve is cut into when it is drawn.
 const STEPS: usize = 6;
@@ -447,7 +451,7 @@ fn render_polar_svg(
     });
     let _ = write!(
         s,
-        r#"<svg viewBox="-{LABEL_PAD} 0 {vw} {SIZE}" width="100%" height="100%" role="img" class="dc-polar-svg ck-in" data-ck="marks" data-ck-dim="series" data-ck-grid="24" data-ck-start="{start}" data-ck-id="dawn-rings" data-ck-label="Left and right arrows move by the hour, up and down from ring to ring; the ring you are on comes forward"{sun_attrs}>"#,
+        r#"<svg viewBox="-{LABEL_PAD} 0 {vw} {SIZE}" width="100%" height="100%" role="img" class="dc-polar-svg ck-in" data-dial="{CX} {CY} {SKY_OUT}" data-ck="marks" data-ck-dim="series" data-ck-grid="24" data-ck-start="{start}" data-ck-id="dawn-rings" data-ck-label="Left and right arrows move by the hour, up and down from ring to ring; the ring you are on comes forward"{sun_attrs}>"#,
         vw = SIZE + 2.0 * LABEL_PAD,
     );
     s.push_str(&svg_a11y(
@@ -534,12 +538,21 @@ fn render_polar_svg(
         );
     }
     for h in [0, 3, 6, 9, 12, 15, 18, 21] {
-        let (lx, ly) = radial::polar(CX, CY, LABEL_R, hour_to_angle(f64::from(h)));
+        // The names at the top and the foot are centred on their tick. Every other one starts
+        // at its tick and runs away from the dial, so however long it is ("6:00 PM") and however
+        // far a phone enlarges it, it grows outward. Centred on a point 30 units out, "18:00"
+        // and "06:00" were written over the ring on a phone.
+        let (anchor, r) = match h {
+            0 | 12 => ("middle", LABEL_R),
+            1..=11 => ("start", SKY_OUT + LABEL_GAP),
+            _ => ("end", SKY_OUT + LABEL_GAP),
+        };
+        let (lx, ly) = radial::polar(CX, CY, r, hour_to_angle(f64::from(h)));
         // A time marked for the reader's 12- or 24-hour choice, as every other on the page (UIR-19).
         let label = clock_of_hours(f64::from(h));
         let _ = write!(
             s,
-            r#"<text x="{lx:.2}" y="{ly:.2}" text-anchor="middle" dominant-baseline="central" class="mono dcv-hr" {clk}>{label}</text>"#,
+            r#"<text x="{lx:.2}" y="{ly:.2}" text-anchor="{anchor}" dominant-baseline="central" class="mono dcv-hr" {clk}>{label}</text>"#,
             clk = crate::display::clock_attr(&label),
         );
     }
@@ -1161,6 +1174,9 @@ mod tests {
     /// before it `((40650, 12_278_785_045_523_209_542), (24812, 9_668_514_204_813_496_225))`.
     /// Then the dial's viewBox gained `LABEL_PAD` either side for the wider ticks; before it
     /// `(40808, 11_323_075_395_231_097_400)` for the rings.
+    /// Then the hour names beside the dial were anchored to run outward, with 80 units of room
+    /// and the dial's radius marked for the layout gate; before it `(40810,
+    /// 17_982_177_975_142_012_535)`.
     #[test]
     fn the_rings_and_strips_are_pinned() {
         let mut evening = [0.0_f32; 24];
@@ -1191,7 +1207,7 @@ mod tests {
                 crate::routes::pages::viz::kit::pin("dawn-strips", &strips)
             ),
             (
-                (40810, 17_982_177_975_142_012_535),
+                (40822, 16_459_913_910_428_523_784),
                 (24890, 13_058_009_865_060_522_103)
             ),
             "the rings or the strips changed"

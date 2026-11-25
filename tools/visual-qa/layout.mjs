@@ -8,7 +8,7 @@
 // of those shipped, in both themes, with every other gate green, and was found
 // by looking at a rendered page. This reads the same facts from the DOM.
 //
-// Seven checks, per route x theme x viewport:
+// Ten checks, per route x theme x viewport:
 //
 //   overlap   two text boxes (not nested, not in a closed <details>, not under
 //             the fixed tab bar) that intersect by more than 3px horizontally
@@ -41,6 +41,16 @@
 //             larger upright box that would flag every pair of neighbours.
 //   fit       (DISCLOSED routes only) a table that must be read whole at this width
 //             needs a sideways scroll. See DISCLOSED below.
+//   abut      two numbers in different elements set side by side on one line with less
+//             than 2px between them (or up to 4px into each other, under `overlap`'s
+//             threshold). History's day count and its species count read "2818 sp"
+//             for 28 detections and 18 species in a 62px cell.
+//   clip      an SVG label that ends outside its own picture, which cuts it. Today's
+//             temperature ticks on a phone were end-anchored 8 units from the left edge
+//             and showed as ".°".
+//   ring      an hour name of the dawn dial that reaches inside the dial. Marked times
+//             ("18:00") are longer than the old "18", and on a phone, where labels are
+//             enlarged, the two on the horizontal were written over the ring.
 //   wrap      a text node that is only digits ("12", "2026", "140") set over more
 //             than one line. A number broken in the middle reads as two numbers:
 //             the species list's ranks 10 to 15 printed as "1" over "0" in a 30px
@@ -50,7 +60,7 @@
 // Env:
 //   BASE      base url                       (default http://127.0.0.1:8502)
 //   THEMES    csv of light,dark              (default light,dark)
-//   VPS       csv of desktop,mobile,narrow,tiny  (default all four: 1440, 390, 360 and 320 px wide)
+//   VPS       csv of desktop,laptop,mobile,narrow,tiny  (default all five: 1440, 1280, 390, 360 and 320 px wide)
 //   ONLY      substring filter on route name
 //   CSS_OVERRIDE  serve this file in place of /static/css/app.css (an older one, to
 //             see a new check fail against the stylesheet it was written for)
@@ -70,6 +80,10 @@ const THEMES = (process.env.THEMES || 'light,dark').split(',').filter(Boolean);
 const ILLUSTRATION = process.env.ILLUSTRATION || '';
 const VP_TABLE = {
   desktop: { viewport: { width: 1440, height: 900 }, hasTouch: false },
+  // A 1280px laptop is narrower than the desktop above by enough to matter: History's calendar
+  // cells are 62px there and a two-digit day count ran into the species count beside it
+  // ("2818 sp") while 1440 passed, and the kiosk's mode links sat on the sheet's rule.
+  laptop: { viewport: { width: 1280, height: 900 }, hasTouch: false },
   mobile: { viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true },
   // A 360px phone is the commonest Android width and 375 the iPhone SE's; the setup wizard's
   // stepper was a fixed 383px and scrolled the whole wizard sideways on both while 390 passed.
@@ -79,7 +93,7 @@ const VP_TABLE = {
   // three Station tabs had a field or button past its card, with 360 and 390 clean.
   tiny: { viewport: { width: 320, height: 568 }, hasTouch: true, isMobile: true },
 };
-const VPS = (process.env.VPS || 'desktop,mobile,narrow,tiny').split(',').filter((v) => VP_TABLE[v]);
+const VPS = (process.env.VPS || 'desktop,laptop,mobile,narrow,tiny').split(',').filter((v) => VP_TABLE[v]);
 const ONLY = process.env.ONLY || '';
 const MIN_ROUTES = Number(process.env.MIN_ROUTES || 30);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -116,7 +130,7 @@ function unfitTables(sel) {
 
 // Runs in the page. Returns { overlap, squeeze, escape, tiny, svgtext, widen, wrap } arrays of strings.
 function inPage() {
-  const res = { overlap: [], squeeze: [], escape: [], tiny: [], svgtext: [], widen: [], wrap: [] };
+  const res = { overlap: [], squeeze: [], escape: [], tiny: [], svgtext: [], widen: [], wrap: [], abut: [], clip: [], ring: [] };
   const sel = (el) =>
     el.tagName.toLowerCase() +
     (el.id ? '#' + el.id : '') +
@@ -197,6 +211,26 @@ function inPage() {
         if (hit) break;
       }
       if (hit) res.overlap.push(`${sel(a.el)} "${a.txt}" x ${sel(b.el)} "${b.txt}" (${hit[0]}x${hit[1]}px)`);
+    }
+  }
+
+  // abut: two numbers from different elements set side by side with no space between them.
+  for (let i = 0; i < items.length && res.abut.length < 10; i++) {
+    const a = items[i];
+    if (!/\d$/.test(a.txt)) continue;
+    for (let j = 0; j < items.length; j++) {
+      const b = items[j];
+      if (i === j || !/^\d/.test(b.txt)) continue;
+      if (a.el === b.el || a.el.contains(b.el) || b.el.contains(a.el)) continue;
+      let hit = null;
+      for (const ra of a.rects) {
+        for (const rb of b.rects) {
+          const oy = Math.min(ra.bottom, rb.bottom) - Math.max(ra.top, rb.top);
+          const gap = rb.left - ra.right;
+          if (ra.left < rb.left && gap > -4 && gap < 2 && oy > Math.min(ra.height, rb.height) * 0.5) hit = gap;
+        }
+      }
+      if (hit !== null) res.abut.push(`${sel(a.el)} "${a.txt}" runs into ${sel(b.el)} "${b.txt}" (${hit.toFixed(1)}px between them): read as "${a.txt}${b.txt}"`);
     }
   }
 
@@ -285,6 +319,12 @@ function inPage() {
     }
   }
 
+  // `clip` and the run-together half of `svgtext` are graded from 390px up. At 360 and 320px
+  // the kit's axis margin and label planner, both sized for a 300px card, leave 33 findings
+  // (y-axis labels 3 to 4px past the box that cuts them on Trends, Reports and the species
+  // page; month names under 2px apart on the species page and Year in review; "0" beside
+  // "00"). Listed in docs/audit-2026-11/checklist.json, N26-09; delete this constant with it.
+  const SMALL_PHONE = window.innerWidth < 380;
   // svgtext: labels inside charts, as turned rectangles.
   const corners = (t) => {
     const m = t.getScreenCTM();
@@ -331,6 +371,56 @@ function inPage() {
       const q = corners(t);
       if (q) labels.push({ t, q, txt: t.textContent.trim().slice(0, 28) });
     }
+    // clip: a label that ends outside the box that cuts it: its own picture, when the picture
+    // clips, or the nearest ancestor that does. A box that scrolls only cuts what lies before
+    // its start, which no scrolling reaches.
+    if (!svg.parentElement.closest('svg') && !SMALL_PHONE) {
+      const cuts = [];
+      if (getComputedStyle(svg).overflow !== 'visible') cuts.push({ el: svg, r: svg.getBoundingClientRect(), hard: true });
+      for (let n = svg.parentElement; n && n !== document.body; n = n.parentElement) {
+        const o = getComputedStyle(n).overflowX;
+        if (o === 'hidden' || o === 'clip') cuts.push({ el: n, r: n.getBoundingClientRect(), hard: true });
+        else if (o === 'auto' || o === 'scroll') {
+          // Past a box that scrolls, nothing further out cuts the picture: the box bounds it.
+          cuts.push({ el: n, r: n.getBoundingClientRect(), hard: false });
+          break;
+        }
+      }
+      for (const l of labels) {
+        if (res.clip.length >= 10) break;
+        const xs = l.q.map((c) => c[0]);
+        const ys = l.q.map((c) => c[1]);
+        for (const c of cuts) {
+          if (!(c.r.width > 0)) continue;
+          // What a scrolled box has scrolled past is still reachable; measure from its start.
+          const before = Math.max(c.r.left - c.el.scrollLeft - Math.min(...xs), c.r.top - c.el.scrollTop - Math.min(...ys));
+          const after = Math.max(Math.max(...xs) - c.r.right, Math.max(...ys) - c.r.bottom);
+          const out = c.hard ? Math.max(before, after) : before;
+          // A label's box is its font's full ascent, descent and side bearings: up to 3px of it
+          // outside the cut costs no ink at these sizes.
+          if (out > 3) {
+            res.clip.push(`${sel(svg)} "${l.txt}" ends ${out.toFixed(1)}px outside ${sel(c.el)}, which cuts it`);
+            break;
+          }
+        }
+      }
+    }
+    // ring: an hour name of the dawn dial written over the dial, or touching it. The picture
+    // says where its dial ends (`data-dial="cx cy r"`); a label's nearest point to the centre
+    // must lie at least 3 units outside.
+    if (svg.classList.contains('dc-polar-svg')) {
+      const [cx, cy, R] = (svg.getAttribute('data-dial') || '').split(' ').map(Number);
+      if (!(R > 0)) res.ring.push(`${sel(svg)} does not say where its dial ends (data-dial)`);
+      else {
+        for (const t of svg.querySelectorAll('text.dcv-hr')) {
+          const bb = t.getBBox();
+          const nx = Math.max(bb.x, Math.min(cx, bb.x + bb.width));
+          const ny = Math.max(bb.y, Math.min(cy, bb.y + bb.height));
+          const d = Math.hypot(nx - cx, ny - cy);
+          if (d < R + 3) res.ring.push(`${sel(svg)} "${t.textContent.trim()}" is ${(d - R).toFixed(0)} units from the dial's edge (radius ${R})`);
+        }
+      }
+    }
     for (let i = 0; i < labels.length && res.svgtext.length < 10; i++) {
       for (let j = i + 1; j < labels.length; j++) {
         const a = labels[i];
@@ -343,6 +433,19 @@ function inPage() {
         const o = penetration(a.q, b.q);
         if (o > Math.max(2, 0.25 * Math.min(height(a.q), height(b.q)))) {
           res.svgtext.push(`${sel(svg)} "${a.txt}" x "${b.txt}" (${Math.round(o)}px)`);
+          continue;
+        }
+        // Two upright labels on one line with under 2px between them read as one label:
+        // "18 Nov" and "24 Nov" on a phone's Trends axis were "18 Nov24 Nov".
+        const box = (q) => ({ l: Math.min(...q.map((c) => c[0])), r: Math.max(...q.map((c) => c[0])), t: Math.min(...q.map((c) => c[1])), b: Math.max(...q.map((c) => c[1])) });
+        const upright = (q) => Math.abs(q[1][1] - q[0][1]) < 0.5;
+        if (!SMALL_PHONE && upright(a.q) && upright(b.q)) {
+          const [L, Rr] = box(a.q).l <= box(b.q).l ? [box(a.q), box(b.q)] : [box(b.q), box(a.q)];
+          const gap = Rr.l - L.r;
+          const oy = Math.min(L.b, Rr.b) - Math.max(L.t, Rr.t);
+          if (gap < 2 && gap > -4 && oy > 0.6 * Math.min(L.b - L.t, Rr.b - Rr.t)) {
+            res.svgtext.push(`${sel(svg)} "${a.txt}" and "${b.txt}" run together (${gap.toFixed(1)}px between them)`);
+          }
         }
       }
     }

@@ -3215,7 +3215,19 @@
   },
   {
    "id": "N26-08",
-   "title": "Small chart defects seen in screenshots: History's day count runs into its species count; Today's temperature ticks are clipped on a phone; the bursts' 00:00 tick hidden at 390 px; Trends' two near-identical greys in dark; ck-cink has no hatch in plate mode",
+   "title": "Small chart defects seen in screenshots: the bursts' 00:00 tick hidden at 390 px; Trends' two near-identical greys in dark; ck-cink has no hatch in plate mode; the flow chart's middle name is written over its top ribbon",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-26.md",
+   "status": "open",
+   "evidence": "Reported by the chart lane from its screenshots, 2026-11-25; not fixed. Also: the clock sweep reads kit.rs only to its first #[cfg(test)], and charts.mjs is not a step in a11y.yml. Seen again in the integration's own screenshots (2026-11-25): on History at 1280x900 a two-digit count and a two-digit species count read as one number ('2818 sp', '4411 sp'); two attempts at moving the species count inside the 62 px cell each produced a different collision and were reverted. On Today at 390x844 the temperature strip's ticks ('11°', '2°') are end-anchored at x=8.6 and clipped by the left edge of the picture (bars.rs, pad_l - 6.0); read from the DOM, not changed by this batch. The kiosk links were fixed for a 900 px-high screen (30e4dcd); on a shorter one the sheet's rule is higher and may meet them again. Later the same day the History collision, the temperature ticks and the dawn dial's hour names were fixed, with checks in tools/visual-qa/layout.mjs (abut, clip, ring) that failed on the unfixed code; what remains here is what those checks do not measure."
+  },
+  {
+   "id": "N26-09",
+   "title": "At 360 and 320 px wide, chart axis labels are cut by 3 to 4 px and neighbouring labels stand under 2 px apart",
    "severity": "medium",
    "already_tracked": false,
    "mentions_conjecture": false,
@@ -3223,7 +3235,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-26.md",
    "status": "open",
-   "evidence": "Reported by the chart lane from its screenshots, 2026-11-25; not fixed. Also: the clock sweep reads kit.rs only to its first #[cfg(test)], and charts.mjs is not a step in a11y.yml. Seen again in the integration's own screenshots (2026-11-25): on History at 1280x900 a two-digit count and a two-digit species count read as one number ('2818 sp', '4411 sp'); two attempts at moving the species count inside the 62 px cell each produced a different collision and were reverted. On Today at 390x844 the temperature strip's ticks ('11°', '2°') are end-anchored at x=8.6 and clipped by the left edge of the picture (bars.rs, pad_l - 6.0); read from the DOM, not changed by this batch. The kiosk links were fixed for a 900 px-high screen (30e4dcd); on a shorter one the sheet's rule is higher and may meet them again."
+   "evidence": "Found 2026-11-25 by layout.mjs's new clip and run-together checks: 33 findings in the light theme at 360 and 320 px (y-axis labels 3.2 to 4.2 px past div.viz-scroll on Trends, the weekly report and the species page; month names 1.3 to 1.9 px apart on the species page and Year in review; '0' beside '00' on the hour charts), none at 390, 1280 or 1440. Cause read, not proven: kit::axis_margin and the label planner assume a 300 px card, and a 320 px phone's card is about 234 px. Raising the margin to suit 234 px moved the fault (it pushed 'busiest hour, 8 heard' and other notes past the right edge) and was reverted. The two checks are off below 380 px by the constant SMALL_PHONE in layout.mjs; fixing this row means deleting that constant and seeing the gate pass."
   }
  ]
 }
