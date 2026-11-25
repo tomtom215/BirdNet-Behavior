@@ -88,7 +88,7 @@ pub use queries::{
     species_summary, today_species_hour_heatmap, todays_detection_count, todays_detections,
     todays_source_activity, top_cooccurrence_pairs, top_species, total_recording_seconds,
     unlock_detection, unlock_detection_at, unstamped_detection_count, weekly_detection_count,
-    weekly_heatmap, weekly_new_species, weekly_top_species, wilson_interval_95,
+    weekly_heatmap, weekly_new_species, weekly_top_species,
 };
 pub use queries::{
     CONFIDENCE_HISTOGRAM_MIN_DETECTIONS, ConfidenceHistogram, DayOnset, SpeciesDay, SpeciesHours,

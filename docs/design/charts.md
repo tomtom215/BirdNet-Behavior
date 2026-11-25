@@ -53,6 +53,11 @@ These are the reason the charts are not simply "prettier". Each one is held by a
    value is not drawn at all and the figure says "too few to say" with the count. Where the
    trials are not independent (the retention table's anchor days are consecutive days of one
    bird's stay), the n is printed and no interval is drawn, and the Method panel says why.
+   The reporting-frequency figure sits between the two: its listened days are neighbours in
+   the calendar and so alike, but one day's result does not decide the next as an anchor's
+   does, and pooling years adds trials that are a year apart. Its interval is drawn, and its
+   Method panel says the bar is a lower limit on the uncertainty. An interval that allows
+   for the likeness (by year, or by an effective n) is not written yet.
    Held for the reporting-frequency figure and the retention table by their tests; the
    other figures that print a share do not follow it yet (CHT-23).
 

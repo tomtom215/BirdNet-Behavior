@@ -471,40 +471,6 @@ pub struct SpeciesReviewShare {
     pub reviewed: u32,
 }
 
-impl SpeciesReviewShare {
-    /// The 95 % Wilson score interval on the confirmed share
-    /// ([`wilson_interval_95`]).
-    #[must_use]
-    pub fn interval(&self) -> Option<(f64, f64)> {
-        wilson_interval_95(self.confirmed, self.reviewed)
-    }
-}
-
-/// The 95 % Wilson score interval for `successes` out of `trials`, as
-/// `(low, high)` in `0.0..=1.0`; `None` for no trials.
-///
-/// The Wilson interval rather than the normal approximation because the
-/// counts here are small and the share is often near 0 or 1, where the normal
-/// interval runs outside `0..1` and is far too narrow: 2 of 3 is 0.21 to 0.94.
-#[must_use]
-pub fn wilson_interval_95(successes: u32, trials: u32) -> Option<(f64, f64)> {
-    /// The 97.5th percentile of the standard normal distribution.
-    const Z: f64 = 1.959_963_984_540_054;
-    if trials == 0 {
-        return None;
-    }
-    let n = f64::from(trials);
-    let p = f64::from(successes.min(trials)) / n;
-    let z2 = Z * Z;
-    let denominator = 1.0 + z2 / n;
-    let centre = (p + z2 / (2.0 * n)) / denominator;
-    let half = Z * (p * (1.0 - p) / n + z2 / (4.0 * n * n)).sqrt() / denominator;
-    Some((
-        (centre - half).clamp(0.0, 1.0),
-        (centre + half).clamp(0.0, 1.0),
-    ))
-}
-
 /// Every species with at least one current verdict: how many, and how many
 /// confirmed.
 ///
@@ -1198,29 +1164,6 @@ mod tests {
             counts,
             [("Erithacus rubecula", 1, 1), ("Turdus merula", 1, 2)]
         );
-    }
-
-    /// The interval against values computed by hand from the formula,
-    /// `(p + z²/2n ± z·√(p(1−p)/n + z²/4n²)) / (1 + z²/n)` with z = 1.96:
-    /// 2 of 3 is 0.2077 to 0.9385, 16 of 24 is 0.4671 to 0.8203, 10 of 20 is
-    /// 0.2993 to 0.7007; the bounds stay within 0..1 at 0 and n of n.
-    #[test]
-    fn the_wilson_interval_matches_the_formula() {
-        let close = |got: Option<(f64, f64)>, want: (f64, f64)| {
-            let (lo, hi) = got.expect("an interval");
-            assert!(
-                (lo - want.0).abs() < 5e-5 && (hi - want.1).abs() < 5e-5,
-                "{lo:.4}–{hi:.4}, want {:.4}–{:.4}",
-                want.0,
-                want.1
-            );
-        };
-        close(wilson_interval_95(2, 3), (0.2077, 0.9385));
-        close(wilson_interval_95(16, 24), (0.4671, 0.8203));
-        close(wilson_interval_95(10, 20), (0.2993, 0.7007));
-        close(wilson_interval_95(0, 5), (0.0, 0.4345));
-        close(wilson_interval_95(5, 5), (0.5655, 1.0));
-        assert_eq!(wilson_interval_95(0, 0), None);
     }
 
     // ── reviewed detections, for the threshold suggester ────────────────

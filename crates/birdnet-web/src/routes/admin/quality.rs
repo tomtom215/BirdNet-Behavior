@@ -829,7 +829,9 @@ fn render_review_share(
     let mut ranked: Vec<(&SpeciesReviewShare, (f64, f64))> = rows
         .iter()
         .filter(|r| r.reviewed >= MIN_VERDICTS_TO_RANK)
-        .filter_map(|r| r.interval().map(|i| (r, i)))
+        .filter_map(|r| {
+            birdnet_behavioral::interval::wilson(r.confirmed, r.reviewed).map(|i| (r, i))
+        })
         .collect();
     // The top of the interval, lowest first: a species ranks high only when
     // even the most generous reading of its verdicts is low. Ties by the
@@ -884,7 +886,8 @@ fn render_review_share(
             r#"<p class="bnb-meta q-meta-mb">Not ranked, fewer than {MIN_VERDICTS_TO_RANK} verdicts:</p><ul class="bnb-meta q-mvr-list" role="list">"#
         );
         for r in &thin {
-            let (lo, hi) = r.interval().unwrap_or((0.0, 1.0));
+            let (lo, hi) =
+                birdnet_behavioral::interval::wilson(r.confirmed, r.reviewed).unwrap_or((0.0, 1.0));
             let _ = write!(
                 html,
                 "<li>{com}: {confirmed} of {reviewed} confirmed (95% interval {lo}–{hi}%)</li>",

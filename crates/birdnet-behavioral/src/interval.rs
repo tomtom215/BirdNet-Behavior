@@ -99,6 +99,26 @@ mod tests {
         assert!(near(lo, 0.645_669_6) && near(hi, 1.0), "{lo} {hi}");
     }
 
+    /// Four more fixed values, to four places: 2 of 3 is 0.2077 to 0.9385,
+    /// 16 of 24 is 0.4671 to 0.8203, 0 of 5 is 0 to 0.4345 and 5 of 5 is
+    /// 0.5655 to 1. They were the reviewer-verdict panel's own check before
+    /// it took this function, and came from a second implementation.
+    #[test]
+    fn four_values_from_a_second_implementation_agree() {
+        for (k, n, want_lo, want_hi) in [
+            (2_u32, 3_u32, 0.2077, 0.9385),
+            (16, 24, 0.4671, 0.8203),
+            (0, 5, 0.0, 0.4345),
+            (5, 5, 0.5655, 1.0),
+        ] {
+            let (lo, hi) = wilson(k, n).expect("trials");
+            assert!(
+                (lo - want_lo).abs() < 5e-5 && (hi - want_hi).abs() < 5e-5,
+                "{k} of {n}: {lo:.4} to {hi:.4}"
+            );
+        }
+    }
+
     /// No trials is no interval, not the interval of a share of zero.
     #[test]
     fn no_trials_is_no_interval() {

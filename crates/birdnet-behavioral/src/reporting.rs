@@ -33,6 +33,14 @@
 //! there is no 53rd week of one or two days. The last period of a month is
 //! longer than the others, which changes how many days it can hold and nothing
 //! about the share.
+//!
+//! # What the counts are not
+//!
+//! Independent trials. The listened days of a period are neighbours in the
+//! calendar, and a bird present on one is likely present on the next, so an
+//! interval that treats `listened_days` as `n` separate trials (the Wilson
+//! interval the page draws) is the narrowest the uncertainty can be. Pooling
+//! years adds days that are a year apart and is where it is nearest the truth.
 
 /// Periods in a year: four to a month.
 pub const PERIODS_PER_YEAR: usize = 48;

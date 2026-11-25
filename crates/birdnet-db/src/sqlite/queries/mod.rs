@@ -29,7 +29,6 @@ pub use analytics::{
     low_confidence_species, monthly_species_counts, quality_summary, range_daily_counts,
     review_share_by_species, review_verdict_trend, reviewed_detections_by_species, species_shapes,
     today_species_hour_heatmap, weekly_detection_count, weekly_new_species, weekly_top_species,
-    wilson_interval_95,
 };
 pub use charts::{
     CONFIDENCE_HISTOGRAM_MIN_DETECTIONS, ConfidenceHistogram, DayOnset, SpeciesDay, SpeciesHours,
