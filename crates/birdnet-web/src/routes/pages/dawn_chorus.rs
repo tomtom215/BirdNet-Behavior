@@ -330,6 +330,11 @@ const RING_MAX: f64 = 222.0;
 const SKY_IN: f64 = RING_MAX + 14.0;
 const SKY_OUT: f64 = SKY_IN + 7.0;
 const LABEL_R: f64 = SKY_OUT + 30.0;
+/// Room left and right of the dial for the hour ticks at 06:00 and 18:00, which stand on the
+/// horizontal and, as marked times in 12-hour form ("6:00 PM", UIR-19), are wider than the 30
+/// units outside the ring; on a phone, where the labels are enlarged, they ran past the drawing
+/// and the text fitter cut them to "6. PM".
+const LABEL_PAD: f64 = 45.0;
 
 /// Steps each hour's curve is cut into when it is drawn.
 const STEPS: usize = 6;
@@ -442,7 +447,8 @@ fn render_polar_svg(
     });
     let _ = write!(
         s,
-        r#"<svg viewBox="0 0 {SIZE} {SIZE}" width="100%" height="100%" role="img" class="dc-polar-svg ck-in" data-ck="marks" data-ck-dim="series" data-ck-grid="24" data-ck-start="{start}" data-ck-id="dawn-rings" data-ck-label="Left and right arrows move by the hour, up and down from ring to ring; the ring you are on comes forward"{sun_attrs}>"#,
+        r#"<svg viewBox="-{LABEL_PAD} 0 {vw} {SIZE}" width="100%" height="100%" role="img" class="dc-polar-svg ck-in" data-ck="marks" data-ck-dim="series" data-ck-grid="24" data-ck-start="{start}" data-ck-id="dawn-rings" data-ck-label="Left and right arrows move by the hour, up and down from ring to ring; the ring you are on comes forward"{sun_attrs}>"#,
+        vw = SIZE + 2.0 * LABEL_PAD,
     );
     s.push_str(&svg_a11y(
         "Dawn chorus by species",
@@ -1153,6 +1159,8 @@ mod tests {
     /// The polar figure is cut before the moon and the "now" hand, which follow the real clock.
     /// UIR-19 changed both on purpose: the hour ticks are marked times (`03:00`, was `3a`);
     /// before it `((40650, 12_278_785_045_523_209_542), (24812, 9_668_514_204_813_496_225))`.
+    /// Then the dial's viewBox gained `LABEL_PAD` either side for the wider ticks; before it
+    /// `(40808, 11_323_075_395_231_097_400)` for the rings.
     #[test]
     fn the_rings_and_strips_are_pinned() {
         let mut evening = [0.0_f32; 24];
@@ -1183,7 +1191,7 @@ mod tests {
                 crate::routes::pages::viz::kit::pin("dawn-strips", &strips)
             ),
             (
-                (40808, 11_323_075_395_231_097_400),
+                (40810, 17_982_177_975_142_012_535),
                 (24890, 13_058_009_865_060_522_103)
             ),
             "the rings or the strips changed"
