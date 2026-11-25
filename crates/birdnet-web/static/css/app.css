@@ -5653,14 +5653,6 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
    The one screen that is a *query builder* rather than a report, so the form
    is the page furniture and the results are the content. Tokens only — no
    literal colours — so both themes come out of the same rules. */
-.sr-head        { margin-bottom: 1.25rem; }
-/* Renamed from `.sr-h1`. The rare-bird share permalink (`share_rare.html`)
-   defines its own `.sr-h1` at 64px earlier in this sheet; equal specificity,
-   later wins, so this 24px rule was silently shrinking the hero headline of the
-   one page in the product that strangers see. The two `sr-` families are
-   unrelated — share vs. search — and `sr-h1` was their only collision. */
-.sr-title       { font-size: 1.5rem; font-weight: var(--fw-bold); margin: 0 0 0.35rem; }
-.sr-lede        { color: var(--text-muted); font-size: var(--fs-base); max-width: 60ch; margin: 0; }
 
 .sr-form        { display: flex; flex-direction: column; gap: 0.75rem;
                   background: var(--surface-2); border: 1px solid var(--border);

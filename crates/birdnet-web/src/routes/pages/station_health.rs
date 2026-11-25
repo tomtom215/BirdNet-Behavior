@@ -389,12 +389,9 @@ fn build_vitals(
 /// Compose the full surface from the snapshot.
 fn render(s: &Snapshot) -> String {
     format!(
-        "<p class=\"bnb-lede\"><b>Everything your station needs to keep listening</b> — the \
-         streams, the hardware, and the pipeline behind them. This is the screen to check from \
-         the field. {help}</p>{banner}<h2 class=\"st-h3\">Audio sources</h2>{sources}\
+        "{banner}<h2 class=\"st-h3\">Audio sources</h2>{sources}\
          {models}<h2 class=\"st-h3\">Vitals</h2>{vitals}{acoustic}<h2 class=\"st-h3\">Pipeline</h2>{pipeline}\
          <h2 class=\"st-h3\">Diagnostics</h2>{checks}{engine}",
-        help = super::help::help_link(super::help::Topic::AdminSystem),
         banner = status_banner(s),
         sources = source_panel(s),
         models = super::model_board::section(&s.models),

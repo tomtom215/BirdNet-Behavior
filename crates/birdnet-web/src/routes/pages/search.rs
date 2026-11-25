@@ -656,13 +656,17 @@ fn render_page(p: &SearchParams, sources: &[String]) -> String {
 
     let initial_query = p.to_query_string();
 
+    // The shared head (UIR-27): it was a bold sans `sr-title` in a head of its own.
+    let head = super::frame::page_head(&super::frame::Head {
+        eyebrow: "Recordings",
+        help: &super::help::help_link(super::help::Topic::Recordings),
+        title: "Search <em>detections</em>",
+        lead: "Every record this station has kept, narrowed by any combination below.",
+        lede: "The address bar carries the search, so a useful one can be bookmarked or sent to somebody.",
+        aside: "",
+    });
     format!(
-        "<div class=\"sr-head\">\
-  <h1 class=\"sr-title\">Search detections</h1>\
-  <p class=\"sr-lede\">Every record this station has kept, narrowed by any \
-   combination below. The address bar carries the search, so a useful one can be \
-   bookmarked or sent to somebody.</p>\
-</div>\
+        "{head}\
 <form class=\"sr-form\" id=\"sr-form\" \
       hx-get=\"/pages/search-results\" hx-target=\"#sr-results\" \
       hx-trigger=\"submit, change delay:250ms from:.sr-live, bnb-search-changed from:body\" \

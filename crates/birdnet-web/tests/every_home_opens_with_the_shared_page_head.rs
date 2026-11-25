@@ -31,6 +31,21 @@ const PAGES: &[&str] = &[
     "/reports?tab=history",
 ];
 
+/// Pages that are not homes and had heads of their own (UIR-27): Search's `sr-title`, the Day
+/// page's heading inside its first card, and the Station tabs, whose only `<h1>` was a
+/// screen-reader one above the tab strip. Each was observed failing before it was moved onto
+/// `page_head`: no `pg-head` on the page.
+const MORE_PAGES: &[&str] = &[
+    "/search",
+    "/reports/day",
+    "/station",
+    "/station/capture",
+    "/station/alerts",
+    "/station/data",
+    "/station/settings",
+    "/station/access",
+];
+
 async fn page(uri: &str) -> String {
     let conn = rusqlite::Connection::open_in_memory().expect("open");
     birdnet_db::migration::migrate(&conn).expect("migrate");
@@ -78,7 +93,7 @@ fn first_div(html: &str, open: &str) -> String {
 
 #[tokio::test]
 async fn every_home_has_one_shared_head_with_one_h1() {
-    for uri in PAGES {
+    for uri in PAGES.iter().chain(MORE_PAGES) {
         let html = page(uri).await;
         assert_eq!(
             html.matches(r#"class="page-head pg-head""#).count(),
@@ -88,9 +103,8 @@ async fn every_home_has_one_shared_head_with_one_h1() {
         // The page shell has no <h1> of its own; a second one would be a second page title.
         let h1 = without_scripts(&html).matches("<h1").count();
         assert_eq!(h1, 1, "{uri}: {h1} <h1> elements");
-        let heading = first_div(&html, r#"<h1 class="display pg-h1">"#);
         assert!(
-            !heading.is_empty() || html.contains(r#"<h1 class="display pg-h1">"#),
+            html.contains(r#"<h1 class="display pg-h1">"#),
             "{uri}: the h1 is the head's"
         );
     }
@@ -140,5 +154,27 @@ async fn today_has_one_h1_and_the_help_link_in_its_eyebrow() {
     assert!(
         eyebrow.contains(r#"class="bnb-help-link""#),
         "/: the help link is not in the hero's eyebrow: {eyebrow:?}"
+    );
+}
+
+/// Today's sentence is fetched again every five minutes. The heading it sits in is not part of
+/// what is swapped, so it is the same node after every poll, and the region that polls is a
+/// plain element with no `aria-label`, which ARIA does not let name a generic `div` (UIC-13).
+#[tokio::test]
+async fn todays_heading_stands_outside_the_region_that_polls() {
+    let html = without_scripts(&page("/").await);
+    let h1 = html.find("<h1").expect("an h1");
+    let region = html.find(r#"id="today-phrase""#).expect("#today-phrase");
+    let h1_end = html[h1..].find("</h1>").map(|i| h1 + i).expect("</h1>");
+    assert!(
+        h1 < region && region < h1_end,
+        "the polled region is not inside a static <h1>"
+    );
+    let open = html[..region].rfind('<').expect("tag start");
+    let tag = &html[open..region + html[region..].find('>').expect("tag end")];
+    assert!(!tag.contains("aria-label"), "{tag}");
+    assert!(
+        !tag.starts_with("<div"),
+        "a div inside a heading is not phrasing content: {tag}"
     );
 }

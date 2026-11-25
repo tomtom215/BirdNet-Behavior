@@ -20,13 +20,16 @@
 <section class="hero" data-screen-label="Hero">
   <div>
     <div class="bnb-eyebrow db-eyebrow"><span>Right now · {{today_human_date}}</span>{{help_link}}</div>
-    <div id="today-phrase"
-         class="td-phrase"
-         hx-get="/pages/today-phrase"
-         hx-trigger="load, every 5m"
-         hx-swap="innerHTML"
-         aria-label="Day summary">
-      {{hero_phrase}}
+    <!-- The heading is static and only its sentence is fetched again, every five
+         minutes: the line under it rides the same answer out of band. A heading that
+         was itself swapped was a different node after each poll, and the region it
+         sat in was a div named by aria-label, which ARIA does not name (UIC-13). -->
+    <div class="td-phrase">
+      <h1 class="display td-h1"><span id="today-phrase"
+            hx-get="/pages/today-phrase"
+            hx-trigger="load, every 5m"
+            hx-swap="innerHTML">{{hero_headline}}</span></h1>
+      <div class="bnb-meta td-sub" id="today-sub">{{hero_sub}}</div>
     </div>
     <div class="pill-row" id="today-pills"
          hx-get="/pages/today-pills" hx-trigger="load, every 60s" hx-swap="innerHTML">

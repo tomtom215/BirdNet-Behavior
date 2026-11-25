@@ -170,13 +170,12 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
     } else {
         String::new()
     };
-    let hero_phrase = if firstrun {
-        FIRSTRUN_PHRASE
+    let (hero_headline, hero_sub) = if firstrun {
+        (FIRSTRUN_HEADLINE, FIRSTRUN_SUB)
     } else {
         // A placeholder until the phrase partial answers: it said "You're
         // listening." on stations with no microphone at all.
-        r#"<h1 class="display td-h1">Today at the station.</h1>
-<p class="bnb-meta td-sub">Counting today's detections…</p>"#
+        ("Today at the station.", "Counting today's detections…")
     };
 
     // A brand-new station keeps the default: its hero is the setup checklist.
@@ -202,7 +201,8 @@ async fn today_home(State(state): State<AppState>, headers: HeaderMap) -> Respon
         .replace("{{picture_block}}", &picture)
         .replace("{{firstrun}}", if firstrun { "true" } else { "false" })
         .replace("{{today_human_date}}", &human_date())
-        .replace("{{hero_phrase}}", hero_phrase)
+        .replace("{{hero_headline}}", hero_headline)
+        .replace("{{hero_sub}}", hero_sub)
         .replace("{{hero_aside}}", &hero_aside)
         .replace("{{rail_extra}}", &rail_extra)
         .replace("{{moon_inline}}", &moon_inline())
@@ -230,10 +230,12 @@ fn today_error_page(headers: &HeaderMap) -> Response {
     .into_response()
 }
 
-/// The hero copy a brand-new station wakes up with (the comparative-phrase
-/// partial returns the same copy until the first detection lands).
-pub(super) const FIRSTRUN_PHRASE: &str = r#"<h1 class="display td-h1">Your station is <em class="tp-c-moss-ink">waking up</em>.</h1>
-<p class="bnb-meta td-sub">Everything checks out — we're listening for the first call. It usually arrives within the hour, and this page comes alive the moment it does.</p>"#;
+/// The headline a brand-new station wakes up with, inside Today's static `<h1>`.
+pub(super) const FIRSTRUN_HEADLINE: &str =
+    r#"Your station is <em class="tp-c-moss-ink">waking up</em>."#;
+
+/// The line under the first-run headline.
+pub(super) const FIRSTRUN_SUB: &str = "Everything checks out — we're listening for the first call. It usually arrives within the hour, and this page comes alive the moment it does.";
 
 /// The live-signal card (real spectrogram canvas + the source row).
 ///
