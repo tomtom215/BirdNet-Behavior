@@ -173,8 +173,8 @@ with no model and no warning would be a failed implementation of this decision.
 **Decided: no image now.** First a "before you start" page for Raspberry Pi Imager's own settings (host name,
 Wi-Fi, user, time zone), then a first-boot snippet that runs the release installer, once decision 6 exists to
 carry the credential. An image is a per-release build to rebase on every Raspberry Pi OS update, sign, boot
-test and support. Whether to take that on is a commitment of the maintainer's time and stays theirs; nothing
-in the repository can settle it.
+test and support. **The maintainer said no to images on 2026-11-25**, so this is closed, not deferred: the
+Imager page and the first-boot snippet are what OOB-01 now asks for.
 
 ## 9. The low-severity rows
 
@@ -193,7 +193,7 @@ All 65 low rows that were open or in progress were read against today's code. Th
 - **Already fixed: 2** in substance (ACC-17, UIC-19), each with a sentence left to correct.
 - **Decided here:** OOB-09 will not get a network alias or port 80 (the host name belongs to the Imager page
   of decision 8, and the QR code removes the typing); OOB-20 is decision 7.
-- **Still the maintainer's:** where the review queues live in the navigation (UIR-35), which species count as
+- **Still the maintainer's** (the image question was answered: no): where the review queues live in the navigation (UIR-35), which species count as
   triggers for the event-aligned figure (CHT-19), and the licence of exported data (RES-24).
 
 Three rows were rated too low and are now medium: RES-26 (two definitions of a listened day, 60 s in

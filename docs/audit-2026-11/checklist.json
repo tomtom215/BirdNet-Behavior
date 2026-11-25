@@ -210,7 +210,7 @@
    "work_package": "WP-07",
    "phase": 1,
    "source": "01-multi-source-capture.md:97",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Decided 2026-11-25: see decisions-2026-11-25.md section 3."
   },
   {
@@ -606,7 +606,7 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "02-multi-model-pipeline.md:293",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): licence and source fields per catalogue entry, printed by --install-model list; cite each licence from its source."
   },
   {
@@ -750,7 +750,7 @@
    "work_package": "WP-07",
    "phase": 1,
    "source": "03-precision-accuracy.md:208",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Decided 2026-11-25: see decisions-2026-11-25.md section 3."
   },
   {
@@ -883,7 +883,7 @@
    "phase": 3,
    "source": "04-zero-setup-defaults.md:126",
    "status": "open",
-   "evidence": "Decided 2026-11-25: see decisions-2026-11-25.md section 8."
+   "evidence": "Decided 2026-11-25: see decisions-2026-11-25.md section 8. The maintainer said no to a flashable image on 2026-11-25. What remains of this row: a 'before you start' page for Raspberry Pi Imager's settings, and a first-boot snippet once decision 6 exists."
   },
   {
    "id": "OOB-02",
@@ -1086,7 +1086,7 @@
    "work_package": "WP-15",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:474",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): the dead-card recovery page, and a health condition for 'no offsite backup'. Will not be done: an eighth wizard card."
   },
   {
@@ -1362,7 +1362,7 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:374",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): SVG hour ticks through display::clock_hour."
   },
   {
@@ -1410,7 +1410,7 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:416",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): neutral ink for 'new to your list' counts, a unit on Today's temperature, 'late Sep (week 39)', a visible caption on the uptime strip. Not a defect: the 'R. Hummingbird' gutter abbreviation."
   },
   {
@@ -1422,7 +1422,7 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:427",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): drop the duplicate pills, 'Daily rhythm' for 'Circadian', and make the two links go to this species."
   },
   {
@@ -1458,7 +1458,7 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:454",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): Search, Day, Station and admin onto frame::page_head, and the test's route list extended."
   },
   {
@@ -1506,7 +1506,7 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:497",
-   "status": "open",
+   "status": "in_progress",
    "evidence": " Triage 2026-11-25: to do (S): the mode and exit links at 4.5:1 at rest (plate.css:97 sets them to 35% opacity, and a touch kiosk has no hover; whether axe reports this as incomplete is unchecked), credits that do not print 127.0.0.1, the common name in the key. Will not be done: the Latin-first plate, a deliberate design. Raised from low for the contrast part."
   },
   {
@@ -1530,7 +1530,7 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:518",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): ck-still after the first animationend; the book scripts set reduced motion."
   },
   {
@@ -1566,7 +1566,7 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:547",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): static facts as caption text, seasons labelled directly."
   },
   {
@@ -1578,7 +1578,7 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:557",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): for a signed-in reader, a link to the always-allowed list with the species filled in."
   },
   {
@@ -1734,7 +1734,7 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:348",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): a static h1 outside the swapped region; no aria-label on a generic div."
   },
   {
@@ -1794,7 +1794,7 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:409",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S-M): one polar, one clock, History's month through viz::heat::calendar."
   },
   {
@@ -1854,7 +1854,7 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:458",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): 'as of HH:MM' on cached figures."
   },
   {
@@ -1890,7 +1890,7 @@
    "work_package": "WP-13",
    "phase": 2,
    "source": "06-ui-code-charts-ia.md:502",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): name the clock hours without 'dawn' and 'dusk', and make quality.rs agree with bars.rs."
   },
   {
@@ -1926,7 +1926,7 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:535",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S), probe first: focus after a swap that removes the focused element's parent."
   },
   {
@@ -2298,7 +2298,7 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:562",
-   "status": "open",
+   "status": "in_progress",
    "evidence": " Raised from low on 2026-11-25: two definitions of a listened day (60 s in listening.rs:28, a share of the typical day in reporting.rs) make one station's figures disagree."
   },
   {
@@ -2346,7 +2346,7 @@
    "work_package": "WP-09",
    "phase": 2,
    "source": "07-research-grade.md:603",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for RES-07 (calibration). Interim, to do (S): one sentence that confidence is a model score, and the settings text that calls V3's scores calibrated."
   },
   {
@@ -2370,7 +2370,7 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:620",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): a label-file hash to taxonomy-edition table in the catalogue, with MMP-20."
   },
   {
@@ -2526,7 +2526,7 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-05.md",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): a robust onset in place of MIN(Date)."
   },
   {
@@ -2610,7 +2610,7 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Left by caae3e3 (N14-03): the amixer path is fixed, the Pulse path is not. One source, so nothing masks it, and 0% already warns. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): PulseAudio's '-inf dB' maps to negative infinity, with a test."
   },
   {
@@ -2622,7 +2622,7 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "22ed559 (MSC-09): daemon::config::resolve_i64_with_default is pub(super), so the check restates the rule and the two can drift; Perch's 5 s windows are not considered in the row count it prints. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): the doctor calls the daemon's resolver and the configured model's window."
   },
   {
@@ -2646,7 +2646,7 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Noticed by the lane C session of 2026-11-24 in seasonal_ratio (routes/pages/migration.rs) while fixing N05-03. A reading. Raised from low on 2026-11-25: raw weekly counts decide which species are drawn as migrants."
   },
   {
@@ -2658,7 +2658,7 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Read from the log of job 138833156312 (run 45503657894, Tests (x86_64), 46m37s): the step the workflow comment calls near-instant printed 'Finished test profile ... in 6m 34s' for a test that ran in 0.90s, because -p birdnet-behavioral --features analytics resolves to other build units than --workspace --all-features. Also 'unused workspace dependency ndarray' (Cargo.toml:179) and 'package.homepage is redundant with package.documentation' (Cargo.toml:338). Only the last 5000 of 25193 log lines were readable; whether the cache was hit was not seen. A fix needs a trial run and a guard that the named test ran. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): the rebuild is fixed (c981bf5). To do (S): the two manifest warnings; the comment on the ndarray entry is untrue, an unused workspace entry constrains nothing."
   },
   {
@@ -2970,7 +2970,7 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Read, 2026-11-25: crates/birdnet-behavioral/src/phenology/abundance.rs:337 against connection/mod.rs ('ALTER TABLE detections ADD COLUMN Source'). Whether the rate should then be formed per source is the open question behind the sentence. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): rewrite the sentence; pooled by choice until decision 2."
   },
   {
@@ -2994,7 +2994,7 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Read, 2026-11-25: docs/book/admin/backups.md:45, docs/book/admin/recording.md:52 and docs/book/getting-started/configuration.md:171 say the disk manager purges 'the oldest recordings'. The default policy takes the most-recorded species first, lowest confidence then oldest, never below PURGE_SPECIES_FLOOR; configuration.md:85 and migration.md:163 say so correctly. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): three untrue sentences; configuration.md:85 has the wording."
   },
   {
@@ -3006,7 +3006,7 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "After UIR-01: the temperature line (ck-c5), the dawn and dusk hour bars and the spring season (ck-c1) and the autumn season (ck-c5) reuse owned colours; in Today's songs and Seasons two unowned species can sit as adjacent grey bands with nothing between them. Also untested: whether a cached fragment and the colour assignment can disagree for up to ten minutes after midnight. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): annotation and neutral tokens for marks that are not species, and a seam between unowned bands."
   },
   {
@@ -3030,7 +3030,7 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Reported by the evidence lane, 2026-11-25; app.css was another lane's file in that batch. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): delete both."
   },
   {
@@ -3042,7 +3042,7 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Noticed while rewriting the README (pull request 308), from reading; not probed. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): describe both install paths."
   },
   {
@@ -3090,7 +3090,7 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/decisions-2026-11-25.md",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Read by the access analysis, 2026-11-25: docs/book/field/hardening.md:36-38 says to answer 'restrict to this device', a question installer/lib/70-station.sh:394-400 deliberately does not ask; :144-150 says a browser cannot attach credentials to a WebSocket handshake, while private mode gates both sockets with the session cookie and the real reason is the admin gate's exclusion list (auth_middleware.rs:500-502, opened by this session)."
   },
   {
@@ -3102,7 +3102,7 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/decisions-2026-11-25.md",
-   "status": "open",
+   "status": "in_progress",
    "evidence": "Read by the access analysis, 2026-11-25: SECURITY.md:94-98 names docs/architecture/12-risks.md as covering trust boundaries; that file has none, and nothing on the LAN, live audio or speech. Decisions 5 and 6 need one written."
   },
   {
