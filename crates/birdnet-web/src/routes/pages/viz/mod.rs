@@ -37,6 +37,7 @@ pub(crate) mod ridge;
 pub(crate) mod timeline;
 #[cfg(feature = "analytics")]
 pub(crate) mod trend;
+pub mod uncertainty;
 
 #[cfg(feature = "analytics")]
 pub(crate) use assembly::chorus_figure;
