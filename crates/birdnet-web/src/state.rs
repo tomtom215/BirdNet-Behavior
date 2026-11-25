@@ -1514,10 +1514,33 @@ impl AppState {
     /// Returns `DbError` if the `SQLite` approval fails; see
     /// [`Self::delete_detection`] for why a mirror failure is not returned.
     pub fn approve_quarantine(&self, id: i64) -> Result<bool, birdnet_db::sqlite::DbError> {
+        self.approve_quarantine_by(
+            id,
+            &birdnet_db::sqlite::Reviewer {
+                user_id: None,
+                name: None,
+                via: "quarantine",
+            },
+        )
+    }
+
+    /// [`Self::approve_quarantine`], recording `reviewer` against the verdict
+    /// the approval gives in the review history (`review_events`), which
+    /// outlives the audit log (N24-04).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::approve_quarantine`].
+    pub fn approve_quarantine_by(
+        &self,
+        id: i64,
+        reviewer: &birdnet_db::sqlite::Reviewer<'_>,
+    ) -> Result<bool, birdnet_db::sqlite::DbError> {
         // Read the row *before* approving: `approve_quarantine` reports only
         // whether a row moved, and the analytics insert needs its values.
         let row = self.with_read_db(|conn| birdnet_db::sqlite::get_quarantine(conn, id))?;
-        let admitted = self.with_db(|conn| birdnet_db::sqlite::approve_quarantine(conn, id))?;
+        let admitted =
+            self.with_db(|conn| birdnet_db::sqlite::approve_quarantine_by(conn, id, reviewer))?;
         // Read back what migration 32's trigger stamped on the SQLite side, so
         // the mirror carries the same instant rather than a second computation
         // of it.
@@ -1563,7 +1586,18 @@ impl AppState {
                     // NULL for a row quarantined before it was recorded, in
                     // both stores.
                     source: row.source.as_deref(),
-                })
+                })?;
+                // And the verdict `approve_quarantine` gives it: SQLite admits
+                // the row as `confirmed` (N24-02). Without this the copy
+                // counted an approved detection as one nobody had looked at.
+                adb.set_review_verdict(
+                    &row.date,
+                    &row.time,
+                    &row.sci_name,
+                    row.file_name.as_deref(),
+                    Some(birdnet_db::sqlite::ReviewStatus::Confirmed.as_str()),
+                )
+                .map(drop)
             })
         {
             tracing::warn!(error = %e, "quarantined detection approved into SQLite but not into the analytics copy");
@@ -1687,6 +1721,7 @@ impl AppState {
 
     /// Clear a verdict in `SQLite` **and** the analytics copy. A detection that
     /// has no verdict is left as it is, and that is `Done`: undo is idempotent.
+    /// A key that names no detection is `NoSuchDetection`.
     ///
     /// Named and refused the way [`Self::set_detection_review`] is.
     ///
@@ -1716,12 +1751,19 @@ impl AppState {
                 Ok(clip) => clip,
                 Err(refused) => return Ok(Err(refused)),
             };
-            birdnet_db::sqlite::clear_detection_review_by(
+            // `false` is "no detection has that key", and a withdrawal about
+            // nothing is not done: a client holding a stale clip name is told,
+            // as for a verdict (N24-03). A detection with no verdict is `true`.
+            let exists = birdnet_db::sqlite::clear_detection_review_by(
                 conn,
                 &row.key_with(clip.as_deref()),
                 reviewer,
             )?;
-            Ok(Ok(clip))
+            Ok(if exists {
+                Ok(clip)
+            } else {
+                Err(ReviewOutcome::NoSuchDetection)
+            })
         })?;
         let clip = match target {
             Ok(clip) => clip,

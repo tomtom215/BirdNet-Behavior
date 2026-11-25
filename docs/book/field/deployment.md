@@ -102,7 +102,9 @@ the retention each one needs:
   species below `PURGE_SPECIES_FLOOR` clips (5 unless you set it; `0` removes
   the floor), so the one clip of a rare bird outlives the thousandth of a
   common one. It skips any file the database has marked
-  locked (the 🔒 **Lock** action on **Recordings**, or on a Today row). The locked set is re-read every cycle,
+  locked (the 🔒 **Lock** action on **Recordings**, or on a Today row), and,
+  unless `BIRDNET_RETAIN_REVIEWED_AUDIO=false`, the clip of any detection
+  someone has confirmed, rejected or commented on. That set is re-read every cycle,
   so locking a clip takes effect immediately — no restart needed.
 - the **raw capture directory** (`--watch-dir`, typically the RAM-backed
   `/tmp/birdnet-stream`), which the detector reads and never needs again. It is
@@ -145,7 +147,11 @@ so your counts, species lists and analytics are unaffected:
   (`0` = keep forever); set it in **Settings → General → System & Display** ("Keep Clip Audio") or
   the config file if you want a rolling window.
 
-Locked clips are exempt from both. A reclaimed clip keeps its filename and
+Locked clips are exempt from both, and so, unless
+`BIRDNET_RETAIN_REVIEWED_AUDIO=false`, is the audio of every detection someone
+has confirmed, rejected or commented on: it is the evidence a second reviewer
+needs to check that judgement. A kept clip still counts towards its species'
+newest N, so it does not push a newer one out. A reclaimed clip keeps its filename and
 gains the date its audio was removed, so the record of what was captured
 survives even though the file does not.
 

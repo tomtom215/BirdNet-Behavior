@@ -52,5 +52,6 @@ Retention is **disk-based by default**, with an optional age limit on top:
 - The disk manager purges the **oldest** recordings once the disk crosses `DISK_PURGE_THRESHOLD` (default **95%**, in `birdnet.conf`).
 - At most `BIRDNET_MAX_FILES_PER_SPECIES` (`--max-files-per-species`, default `0` = unlimited) clips are kept per species.
 - **Locked** clips are *never* purged — lock anything you want to keep permanently from the [Today](../guide/today.md) page or a species' recordings.
+- The clip of a detection someone has confirmed, rejected or commented on is kept by all three limits as a locked one is, unless `BIRDNET_RETAIN_REVIEWED_AUDIO=false` (`--retain-reviewed-audio false`).
 
 The detection rows in the database are kept regardless; purging only removes the audio files, not the history. Once a day the station also reconciles the database with the recordings folder: a detection whose clip is no longer on disk, whatever removed it, is marked as pruned so its play button goes away, and any half-written `.part` file older than an hour is removed. The count reaches the log and the `birdnet_orphaned_clips` metric. The [storage breakdown](./backups.md) on the Backups page shows how much space recordings are using.

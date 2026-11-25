@@ -480,7 +480,16 @@ async fn quarantine_approve(
     // it on every future start. Without the paired write an approved detection
     // never reached the analytics dashboards at all.
     let result = tokio::task::spawn_blocking(move || {
-        let result = state.approve_quarantine(id);
+        // Approving is a verdict, and the review history keeps who gave it
+        // after the audit row below is pruned (N24-04).
+        let result = state.approve_quarantine_by(
+            id,
+            &birdnet_db::sqlite::Reviewer {
+                user_id: Some(request_user.user.id),
+                name: Some(&request_user.user.username),
+                via: "quarantine",
+            },
+        );
         // Approving admits a record the station held back as too unlikely to
         // believe into every count and share link: that is the decision the
         // log is for.

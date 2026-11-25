@@ -15,7 +15,7 @@ routes/admin/migration.rs :: provenance_handler  1  POST /admin/migrate/batches/
 state.rs :: with_analytics_read  1  the fallback inside with_analytics_read itself: no reader connections were opened
 state.rs :: delete_detection  1  mirrors a detection delete
 state.rs :: relabel_detection  1  mirrors a relabel
-state.rs :: approve_quarantine  1  mirrors a quarantine approval
+state.rs :: approve_quarantine_by  1  mirrors a quarantine approval
 state.rs :: clear_detections  1  mirrors clear-all
 state.rs :: set_detection_review_by  1  mirrors a review verdict
 state.rs :: clear_detection_review_by  1  mirrors clearing a review verdict

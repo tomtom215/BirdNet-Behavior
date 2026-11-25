@@ -504,7 +504,16 @@ async fn bulk_action(
                             } else {
                                 birdnet_db::sqlite::ReviewStatus::Rejected
                             };
-                            match state.set_detection_review(k, &com_name, status, None)? {
+                            // The review history keeps who gave the verdict
+                            // after the audit row below is pruned (N24-04).
+                            let reviewer = birdnet_db::sqlite::Reviewer {
+                                user_id: Some(request_user.user.id),
+                                name: Some(&request_user.user.username),
+                                via: "bulk",
+                            };
+                            match state
+                                .set_detection_review_by(k, &com_name, status, None, &reviewer)?
+                            {
                                 crate::state::ReviewOutcome::Done => true,
                                 crate::state::ReviewOutcome::NoSuchDetection => false,
                                 crate::state::ReviewOutcome::Ambiguous { .. } => {

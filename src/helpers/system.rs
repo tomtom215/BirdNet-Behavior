@@ -135,7 +135,8 @@ pub fn start_disk_manager(
     // lets the purge delete everything locked since.
     let locked_provider: LockedFilesProvider = {
         let state = state.clone();
-        std::sync::Arc::new(move || locked_clips(&state))
+        let retain_reviewed = cli.retain_reviewed_audio;
+        std::sync::Arc::new(move || locked_clips(&state, retain_reviewed))
     };
 
     // What a full recordings disk does: delete the oldest clips (the default),
@@ -285,13 +286,20 @@ pub fn resolve_full_disk_action(
 }
 
 /// Spawn one disk-manager thread for `config`, logging what it will do.
-/// The clips the operator has locked, or `None` when they cannot be read.
+/// The clips the disk-full purge must keep, or `None` when they cannot be
+/// read: the ones the operator has locked, and, with `retain_reviewed`
+/// (`RETAIN_REVIEWED_AUDIO`, on unless turned off), the clip of every detection
+/// somebody reviewed or commented on (RES-10), as the age-based retention and
+/// the species cap keep them.
 ///
 /// `None` rather than an empty list: the disk manager reads "nothing is
 /// locked" as licence to delete, so a busy or failing database must not be
 /// able to say it (see `LockedFilesProvider`).
-fn locked_clips(state: &birdnet_web::state::AppState) -> Option<Vec<String>> {
-    match state.with_db(birdnet_db::sqlite::locked_file_names) {
+fn locked_clips(
+    state: &birdnet_web::state::AppState,
+    retain_reviewed: bool,
+) -> Option<Vec<String>> {
+    match state.with_db(|conn| birdnet_db::sqlite::kept_back_file_names(conn, retain_reviewed)) {
         Ok(names) => Some(names),
         Err(e) => {
             tracing::error!(error = %e, "could not read the locked clips");
@@ -518,7 +526,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let state = test_state_in(dir.path());
         assert_eq!(
-            locked_clips(&state),
+            locked_clips(&state, true),
             Some(Vec::new()),
             "a healthy empty set"
         );
@@ -527,9 +535,109 @@ mod tests {
             .with_db(|conn| conn.execute_batch("DROP TABLE detections;"))
             .expect("break the database");
         assert_eq!(
-            locked_clips(&state),
+            locked_clips(&state, true),
             None,
             "a failed read must not be reported as 'nothing is locked'"
+        );
+    }
+
+    /// Thirty robin clips in the recordings directory, all of one age, named
+    /// the way the extractor names them. The three least confident are the
+    /// ones a disk-full purge takes first (it takes a tenth, the least
+    /// confident of the most-recorded species): `confirmed` has a verdict,
+    /// `commented` a comment and `unreviewed` neither.
+    fn evidence_on_a_full_disk(
+        state: &birdnet_web::state::AppState,
+        dir: &std::path::Path,
+    ) -> [String; 3] {
+        let name = |conf: u8, i: u32| {
+            format!(
+                "European_Robin-{conf}-2026-03-01-birdnet-06:{:02}:{:02}.wav",
+                i / 60,
+                i % 60
+            )
+        };
+        let evidence = [name(50, 0), name(51, 1), name(52, 2)];
+        let mut all: Vec<String> = evidence.to_vec();
+        all.extend((3..30).map(|i| name(90, i)));
+        state
+            .with_db(|conn| -> rusqlite::Result<()> {
+                for (i, file) in all.iter().enumerate() {
+                    conn.execute(
+                        "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                         VALUES ('2026-03-01', ?1, 'Erithacus rubecula', 'European Robin', 0.9, ?2)",
+                        rusqlite::params![format!("06:00:{i:02}"), file],
+                    )?;
+                }
+                conn.execute(
+                    "UPDATE detections SET review_verdict = 'confirmed' WHERE File_Name = ?1",
+                    [&evidence[0]],
+                )?;
+                let commented = conn.execute(
+                    "INSERT INTO detection_comments (date, time, sci_name, file_name, author, body)
+                     SELECT Date, Time, Sci_Name, File_Name, 'ada', 'two notes, a Robin'
+                       FROM detections WHERE File_Name = ?1",
+                    [&evidence[1]],
+                )?;
+                assert_eq!(commented, 1, "precondition: the comment was written");
+                Ok(())
+            })
+            .expect("seed");
+        for file in &all {
+            std::fs::write(dir.join(file), b"x").expect("clip");
+        }
+        evidence
+    }
+
+    /// One disk-full pass over `dir` with the production policy for the
+    /// recordings directory, protecting what `locked_clips` names.
+    fn full_disk_pass(state: &birdnet_web::state::AppState, dir: &std::path::Path, retain: bool) {
+        use birdnet_core::audio::capture::{DiskManager, DiskManagerConfig, PurgePolicy};
+        let protected = locked_clips(state, retain).expect("the protected clips are known");
+        let removed = DiskManager::new(DiskManagerConfig {
+            monitored_dir: dir.to_path_buf(),
+            purge_threshold: 0,
+            full_disk_action: FullDiskAction::Purge,
+            purge_policy: PurgePolicy::KeepEverySpecies { floor: 0 },
+            locked_file_names: protected,
+            ..DiskManagerConfig::default()
+        })
+        .check_and_purge()
+        .expect("a purge pass");
+        assert_eq!(removed, 3, "a tenth of thirty clips");
+    }
+
+    /// RES-10, the disk-full half: the audio of a confirmed and of a commented
+    /// detection survives the purge that takes their unreviewed sibling.
+    #[test]
+    fn the_disk_full_purge_keeps_the_audio_of_reviewed_and_commented_detections() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).expect("dir");
+        let state = test_state_in(tmp.path());
+        let [confirmed, commented, unreviewed] = evidence_on_a_full_disk(&state, &recs);
+        full_disk_pass(&state, &recs, true);
+        assert_eq!(
+            [&confirmed, &commented, &unreviewed].map(|f| recs.join(f).exists()),
+            [true, true, false],
+            "the audio behind a verdict or a comment is evidence and is kept; \
+             the unreviewed clip beside it is not"
+        );
+    }
+
+    /// The counterpart: with `RETAIN_REVIEWED_AUDIO` off, the purge treats them
+    /// as any other clip.
+    #[test]
+    fn the_disk_full_purge_takes_reviewed_audio_when_the_setting_is_off() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).expect("dir");
+        let state = test_state_in(tmp.path());
+        let [confirmed, commented, unreviewed] = evidence_on_a_full_disk(&state, &recs);
+        full_disk_pass(&state, &recs, false);
+        assert_eq!(
+            [&confirmed, &commented, &unreviewed].map(|f| recs.join(f).exists()),
+            [false, false, false],
         );
     }
 

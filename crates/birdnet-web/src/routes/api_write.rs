@@ -517,6 +517,16 @@ fn server_error(e: &birdnet_db::sqlite::DbError) -> (StatusCode, Json<Value>) {
 /// undocumented.
 const VIA_API: &str = "via=api";
 
+/// Who gave a verdict through this API, for the review history
+/// (`review_events`). A bearer token is not a person, so no name is recorded,
+/// for the reason the audit rows above name no user; what is recorded is that
+/// the verdict came through the API rather than from nobody (N24-04).
+const API_REVIEWER: birdnet_db::sqlite::Reviewer<'static> = birdnet_db::sqlite::Reviewer {
+    user_id: None,
+    name: None,
+    via: "api",
+};
+
 /// The audit target for a key: the tuple, in the order the schema uses.
 fn target_of(date: &str, time: &str, sci_name: &str) -> String {
     crate::audit::detection_target(date, time, sci_name)
@@ -540,18 +550,19 @@ async fn review(
             };
 
             let outcome = match body.status.as_deref() {
-                None => state.clear_detection_review(&row),
+                None => state.clear_detection_review_by(&row, &API_REVIEWER),
                 Some(s) => {
                     let Some(status) = birdnet_db::sqlite::ReviewStatus::parse(s) else {
                         return bad_request(
                             "status must be \"confirmed\", \"rejected\", or omitted",
                         );
                     };
-                    state.set_detection_review(
+                    state.set_detection_review_by(
                         &row,
                         body.com_name.as_deref().unwrap_or(&body.sci_name),
                         status,
                         body.notes.as_deref(),
+                        &API_REVIEWER,
                     )
                 }
             };
@@ -863,15 +874,16 @@ async fn batch(
                 let outcome: Result<bool, birdnet_db::sqlite::DbError> = match op {
                     BatchOp::Review => match verdict {
                         Some(status) => state
-                            .set_detection_review(
+                            .set_detection_review_by(
                                 &batch_row(key),
                                 key.com_name.as_deref().unwrap_or(&key.sci_name),
                                 status,
                                 body.notes.as_deref(),
+                                &API_REVIEWER,
                             )
                             .map(|o| review_applied(o, &mut ambiguous_with)),
                         None => state
-                            .clear_detection_review(&batch_row(key))
+                            .clear_detection_review_by(&batch_row(key), &API_REVIEWER)
                             .map(|o| review_applied(o, &mut ambiguous_with)),
                     },
                     BatchOp::Lock => state.set_detection_lock(&batch_row(key), true),
