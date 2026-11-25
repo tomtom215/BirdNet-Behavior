@@ -279,9 +279,25 @@ fn render_calendar(
         } else {
             String::new()
         };
+        // A real link to the day's page, which htmx enhances by loading the day beside the
+        // calendar; and the cell says in words what its colour says (UIC-28).
+        let label = match (count, species) {
+            (0, _) => format!("{day} {month_label}, no detections"),
+            (c, s) => format!(
+                "{day} {month_label}, {} detection{}, {s} species",
+                super::group_thousands(c),
+                if c == 1 { "" } else { "s" }
+            ),
+        };
+        let current = if sel_cls.is_empty() {
+            ""
+        } else {
+            r#" aria-current="date""#
+        };
         let _ = write!(
             html,
-            r#"<a class="rp-day{sel_cls}" href='#' hx-get="/pages/history-chart?date={date}" hx-target='#rp-daydetail' hx-swap="innerHTML" data-style="background:{heat}"><span class="dn">{day}</span>{body}</a>"#,
+            r#"<a class="rp-day{sel_cls}" href="/reports/day?date={date}" hx-get="/pages/history-chart?date={date}" hx-target='#rp-daydetail' hx-swap="innerHTML" aria-label="{label}"{current} data-style="background:{heat}"><span class="dn">{day}</span>{body}</a>"#,
+            label = escape_html(&label),
         );
     }
     html.push_str("</div>");
@@ -751,6 +767,56 @@ mod tests {
         assert!(
             !html.contains("sel=2026"),
             "one month has no month buttons: {html}"
+        );
+    }
+
+    /// UIC-28. Every day cell is a real link to that day's page, which htmx enhances by loading
+    /// the day beside the calendar, and it says in words what its colour says. It was `href='#'`
+    /// with an `hx-get`, so without the script, or opened in a new tab, a cell went nowhere, and a
+    /// screen reader heard the bare day number. Fixed dates: May 2026 (31 days), one busy day,
+    /// one with one detection of one species, and every other day empty.
+    #[test]
+    fn every_day_cell_is_a_link_to_its_day_and_names_what_it_holds() {
+        let days: Vec<_> = [("2026-05-12", 140, 23), ("2026-05-31", 1, 1)]
+            .iter()
+            .map(|&(date, count, species)| birdnet_db::sqlite::DayCount {
+                date: date.into(),
+                count,
+                species,
+            })
+            .collect();
+        let html = render_calendar(&days, Some("2026-05"), Some("2026-05-12"));
+        // Each cell's opening tag, in order.
+        let cells: Vec<&str> = html
+            .split("<a class=\"rp-day")
+            .skip(1)
+            .map(|c| &c[..c.find('>').expect("a closed tag")])
+            .collect();
+        assert_eq!(cells.len(), 31, "one cell per day of May: {html}");
+        for (i, tag) in cells.iter().enumerate() {
+            let date = format!("2026-05-{:02}", i + 1);
+            assert!(
+                tag.contains(&format!("href=\"/reports/day?date={date}\"")),
+                "{date}: the cell must be a link to the day's page: <a class=\"rp-day{tag}>"
+            );
+            assert!(
+                tag.contains(&format!("hx-get=\"/pages/history-chart?date={date}\"")),
+                "{date}: htmx still loads the day beside the calendar: {tag}"
+            );
+        }
+        let label = |tag: &str| -> String {
+            let at = tag.find("aria-label=\"").expect("a label") + "aria-label=\"".len();
+            tag[at..at + tag[at..].find('"').expect("closed")].to_owned()
+        };
+        assert_eq!(label(cells[11]), "12 May, 140 detections, 23 species");
+        assert_eq!(label(cells[30]), "31 May, 1 detection, 1 species");
+        assert_eq!(label(cells[0]), "1 May, no detections");
+        // The selected day says so to a screen reader too, and only that day.
+        assert!(cells[11].starts_with(" sel\""), "{}", cells[11]);
+        assert!(cells[11].contains("aria-current=\"date\""), "{}", cells[11]);
+        assert_eq!(
+            cells.iter().filter(|c| c.contains("aria-current")).count(),
+            1
         );
     }
 
