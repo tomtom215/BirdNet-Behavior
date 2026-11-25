@@ -102,8 +102,9 @@
    is painted at rest in both palettes and holds it at 4.5:1. */
 .plate-ui { position: fixed; z-index: 2; font-family: var(--font-ui); font-size: 13px; color: var(--plate-ink-2); transition: color var(--dur-base) var(--ease-out); }
 .plate-ui:hover, .plate-ui:focus-within { color: var(--plate-ink); }
-.plate-exit { top: 14px; right: 18px; }
-.plate-modes { top: 14px; left: 18px; display: flex; gap: 12px; }
+/* Above the sheet's outer rule (27px down at 1280x900): at 14px the rule ran through the words. */
+.plate-exit { top: 5px; right: 18px; }
+.plate-modes { top: 5px; left: 18px; display: flex; gap: 12px; }
 .plate-ui a { color: inherit; text-decoration: none; }
 .plate-ui a[aria-current="true"] { text-decoration: underline; text-underline-offset: 3px; }
 /* The way out is itself a `.plate-ui`, not a link inside one, so `.plate-ui a` does not reach it:

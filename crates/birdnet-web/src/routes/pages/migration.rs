@@ -74,7 +74,7 @@ pub(super) fn content() -> String {
         help: &super::help::help_link(super::help::Topic::Phenology),
         title: "Arrivals and <em>departures</em>.",
         lead: "Each ridge is one species' year.",
-        lede: "Week by week, scaled to its own busiest week so a small-population migrant stays visible. Its colour says which migration window it peaks in, the spring one or the fall one, and the key under the chart names them. A bird is drawn when its busiest week stands well above its usual one per hour the station listened, so a week the station was off, or listened longer, does not make a resident look like a migrant. Under the ridges: how many different species were heard each week.",
+        lede: "Week by week, scaled to its own busiest week so a small-population migrant stays visible. Its ink says whether it peaks in a migration window; where the peak stands says which, the spring one or the fall one, and both are marked above the chart. A bird is drawn when its busiest week stands well above its usual one per hour the station listened, so a week the station was off, or listened longer, does not make a resident look like a migrant. Under the ridges: how many different species were heard each week.",
         aside: &scope,
     });
     PAGE_HTML
