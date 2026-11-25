@@ -75,6 +75,9 @@ run_download_model() {
         source <(sed -n '/^model_file_is_verified()/,/^}/p' "${LIB}/55-model.sh")
         # shellcheck disable=SC1090
         source <(sed -n '/^download_model()/,/^}/p' "${LIB}/55-model.sh")
+        # What it calls when a fetch fails or a local file is given (OOB-20).
+        # shellcheck disable=SC1090
+        source <(sed -n '/^retry_with_backoff()/,/^}/p;/^classifier_not_installed()/,/^}/p;/^install_local_model_file()/,/^}/p' "${LIB}/55-model.sh")
 
         info()       { echo "[INFO] $*"; }
         success()    { echo "[OK] $*"; }
@@ -123,6 +126,9 @@ run_download_model() {
         SERVICE_USER="birdnet"
         MODEL_RELEASE_TAG="models-test"
         BIRDNET_SKIP_MODEL=0
+        MODEL_RETRY_WAITS=""
+        LOCAL_MODEL=""
+        CLASSIFIER_MISSING=0
         }
 
         # `install -d -o birdnet` needs root; this test does not run as root.

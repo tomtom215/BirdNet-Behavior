@@ -162,7 +162,7 @@ async fn correlation_pairs_partial(
 ) -> impl axum::response::IntoResponse {
     let days = query.days.unwrap_or(30).min(365);
     let html = cached_fragment(&state, format!("corr-pairs:{days}"), CORR_ERR, move |s| {
-        compute_correlation_pairs(s, days)
+        compute_correlation_pairs(s, days).map(with_as_of)
     })
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -191,7 +191,7 @@ async fn cooccurrence_matrix_partial(
 ) -> impl axum::response::IntoResponse {
     let days = query.days.unwrap_or(30).min(365);
     let html = cached_fragment(&state, format!("corr-matrix:{days}"), CORR_ERR, move |s| {
-        compute_cooccurrence_matrix(s, days)
+        compute_cooccurrence_matrix(s, days).map(with_as_of)
     })
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -227,7 +227,7 @@ async fn acoustic_network_partial(
         &state,
         format!("corr-network:{days}:{links}"),
         CORR_ERR,
-        move |s| compute_acoustic_network(s, days, links),
+        move |s| compute_acoustic_network(s, days, links).map(with_as_of),
     )
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -382,7 +382,7 @@ async fn companion_partial(
     let days = query.days.unwrap_or(30).min(365);
     let key = format!("corr-companion:{days}:{species}");
     let html = cached_fragment(&state, key, CORR_ERR, move |s| {
-        compute_companion(s, &species, days)
+        compute_companion(s, &species, days).map(with_as_of)
     })
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -474,15 +474,21 @@ pub(super) fn companion_days_text(c: &birdnet_db::sqlite::FollowOn, trigger_show
 /// first visit (and each background refresh) is instant.
 pub fn prewarm(state: &AppState) {
     let cache = state.analytics_cache();
-    if let Some(h) = compute_cooccurrence_matrix(state, 30) {
+    if let Some(h) = compute_cooccurrence_matrix(state, 30).map(with_as_of) {
         cache.put("corr-matrix:30".to_string(), h);
     }
-    if let Some(h) = compute_acoustic_network(state, 30, DEFAULT_LINKS) {
+    if let Some(h) = compute_acoustic_network(state, 30, DEFAULT_LINKS).map(with_as_of) {
         cache.put(format!("corr-network:30:{DEFAULT_LINKS}"), h);
     }
-    if let Some(h) = compute_correlation_pairs(state, 30) {
+    if let Some(h) = compute_correlation_pairs(state, 30).map(with_as_of) {
         cache.put("corr-pairs:30".to_string(), h);
     }
+}
+
+/// A figure from the analytics cache ends with the line that says how old it is (UIC-23).
+#[allow(clippy::needless_pass_by_value)]
+fn with_as_of(html: String) -> String {
+    html + crate::analytics_cache::AS_OF_LINE
 }
 
 #[cfg(test)]

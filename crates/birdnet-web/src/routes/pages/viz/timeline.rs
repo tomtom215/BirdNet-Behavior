@@ -550,7 +550,10 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
         r#"<div class="viz-chart ck"><div class="viz-scroll"><svg width="100%" viewBox="0 0 {w:.0} {h:.0}" role="img" class="viz-svg-block ck-in" data-ck-id="life-accumulation" data-ck-label="Left and right read each month."{attrs} data-ck-ys="{ys}">"#,
         attrs = kit::cols_attrs(
             &cols,
-            &[("Species so far".to_string(), "var(--chart-1)".to_string())],
+            &[(
+                "Species so far".to_string(),
+                "var(--chart-annot)".to_string()
+            )],
             x_at(0),
             x_at(n - 1),
             false,
@@ -564,7 +567,7 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
         "A rising curve showing how many distinct species have been recorded as time goes on.",
     ));
     svg.push_str(
-        r#"<defs><linearGradient id="g-life-area" class="ck-gr ck-c1" x1="0" y1="0" x2="0" y2="1"><stop class="a" offset="0" stop-opacity=".30"/><stop class="a" offset="1" stop-opacity="0"/></linearGradient></defs>"#,
+        r#"<defs><linearGradient id="g-life-area" class="ck-gr ck-cink" x1="0" y1="0" x2="0" y2="1"><stop class="a" offset="0" stop-opacity=".30"/><stop class="a" offset="1" stop-opacity="0"/></linearGradient></defs>"#,
     );
     for &v in &rules {
         let yy = y.at(v);
@@ -585,7 +588,7 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
     }
     let _ = write!(
         svg,
-        r#"<line class="ck-axis" x1="{pad_l:.1}" y1="{base:.1}" x2="{x2:.1}" y2="{base:.1}"/><path class="ck-area" d="{curve} L{xb:.1},{base:.1} L{xa:.1},{base:.1} Z" fill="url(#g-life-area)"/><path class="ck-line ck-c1 ck-drawn" d="{curve}" pathLength="1"/>"#,
+        r#"<line class="ck-axis" x1="{pad_l:.1}" y1="{base:.1}" x2="{x2:.1}" y2="{base:.1}"/><path class="ck-area" d="{curve} L{xb:.1},{base:.1} L{xa:.1},{base:.1} Z" fill="url(#g-life-area)"/><path class="ck-line ck-cink ck-drawn" d="{curve}" pathLength="1"/>"#,
         x2 = pad_l + plot_w,
         xa = pts[0].0,
         xb = pts[n - 1].0,
@@ -596,7 +599,7 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
         if added > 0 && i + 1 < n {
             let _ = write!(
                 svg,
-                r#"<circle class="ck-ring ck-c1 ck-fadein" cx="{:.1}" cy="{:.1}" r="3"/>"#,
+                r#"<circle class="ck-ring ck-cink ck-fadein" cx="{:.1}" cy="{:.1}" r="3"/>"#,
                 pts[i].0, pts[i].1
             );
         }
@@ -604,7 +607,7 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
     let (lx, ly) = pts[n - 1];
     let _ = write!(
         svg,
-        r#"<circle class="ck-ring ck-c1" cx="{lx:.1}" cy="{ly:.1}" r="4.5"/><text class="mono ck-annot ck-halo" x="{tx:.1}" y="{ty:.1}" text-anchor="end" font-size="11">{total} species</text>"#,
+        r#"<circle class="ck-ring ck-cink" cx="{lx:.1}" cy="{ly:.1}" r="4.5"/><text class="mono ck-annot ck-halo" x="{tx:.1}" y="{ty:.1}" text-anchor="end" font-size="11">{total} species</text>"#,
         tx = lx - 4.0,
         ty = ly - 10.0,
         total = points[n - 1].1,
@@ -636,7 +639,7 @@ pub fn accumulation_curve(points: &[(String, i64)]) -> String {
     }
     let _ = write!(
         svg,
-        r#"<line class="ck-cursor" x1="{pad_l:.1}" y1="{pad_t:.1}" x2="{pad_l:.1}" y2="{base:.1}" visibility="hidden"/><circle class="ck-dot ck-c1" cx="{pad_l:.1}" cy="{base:.1}" r="4.5" visibility="hidden"/>"#
+        r#"<line class="ck-cursor" x1="{pad_l:.1}" y1="{pad_t:.1}" x2="{pad_l:.1}" y2="{base:.1}" visibility="hidden"/><circle class="ck-dot ck-cink" cx="{pad_l:.1}" cy="{base:.1}" r="4.5" visibility="hidden"/>"#
     );
     svg.push_str("</svg></div></div>");
     svg
@@ -999,6 +1002,19 @@ mod tests {
         assert!(svg.contains("<svg"));
     }
 
+    /// N25-06: the life list is one total, not a species, so it wears no species' colour. It
+    /// was `ck-c1`, the colour of the station's most heard bird.
+    #[test]
+    fn the_life_list_wears_no_species_colour() {
+        let pts = vec![("24-03".to_string(), 3), ("24-04".to_string(), 7)];
+        let svg = accumulation_curve(&pts);
+        assert!(svg.contains("ck-line"), "precondition: the curve is drawn");
+        assert_eq!(
+            super::super::kit::species_colours_in(&svg),
+            Vec::<String>::new()
+        );
+    }
+
     #[test]
     fn accumulation_empty_and_monotonic() {
         assert!(accumulation_curve(&[]).contains("Not enough data"));
@@ -1054,7 +1070,7 @@ mod tests {
                 .expect("a number")
         };
         let circle = svg
-            .split(r#"<circle class="ck-ring ck-c1" "#)
+            .split(r#"<circle class="ck-ring ck-cink" "#)
             .nth(1)
             .expect("the end point");
         let end_y = number_after(circle, r#"cy=""#);
@@ -1107,7 +1123,7 @@ mod tests {
         let svg = day_strip(&hourly, &top, None, &temps, Some((6.0, 19.5)), 13.0);
         assert!(svg.contains("<svg"));
         // The labelled solar markers carry real clock times.
-        assert!(svg.contains("sunrise 6:00"), "{svg}");
+        assert!(svg.contains("sunrise 06:00"), "{svg}");
         assert!(svg.contains("sunset 19:30"), "{svg}");
         // Temperature has its own strip, labelled, and the now marker is drawn.
         assert!(svg.contains(">Temperature<"), "{svg}");
@@ -1157,13 +1173,13 @@ mod tests {
             );
         }
         assert!(
-            wide.contains("sunrise 6:00") && wide.contains("of daylight"),
+            wide.contains("sunrise 06:00") && wide.contains("of daylight"),
             "{wide}"
         );
         assert!(
             !narrow.contains("sunrise")
                 && !narrow.contains("of daylight")
-                && narrow.contains(">6:00<"),
+                && narrow.contains(">06:00<"),
             "the phone's rail is bare times: {narrow}"
         );
         let vb = |s: &str| -> (f64, f64) {

@@ -187,13 +187,21 @@ pub fn neighbours_flow(
                 ribbon,
             ),
         );
-        let again = if n.is_trigger { " (calls again)" } else { "" };
+        // The middle species heard again is named by what it does: its name stands over the
+        // middle already, and "Black-capped Chickadee (calls again) 12%" is 41 characters in
+        // the room [`fit`] keeps for 24 and a share, so it ran off the picture's edge and took
+        // its share with it.
+        let shown = if n.is_trigger {
+            "calls again".to_owned()
+        } else {
+            fit(&n.name)
+        };
         let _ = write!(
             nodes,
-            r#"<rect class="fl-node" x="{RIGHT_X}" y="{top:.1}" width="{NODE_W}" height="{node_h:.1}" rx="3" data-ck-s="{token}"/><text class="fl-name" x="{tx:.1}" y="{ty:.1}" text-anchor="start" dominant-baseline="central" data-tip="{data_tip}" data-ck-i="{index}" data-ck-s="{token}" data-ck-f="{token}">{name}{again}<tspan class="fl-pct mono"> {pct:.0}%</tspan></text>"#,
+            r#"<rect class="fl-node" x="{RIGHT_X}" y="{top:.1}" width="{NODE_W}" height="{node_h:.1}" rx="3" data-ck-s="{token}"/><text class="fl-name" x="{tx:.1}" y="{ty:.1}" text-anchor="start" dominant-baseline="central" data-tip="{data_tip}" data-ck-i="{index}" data-ck-s="{token}" data-ck-f="{token}">{name}<tspan class="fl-pct mono"> {pct:.0}%</tspan></text>"#,
             tx = RIGHT_X + NODE_W + 8.0,
             ty = top + node_h / 2.0,
-            name = escape_html(&fit(&n.name)),
+            name = escape_html(&shown),
             pct = n.probability * 100.0,
         );
         index += 1;
@@ -294,7 +302,7 @@ mod tests {
         assert_eq!(svg.matches("<path class=\"fl-flow").count(), 4);
         assert_eq!(svg.matches("<rect class=\"fl-node\"").count(), 4);
         assert!(
-            svg.contains("(calls again)"),
+            svg.contains(">calls again<tspan") && !svg.contains("Blue Jay<tspan"),
             "the same bird calling again is labelled"
         );
         assert!(svg.contains("Northern Cardinal → Blue Jay"));

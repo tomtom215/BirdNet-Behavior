@@ -333,10 +333,14 @@ pub fn weekly_richness_sql(year: u32) -> String {
 /// per source, and so read 2.0 for that station: twice a one-microphone
 /// station's rate for the same birds.
 ///
-/// The rate is pooled across sources, not reported per source: the analytics
-/// copy of the detections has no source column yet, so a per-source rate cannot
-/// be formed here. Sources pointed at different places therefore give the
-/// station's average rate per microphone-hour, not either site's.
+/// The rate is pooled across sources, not reported per source, and that is a
+/// choice rather than a limit: the analytics copy of the detections carries
+/// each row's `Source` (added in `AnalyticsDb::open`) and `recording_effort`
+/// keeps its seconds per source, so a per-source rate could be formed. Whether
+/// it should waits on which sources count as one site (decision 2 of
+/// `docs/audit-2026-11/decisions-2026-11-25.md`). Until then, sources pointed
+/// at different places give the station's average rate per microphone-hour,
+/// not either site's.
 pub fn effort_corrected_abundance_sql(params: &AbundanceParams) -> String {
     // `recording_effort.date` is TEXT (local civil date, matching the
     // detections it will be divided into), so it is cast here rather than read

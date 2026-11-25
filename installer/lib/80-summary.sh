@@ -88,6 +88,42 @@ print_admin_login() {
     return 0
 }
 
+# The last thing a run says when the classifier is not installed (OOB-20): the
+# station is not detecting, why, and the commands that fix it. Loud, and last,
+# because "Installation complete!" over a station that hears nothing is the
+# failure this repository warns about most; the exit status says the same to a
+# script (EXIT_NO_CLASSIFIER, 10-config.sh).
+#
+# It does not name the dashboard's install button, which is there for some
+# stations and not others: the button installs the default classifier (V2.4)
+# where the configuration names no model or names the place that classifier
+# installs to, so a V2.4 station has it and a V3.0 station is told its file is
+# missing instead. The commands below work for both.
+print_classifier_missing() {
+    [ "${CLASSIFIER_MISSING}" = 1 ] || return 0
+    local local_hint="${MODEL_FILE}"
+    echo
+    loud_warn "THIS STATION IS NOT DETECTING BIRDS: its classifier is not installed." \
+              "  Why: ${CLASSIFIER_MISSING_WHY}." \
+              "  Everything else is installed. To install the classifier, once this machine" \
+              "  can reach the internet, run the installer again:" \
+              "      sudo bash install.sh repair" \
+              "  or, from a copy of ${local_hint} you already have" \
+              "  (it must match the same pinned sha256 as a download, or it is refused):" \
+              "      sudo bash install.sh repair --local-model /path/to/that/file" \
+              "  Then check with:  ${BINARY_NAME} --doctor --config ${CONFIG_FILE}" \
+              "  This run exits with status ${EXIT_NO_CLASSIFIER}: installed, not detecting."
+}
+
+# Exit with EXIT_NO_CLASSIFIER when the classifier could not be installed; a
+# no-op otherwise. The last step of install and repair.
+exit_if_classifier_missing() {
+    if [ "${CLASSIFIER_MISSING}" = 1 ]; then
+        exit "${EXIT_NO_CLASSIFIER}"
+    fi
+    return 0
+}
+
 print_summary() {
     local ip web_host mdns_host
     ip="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')"
@@ -120,7 +156,11 @@ print_summary() {
     esac
 
     echo
-    echo -e "${BOLD}${GREEN}${headline}${RESET}"
+    if [ "${CLASSIFIER_MISSING}" = 1 ]; then
+        echo -e "${BOLD}${YELLOW}Installed WITHOUT the classifier — this station is not detecting birds yet.${RESET}"
+    else
+        echo -e "${BOLD}${GREEN}${headline}${RESET}"
+    fi
     echo
     echo -e "  ${BOLD}Binary:${RESET}  ${INSTALL_DIR}/${BINARY_NAME}"
     echo -e "  ${BOLD}Config:${RESET}  ${CONFIG_FILE}"
@@ -177,4 +217,5 @@ print_summary() {
     echo
     echo "  For troubleshooting, the station's log:  sudo journalctl -u birdnet-behavior -f"
     echo
+    print_classifier_missing
 }

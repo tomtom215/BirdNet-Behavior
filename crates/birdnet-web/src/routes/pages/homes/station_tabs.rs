@@ -27,7 +27,7 @@ use axum::http::HeaderMap;
 use axum::response::Html;
 use axum::{Router, routing::get};
 
-use super::station::station_subtabs;
+use super::station::station_head;
 use crate::auth_middleware::RequestUser;
 use crate::routes::admin::settings::extra::Group;
 use crate::routes::admin::settings::render::{SETTINGS_FORM_CSS, Section, render_section_form};
@@ -67,7 +67,7 @@ fn built(tab: &str, what: &str, joined: Result<String, tokio::task::JoinError>) 
         tracing::error!(error = %e, tab, "station tab: the task that builds the page failed");
         format!(
             "{}{}",
-            station_subtabs(tab),
+            station_head(tab, "", ""),
             crate::routes::pages::error_states::could_not_load(what)
         )
     })
@@ -82,20 +82,47 @@ fn page(content: &str, headers: &HeaderMap) -> Html<String> {
 // Capture · "what am I recording?"
 // ───────────────────────────────────────────────────────────────────────────
 
+/// `?allow=` on the Capture tab: a bird's name to fill into the Always allowed field, from the
+/// range filter's "Held back" answer (UIR-37).
+#[derive(serde::Deserialize)]
+struct CaptureQuery {
+    allow: Option<String>,
+}
+
+/// The name a link may put into the Always allowed field: letters, spaces and the marks bird
+/// names use (hyphen, apostrophe, full stop), at most 80 characters. Anything else is not filled
+/// in at all, rather than filled in escaped: nothing a link carries should reach the form unless
+/// it could be a name.
+fn allow_prefill(raw: Option<&str>) -> Option<String> {
+    let name = raw?.trim();
+    let is_name = !name.is_empty()
+        && name.chars().count() <= 80
+        && name
+            .chars()
+            .all(|c| c.is_alphabetic() || matches!(c, ' ' | '-' | '\'' | '’' | '.'));
+    is_name.then(|| name.to_owned())
+}
+
 async fn capture_page(
     State(state): State<AppState>,
     user: crate::auth_middleware::RequestUser,
+    axum::extract::Query(q): axum::extract::Query<CaptureQuery>,
     headers: HeaderMap,
 ) -> Html<String> {
+    let allow = allow_prefill(q.allow.as_deref());
     let content = built(
         "capture",
         "the Capture tab",
-        tokio::task::spawn_blocking(move || build_capture(&state, &user)).await,
+        tokio::task::spawn_blocking(move || build_capture(&state, &user, allow.as_deref())).await,
     );
     page(&content, &headers)
 }
 
-fn build_capture(state: &AppState, user: &crate::auth_middleware::RequestUser) -> String {
+fn build_capture(
+    state: &AppState,
+    user: &crate::auth_middleware::RequestUser,
+    allow: Option<&str>,
+) -> String {
     let settings = crate::routes::admin::settings::handler::load_settings_for(state, Some(user));
     let section_form = |sections: &[Section]| {
         settings.as_ref().map_or_else(
@@ -105,7 +132,6 @@ fn build_capture(state: &AppState, user: &crate::auth_middleware::RequestUser) -
     };
     format!(
         r#"{tabs}
-<p class="bnb-lede"><b>What your station is listening to, and which birds it keeps.</b> Add microphones or camera streams, tune which species count, and set how sure the model must be.</p>
 <h2 class="st-h3" id="classifier">Bird-identifying model</h2>
 {classifier}
 <h2 class="st-h3" id="audio">Audio sources</h2>
@@ -116,11 +142,15 @@ fn build_capture(state: &AppState, user: &crate::auth_middleware::RequestUser) -
 <h2 class="st-h3" id="detection">Capture settings <span class="st-h3-note">· the single home for the detection threshold</span></h2>
 {settings_css}
 {form}"#,
-        tabs = station_subtabs("capture"),
+        tabs = station_head(
+            "capture",
+            "What your station is listening to, and which birds it keeps.",
+            "Add microphones or camera streams, tune which species count, and set how sure the model must be.",
+        ),
         classifier = crate::routes::admin::classifier::host_html(state, user.is_admin()),
         sources = crate::routes::admin::audio::sources_body(state, user.is_admin()),
         folder_note = crate::watch_folder::capture_note(state.watch_dir().as_deref()),
-        species = crate::routes::admin::species::handler::species_body(state),
+        species = crate::routes::admin::species::handler::species_body(state, allow),
         settings_css = SETTINGS_FORM_CSS,
         form = section_form(&[
             Section::Audio,
@@ -158,7 +188,6 @@ fn build_alerts(state: &AppState, user: &crate::auth_middleware::RequestUser) ->
     };
     format!(
         r#"{tabs}
-<p class="bnb-lede"><b>Get a nudge when something special happens</b> — build a rule, pick where it goes, and send yourself a test before you rely on it.</p>
 <div id="rules">{rules}</div>
 <h2 class="st-h3" id="channels">Channels — send a test</h2>
 {channels}
@@ -166,7 +195,11 @@ fn build_alerts(state: &AppState, user: &crate::auth_middleware::RequestUser) ->
 {settings_css}
 {form}
 {recent}"#,
-        tabs = station_subtabs("alerts"),
+        tabs = station_head(
+            "alerts",
+            "Get a nudge when something special happens",
+            "— build a rule, pick where it goes, and send yourself a test before you rely on it.",
+        ),
         rules = crate::routes::admin::rules::rules_body(),
         channels = crate::routes::admin::notification_test::channels_test_body(state),
         settings_css = SETTINGS_FORM_CSS,
@@ -205,7 +238,6 @@ fn build_data(state: &AppState, user: &crate::auth_middleware::RequestUser) -> S
     );
     format!(
         r#"{tabs}
-<p class="bnb-lede"><b>Protect your records, bring in your history, and check the data's trustworthy.</b> Backups bundle the database and recordings; import folds a BirdNET-Pi <span class="mono">birds.db</span> in with its original dates intact.</p>
 <div id="backups">{backups}</div>
 {settings_css}
 {schedule}
@@ -213,7 +245,11 @@ fn build_data(state: &AppState, user: &crate::auth_middleware::RequestUser) -> S
 {import}
 <div id="quality">{quality}</div>
 <div class="card" id="phantoms-section">{phantoms}</div>"#,
-        tabs = station_subtabs("data"),
+        tabs = station_head(
+            "data",
+            "Protect your records, bring in your history, and check the data's trustworthy.",
+            "Backups bundle the database and recordings; import folds a BirdNET-Pi <span class=\"mono\">birds.db</span> in with its original dates intact.",
+        ),
         settings_css = SETTINGS_FORM_CSS,
         backups = crate::routes::admin::backup_recovery::backups_body(state),
         import = crate::routes::admin::migration::migration_body(state),
@@ -252,7 +288,6 @@ fn build_settings(state: &AppState, user: &crate::auth_middleware::RequestUser) 
     };
     format!(
         r#"{tabs}
-<p class="bnb-lede"><b>Your preferences — the look, the station identity, and the wall display.</b></p>
 <h2 class="st-h3">Display <span class="st-h3-note">· saved on this device only</span></h2>
 {display}
 <h2 class="st-h3" id="station-system">Station &amp; system</h2>
@@ -263,7 +298,11 @@ fn build_settings(state: &AppState, user: &crate::auth_middleware::RequestUser) 
   <div class="section-header"><div><div class="bnb-eyebrow">Kiosk mode</div><h2 class="sh-h">A screen for the wall</h2></div><a class="bnb-btn ghost" href="/kiosk">Launch →</a></div>
   <div class="st-card-lede">A full-screen, auto-refreshing display for a dedicated screen — latest detections and the live signal. Press <span class="mono">Esc</span> to exit.</div>
 </div>"#,
-        tabs = station_subtabs("settings"),
+        tabs = station_head(
+            "settings",
+            "Your preferences — the look, the station identity, and the wall display.",
+            "",
+        ),
         display = DISPLAY_PREFS_HTML.as_str(),
         settings_css = SETTINGS_FORM_CSS,
         form = section_form(&[
@@ -296,11 +335,14 @@ async fn access_page(
 fn build_access(state: &AppState, request_user: &RequestUser, https: bool) -> String {
     format!(
         r#"{tabs}
-<p class="bnb-lede"><b>Who can change your station's settings.</b> Viewing the dashboard is open; only the toolbox is gated.</p>
 <div id="accounts">{accounts}</div>
 {https_card}
 <div id="danger-zone">{danger}</div>"#,
-        tabs = station_subtabs("access"),
+        tabs = station_head(
+            "access",
+            "Who can change your station's settings.",
+            "Viewing the dashboard is open; only the toolbox is gated.",
+        ),
         https_card = crate::routes::admin::https::card(state, https),
         accounts = crate::routes::admin::accounts::accounts_body(state, request_user),
         danger = danger_zone(),
@@ -365,7 +407,7 @@ mod tests {
     #[test]
     fn capture_folds_sources_species_and_the_detection_threshold() {
         let state = test_state();
-        let html = build_capture(&state, &admin(&state));
+        let html = build_capture(&state, &admin(&state), None);
         assert!(html.contains(r#"class="bnb-subtab active""#));
         assert!(html.contains(r#"href="/station/capture""#));
         // The detection threshold's single canonical home is here.

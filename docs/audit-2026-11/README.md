@@ -42,6 +42,7 @@ RTSP streams.
 | `07-research-grade.md` | Provenance, effort, verification, exports | RES |
 | `08-existing-backlog-reconciled.md` | The older backlogs, re-checked | (table rows) |
 | `09-chart-review.md` | Every chart: keep, refine, rebuild, replace or remove; missing figures; rendering technology; methods from ornithology (added 2026-11-24, from reading code, nothing rendered) | CHT |
+| `10-model-delivery.md` | How each model file reaches a station on every install path, and 18 ways a station ends up not detecting, or without its filter, with nothing on the dashboard (added 2026-11-25, a delegated read of the code, three claims re-checked, nothing run) | rows to be written by the batch that verifies them |
 | `work-packages.md` | Every finding, grouped into work packages | generated |
 | `checklist.json` | The same, machine-readable, with a `status` field | generated |
 
@@ -137,6 +138,13 @@ count events instead of rows. WP-03 (the discard ledger) is the base for WP-09 a
 
 These change what gets built. Each has a recommendation, and none should be decided by a coding
 session on its own.
+
+**On 2026-11-25 the maintainer left the open ones to the session, to be made from analysis.** What was
+decided, on what evidence, and what would reverse each is in `decisions-2026-11-25.md`, which supersedes
+the recommendations below where they differ: events are computed when read and not stored on the row
+(item 1), each source is its own site until told otherwise (2), a three-tier store replaces the single
+summary table (4), no image for now (5), and analysis stays per file by default because the premise of
+item 6 no longer held at the shipped settings.
 
 1. **Cross-source grouping (WP-06).** Recommended: keep every row, add an event id that groups rows
    of one species from different sources whose windows overlap in time, count events by default and

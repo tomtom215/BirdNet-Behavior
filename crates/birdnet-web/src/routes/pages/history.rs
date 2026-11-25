@@ -314,7 +314,8 @@ fn render_calendar(
     html
 }
 
-/// Map a day's count to an on-brand heat fill (moss over the neutral surface).
+/// Map a day's count to an on-brand heat fill (moss over the neutral surface), in one of the
+/// kit's seven square-root steps (`viz::kit::seq_step`), the scale every other heat map uses.
 ///
 /// The ramp stops at [`HEAT_MAX_PCT`] rather than at full `--moss`, because the
 /// text sitting on these cells has a fixed colour while the fill moves with the
@@ -345,8 +346,12 @@ fn heat_bg(count: i64, cmax: i64) -> String {
     if count <= 0 {
         return "var(--surface-2)".to_string();
     }
-    let span = f64::from(u32::try_from(HEAT_MAX_PCT - 8).unwrap_or(72));
-    let pct = ((count as f64 / cmax as f64) * span).round() as i64 + 8;
+    // The kit's seven steps, by the square root of the count (`viz::kit::seq_step`), so one
+    // detection beside two hundred is a step from none and ten a step from one; on the linear mix
+    // this used to be (UIC-18) one detection beside two hundred was 8 % of moss and ten was 12 %.
+    let step =
+        i64::try_from(super::viz::kit::seq_step(count as f64 / cmax.max(1) as f64)).unwrap_or(7);
+    let pct = 8 + (step - 1) * (HEAT_MAX_PCT - 8) / 6;
     format!("color-mix(in oklab, var(--moss) {pct}%, var(--surface-2))")
 }
 
@@ -507,14 +512,19 @@ fn render_day_page(
     floor: f64,
 ) -> String {
     let mut html = String::new();
-    let _ = write!(
-        html,
-        r#"<a class="action" href="/reports?tab=history">‹ Back to history</a>
-<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">{weekday}</div><h1 class="sh-h">{date}</h1><div class="bnb-meta">{total} detections · {n} species</div></div></div>"#,
-        weekday = weekday_name(date),
-        date = escape_html(date),
-        n = species.len(),
-    );
+    // The shared head (UIR-27): the day's heading was an `sh-h` inside its first card.
+    let head = super::frame::page_head(&super::frame::Head {
+        eyebrow: &format!("Reports · {}", weekday_name(date)),
+        help: &super::help::help_link(super::help::Topic::Reports),
+        title: &escape_html(date),
+        lead: "",
+        lede: &format!(
+            "{total} detections · {n} species. <a href=\"/reports?tab=history\">‹ Back to history</a>",
+            n = species.len()
+        ),
+        aside: "",
+    });
+    let _ = write!(html, r#"{head}<div class="bnb-card pad">"#);
 
     if total == 0 {
         html.push_str(r#"<p class="bnb-meta">No detections were recorded on this day.</p></div>"#);
@@ -686,6 +696,35 @@ mod tests {
         assert_eq!(days_in_month(1900, 2), 28);
         assert_eq!(days_in_month(2026, 4), 30);
         assert_eq!(days_in_month(2026, 1), 31);
+    }
+
+    /// The month's heat is the kit's square-root scale, in its seven steps (UIC-18). It was a
+    /// linear mix: one detection beside a busiest day of two hundred was 8 % of moss, ten was
+    /// 12 %, and four points of a colour mix is not a difference anyone sees. Seen failing on the
+    /// linear mix: "ten detections are a step from one beside 200: 8% and 12%".
+    #[test]
+    fn the_month_uses_the_kits_square_root_steps() {
+        let mix = |c: i64| -> i64 {
+            let s = heat_bg(c, 200);
+            s.split("var(--moss) ")
+                .nth(1)
+                .and_then(|t| t.split('%').next())
+                .and_then(|t| t.parse().ok())
+                .unwrap_or_else(|| panic!("{s}"))
+        };
+        assert!(
+            mix(10) - mix(1) >= 12,
+            "ten detections are a step from one beside 200: {}% and {}%",
+            mix(1),
+            mix(10)
+        );
+        let steps: std::collections::BTreeSet<i64> = (1..=200).map(mix).collect();
+        assert_eq!(steps.len(), 7, "the kit's seven steps: {steps:?}");
+        assert_eq!(steps.first(), Some(&8));
+        assert_eq!(steps.last(), Some(&HEAT_MAX_PCT));
+        // Counterpart: none is still the empty cell, and more is never paler.
+        assert_eq!(heat_bg(0, 200), "var(--surface-2)");
+        assert!((1..200).all(|c| mix(c) <= mix(c + 1)));
     }
 
     #[test]

@@ -221,6 +221,9 @@ pub fn start_disk_manager(
     {
         tracing::warn!("{notice}");
     }
+    if let Some(notice) = super::startup_notices::clips_drained_by_watch_dir(already_monitored) {
+        tracing::error!("{notice}");
+    }
     if !already_monitored {
         // `disk_usage` shells out to `df`, which fails on a path that does not
         // exist — and the recordings dir is only created lazily by the first

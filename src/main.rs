@@ -336,8 +336,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // `tokio::task::spawn_blocking`"); running the command is what
             // caught it not being done.
             let dest = helpers::models::model_dir(config.as_ref());
+            let from = cli.from_file.clone();
             let code = tokio::task::spawn_blocking(move || {
-                helpers::models::install_from_catalogue(&id, &dest)
+                helpers::models::install_from_catalogue(&id, &dest, from.as_deref())
             })
             .await
             .unwrap_or(1);

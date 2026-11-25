@@ -17,6 +17,7 @@ use axum::response::Html;
 use axum::{Router, routing::get};
 
 use super::SubTab;
+use crate::routes::pages::help::Topic;
 use crate::state::AppState;
 
 /// The six Station task groups, in display order. Health is the only public
@@ -63,35 +64,54 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/station", get(station_page))
 }
 
-/// Render the Station sub-tab row with `active` marked.
+/// The opening of every Station tab: the sub-tab row with `active` marked, then the shared page
+/// head ([`crate::routes::pages::frame::page_head`]) with the tab's own lede.
 ///
 /// Health links the canonical bare `/station`; the five management groups link
 /// their `/station/<key>` sub-routes (real server-rendered pages, so this is a
 /// `<nav>` of links, not a JS tablist). Shared by the public Health page and the
 /// gated tab handlers so the row is identical across the home.
-pub(crate) fn station_subtabs(active: &str) -> String {
-    let mut out = String::with_capacity(1024);
-    // Every Station tab composes its content from a sub-tab strip plus a
-    // fragment, and none of those fragments carries a page heading, so the six
-    // Station screens were the only ones in the app served with no `<h1>` at
-    // all — their first heading was an `<h2 class="st-h3">`. A screen reader
-    // announcing the page had nothing to announce it as, and the heading order
-    // started at level 2. Emitted here rather than per tab so it cannot be
-    // forgotten by the next one added.
-    //
-    // Named as the navigation names the section ("Settings"), read from the
-    // nav table so a rename cannot leave this heading behind: it said
-    // "Station — Health" for a section whose nav entry, page title and
-    // breadcrumbs all said "Settings".
+///
+/// The head is emitted here rather than per tab so it cannot be forgotten by the next one
+/// added: every Station tab composes its content from this plus a fragment, and none of the
+/// fragments carries a page heading. The six screens were once served with no `<h1>` at all,
+/// then with a screen-reader-only one, while every other home opened with the shared head
+/// (UIR-27). `lead` is text and `lede` authored markup, as [`Head`](crate::routes::pages::frame::Head)
+/// takes them; both may be empty.
+pub(crate) fn station_head(active: &str, lead: &str, lede: &str) -> String {
+    // Named as the navigation names the section ("Settings"), read from the nav table so a
+    // rename cannot leave this heading behind: it said "Station — Health" for a section whose
+    // nav entry, page title and breadcrumbs all said "Settings".
     let section = crate::routes::pages::nav::PRIMARY
         .iter()
         .find(|p| p.key == "station")
         .map_or("Settings", |p| p.label);
-    let heading = TABS.iter().find(|t| t.key == active).map_or_else(
-        || section.to_owned(),
-        |t| format!("{section} — {}", t.label),
-    );
-    let _ = write!(out, r#"<h1 class="sr-only">{heading}</h1>"#);
+    let title = TABS
+        .iter()
+        .find(|t| t.key == active)
+        .map_or(section, |t| t.label);
+    let topic = match active {
+        "capture" => Topic::AdminAudio,
+        "alerts" => Topic::AdminNotifications,
+        "data" => Topic::AdminBackups,
+        "settings" => Topic::AdminSettings,
+        "access" => Topic::AdminRemoteAccess,
+        _ => Topic::AdminSystem,
+    };
+    let head = crate::routes::pages::frame::page_head(&crate::routes::pages::frame::Head {
+        eyebrow: section,
+        help: &crate::routes::pages::help::help_link(topic),
+        title: &crate::routes::pages::escape_html(title),
+        lead,
+        lede,
+        aside: "",
+    });
+    format!("{}{head}", station_subtabs(active))
+}
+
+/// The Station sub-tab row alone, with `active` marked.
+pub(crate) fn station_subtabs(active: &str) -> String {
+    let mut out = String::with_capacity(1024);
     out.push_str(r#"<nav class="bnb-subtabs" aria-label="Views" data-screen-label="Sub-tabs">"#);
     for t in TABS {
         let href = if t.key == "health" {
@@ -117,7 +137,11 @@ pub(crate) fn station_subtabs(active: &str) -> String {
 async fn station_page(State(state): State<AppState>, headers: HeaderMap) -> Html<String> {
     let content = format!(
         "{}{}",
-        station_subtabs("health"),
+        station_head(
+            "health",
+            "Everything your station needs to keep listening",
+            "— the streams, the hardware, and the pipeline behind them. This is the screen to check from the field.",
+        ),
         crate::routes::pages::station_health::content(&state).await
     );
     crate::routes::pages::render_page_for_request("Settings", &content, "station", &headers)

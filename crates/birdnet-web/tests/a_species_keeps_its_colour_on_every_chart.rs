@@ -289,38 +289,17 @@ const NOT_SPECIES: &[(&str, &str, &str)] = &[
     (
         "src/routes/pages/viz/kit.rs",
         "format-class",
-        "slot_class and SpeciesSlots::class build the class",
+        "SpeciesSlots::class builds the class",
     ),
     (
         "src/routes/pages/viz/kit.rs",
         "format-token",
         "SpeciesSlots::colour builds the token",
     ),
-    (
-        "src/routes/pages/viz/bars.rs",
-        "slot_class",
-        "Fill::Slot and Daily::slot: one colour for every bar of a total",
-    ),
-    (
-        "src/routes/pages/viz/bars.rs",
-        "literal",
-        "the dawn and dusk hours (ck-c1) and the temperature line (ck-c5)",
-    ),
-    (
-        "src/routes/pages/viz/ridge.rs",
-        "literal",
-        "the seasons: spring ck-c1, autumn ck-c5",
-    ),
-    (
-        "src/routes/pages/viz/trend.rs",
-        "literal",
-        "one series, a daily total or richness, in ck-c1",
-    ),
-    (
-        "src/routes/pages/viz/timeline.rs",
-        "literal",
-        "the life list: one series, species so far, in ck-c1",
-    ),
+    // A mark that is not a species (a total, the hours around the sun, the temperature, a
+    // season, the life list) is drawn in the annotation ink, `ck-cink`, and makes no colour
+    // here at all (N25-06): `bars.rs`, `ridge.rs`, `trend.rs` and `timeline.rs` were listed for
+    // `ck-c1` and `ck-c5`, colours two species own.
     (
         "static/skysong.js",
         "js-template",

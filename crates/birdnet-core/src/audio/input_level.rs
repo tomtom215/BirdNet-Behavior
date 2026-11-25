@@ -95,9 +95,9 @@ pub struct InputLevel {
     /// The position the tool prints. ALSA: percent of the control's raw range.
     /// Pulse: percent of the source's 100% (cubic), so it can exceed 100.
     pub percent: u32,
-    /// The gain the tool prints, in dB, where it knows one. ALSA's "minus
-    /// infinity" (`amixer` prints `-99999.99dB`) is `f32::NEG_INFINITY`: the
-    /// control passes nothing at all.
+    /// The gain the tool prints, in dB, where it knows one. "Minus infinity"
+    /// (`amixer` prints ALSA's as `-99999.99dB`, `pactl` PulseAudio's as
+    /// `-inf dB`) is `f32::NEG_INFINITY`: the control passes nothing at all.
     pub db: Option<f32>,
     /// Pulse only: the gain on top of the hardware's own 0 dB point, that is the
     /// reported gain minus the source's base volume, where both are known.
@@ -451,7 +451,12 @@ pub fn parse_pactl_source(json: &str, name: &str) -> Result<InputLevel, ReadErro
         .max_by_key(|(p, _)| *p)
         .ok_or_else(|| ReadError::NoVolume(name.to_owned()))?;
     let (percent, db) = loudest;
-    let base_db = source.get("base_volume").and_then(db_of);
+    // A base volume is the hardware's own 0 dB point and is always a number;
+    // one that is not would make every reading's hardware gain infinite.
+    let base_db = source
+        .get("base_volume")
+        .and_then(db_of)
+        .filter(|b| b.is_finite());
     let hardware_controlled = source
         .get("flags")
         .and_then(Value::as_array)
@@ -475,7 +480,12 @@ fn percent_of(channel: &Value) -> Option<u32> {
     text.trim().trim_end_matches('%').trim().parse().ok()
 }
 
-/// `"-18.06 dB"` -> -18.06; `"-inf dB"` -> `None`.
+/// `"-18.06 dB"` -> -18.06; `"-inf dB"` -> `f32::NEG_INFINITY`.
+///
+/// `-inf dB` is how PulseAudio prints a volume at its bottom: the source
+/// passes nothing. That is not "no dB reading", and it is read as the `amixer`
+/// path reads ALSA's `-99999.99dB` (N24-05). Anything else that is not a finite
+/// number is `None`.
 fn db_of(channel: &Value) -> Option<f32> {
     let text = channel.get("db")?.as_str()?;
     text.trim()
@@ -483,5 +493,5 @@ fn db_of(channel: &Value) -> Option<f32> {
         .trim()
         .parse::<f32>()
         .ok()
-        .filter(|d| d.is_finite())
+        .filter(|d| d.is_finite() || *d == f32::NEG_INFINITY)
 }

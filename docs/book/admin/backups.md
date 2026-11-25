@@ -8,7 +8,7 @@ The **Data** tab (`/station/data`) is where you protect your records: snapshots,
 
 **Snapshots** copy the database only. They are small and quick, they run automatically **every 7 days**, and the station keeps the most recent **14**. They live in `backups/` beside `birds.db` — *on the station itself*. That makes them perfect for undoing a bad import or recovering from database corruption, and useless if the SD card dies.
 
-**Full backups** bundle the database, your recordings and your config into one `.tar.gz` you download. This is the one to keep somewhere else. Nothing takes these automatically — download one after any big change, and periodically if your station matters to you.
+**Full backups** bundle the database and your recordings into one `.tar.gz` you download. This is the one to keep somewhere else. Nothing takes these automatically — download one after any big change, and periodically if your station matters to you. The archive takes a `birdnet.conf` only from the folder that holds the database, and neither the bare-metal installer (which writes `/etc/birdnet/birdnet.conf`) nor the Docker image keeps one there, so on a standard install your configuration file is in no backup: keep a copy yourself. [If the SD card dies](./card-failure.md) says what each backup holds and how to rebuild a station from them.
 
 **Offsite copies** send each weekly snapshot to an object store or an SSH server, encrypted before it leaves. Off by default; see [Offsite backups](#offsite-backups) below. This is what covers the failure the other two do not: the card wearing out, the enclosure flooding, the Pi being stolen.
 
@@ -41,10 +41,12 @@ The storage breakdown shows where space is going — the database (including its
 
 Time-based retention is **off by default**, not absent: set **Keep Clip Audio (days)** (`CLIP_RETENTION_DAYS`, `--clip-retention-days`) for a rolling window — `0`, the default, keeps audio for ever. Two disk-based limits apply alongside it:
 
-- the disk manager purges the **oldest** recordings once the disk crosses `DISK_PURGE_THRESHOLD` (default 95%);
+- once the disk crosses `DISK_PURGE_THRESHOLD` (default 95%), the disk manager deletes a tenth of the clips at each pass, taken from the species with the most clips first, the lowest-confidence clip of that species first and then the oldest, and never taking a species below `PURGE_SPECIES_FLOOR` clips (default 5); with `FULL_DISK=keep` it stops recording instead;
 - `MAX_FILES_SPECIES` keeps at most N clips per species, pruned on the daily maintenance tick.
 
 Recordings you have **locked** are never purged by either, and locking takes effect on the next cycle — no restart needed. The audio of every detection someone has confirmed, rejected or commented on is kept the same way by all three (the age limit, the per-species cap and the disk-full purge): that clip is the evidence a second reviewer needs. Set `BIRDNET_RETAIN_REVIEWED_AUDIO=false` (`--retain-reviewed-audio false`) to let them reclaim it like any other. When the disk is over the threshold and every clip left is one the purge keeps (locked, reviewed, or among the `PURGE_SPECIES_FLOOR` clips each species keeps), it deletes nothing and the disk goes on filling: the station logs an error, lists the `purge-nothing-deletable` condition at `/api/v2/health/conditions` and sets `birdnet_purge_nothing_deletable` to 1, until a pass deletes something or usage falls below the threshold. When a clip is pruned its detection row survives: your counts, species lists and analytics are unaffected, only the audio is removed.
+
+**One exception:** a station run with `--watch-dir` (`BIRDNET_WATCH_DIR`) pointed at its own recordings directory. Neither installer sets it up that way (the bare-metal service watches `/tmp/birdnet-stream`; the Docker image watches `/data/recordings` while its clips go to `/data/BirdNet-Behavior/recordings`), but on a station that is, the recordings directory is drained as the raw-audio stream directory is: every WAV, MP3 or FLAC clip older than `STREAM_RETENTION_SECS` (default 600 seconds) is deleted, locked, reviewed or not, and the disk-full purge takes the oldest clips with no regard for locks, reviews or species.
 
 To lock a clip, open [Recordings](../guide/recordings.md) and use the 🔒 **Lock** action on a row — or select several and use the bulk **Lock** button above the grid. Locked rows show an unlock action in the same place.
 
@@ -62,7 +64,7 @@ Your database is a log of what is around your house and when you are there. "Ser
 OFFSITE_PASSPHRASE=a long passphrase you keep somewhere else
 ```
 
-**Write it down somewhere that is not this station.** There is no recovery: the passphrase is not stored anywhere, not derivable from the backup, and not known to us. A backup you cannot decrypt is not a backup.
+**Write it down somewhere that is not this station.** There is no recovery: the passphrase is stored only where you put it (the station's configuration file or environment, which a dead card takes with it), is not derivable from the backup, and is not known to us. A backup you cannot decrypt is not a backup.
 
 At least 12 characters, and the station refuses shorter ones — not as password policy, but because below that the argon2 parameters stop being what protects the file.
 
@@ -168,10 +170,12 @@ Uploads are logged at `info` on success and `warn` on failure, with the destinat
 Download the `.bnb` file from your bucket or server, then:
 
 ```bash
-birdnet-behavior --decrypt-backup downloaded.bnb --out birds.db
+read -rsp 'Offsite passphrase: ' BIRDNET_OFFSITE_PASSPHRASE; echo
+export BIRDNET_OFFSITE_PASSPHRASE
+birdnet-behavior --decrypt-backup downloaded.bnb --out restored.db
 ```
 
-It will ask for the passphrase. The result is an ordinary SQLite database — put it in place of `birds.db` with the service stopped, as with any snapshot.
+It does not ask for the passphrase: it reads `OFFSITE_PASSPHRASE` from the environment (`BIRDNET_OFFSITE_PASSPHRASE`, as above) or from the configuration file, and refuses to write over a file that already exists. The result is an ordinary SQLite database — put it in place of `birds.db` with the service stopped, as with any snapshot. [If the SD card dies](./card-failure.md#putting-a-station-back-on-a-new-card) has the whole sequence for a new station.
 
 ## Danger zone
 

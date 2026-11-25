@@ -48,7 +48,7 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_NOISE_THRESHOLD` | `--noise-threshold` | `NOISE_THRESHOLD` | `0.0` |
 | `BIRDNET_NOISE_CLASSES` | `--noise-classes` | `NOISE_CLASSES` | `Dog` |
 | — | — | `NOISE_REMEMBER_SECS` | `0.0` (off; keeps suppressing the species a bark produced for this long after it — see [tuning](../guides/tuning.md#7-barking-dogs-and-other-non-birds)) |
-| `BIRDNET_CONFIRMATION_LEVEL` | `--confirmation-level` | `CONFIRMATION_LEVEL` | `off` (needs `OVERLAP`) |
+| `BIRDNET_CONFIRMATION_LEVEL` | `--confirmation-level` | `CONFIRMATION_LEVEL` | `off` (`lenient` and `moderate` need `OVERLAP`) |
 | `BIRDNET_OFFSITE_BACKUP` | `--offsite-backup` | `OFFSITE_BACKUP` | `off`; also `s3`, `sftp` and `rsync` (the `--help` text lists three) |
 | `BIRDNET_OFFSITE_PASSPHRASE` | — (deliberately no flag) | `OFFSITE_PASSPHRASE` | — |
 | `BIRDNET_OFFSITE_KEEP` | — | `OFFSITE_KEEP` | `8` |
@@ -82,7 +82,7 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_CLIP_RETENTION_DAYS` | `--clip-retention-days` | `CLIP_RETENTION_DAYS` | `0` (keep forever) |
 | `BIRDNET_RETAIN_REVIEWED_AUDIO` | `--retain-reviewed-audio` | — | `true`: the age limit, the per-species cap and the disk-full purge keep the audio of reviewed and commented detections |
 | `BIRDNET_DISK_PURGE_THRESHOLD` | `--disk-purge-threshold` | `DISK_PURGE_THRESHOLD` | `95` (BirdNET-Pi calls it `PURGE_THRESHOLD`) |
-| — | — | `FULL_DISK` | `purge`. What happens at that threshold: `purge` deletes the oldest clips of the most-recorded species (never below `PURGE_SPECIES_FLOOR`, never a locked one); `keep` stops recording, deletes nothing and records again by itself once usage is 2 points below the threshold, as BirdNET-Pi's `FULL_DISK=keep` does |
+| — | — | `FULL_DISK` | `purge`. What happens at that threshold: `purge` deletes clips of the most-recorded species first, lowest confidence and then oldest within a species (never below `PURGE_SPECIES_FLOOR`, never a locked one, unless `--watch-dir` is the recordings directory: see [Backups](../admin/backups.md#storage--retention)); `keep` stops recording, deletes nothing and records again by itself once usage is 2 points below the threshold, as BirdNET-Pi's `FULL_DISK=keep` does |
 | `BIRDNET_PURGE_SPECIES_FLOOR` | `--purge-species-floor` | `PURGE_SPECIES_FLOOR` | `5` (`0` = no floor) |
 | `BIRDNET_STREAM_RETENTION_SECS` | `--stream-retention-secs` | `STREAM_RETENTION_SECS` | `600` |
 | `BIRDNET_STREAM_MAX_MB` | `--stream-max-mb` | `STREAM_MAX_MB` | `512` |
@@ -168,7 +168,7 @@ These are stored in the SQLite settings table and have no environment variable o
 | Rare-bird quarantine rules | Species | |
 | BirdWeather station details | BirdWeather | Token can also be set via env var |
 
-> **Retention is off by default.** Nothing is deleted by age unless you ask for it: set **Keep Clip Audio (days)** in the UI (`CLIP_RETENTION_DAYS`) to reclaim the audio of older detections. Independently of that, the disk manager purges the oldest recordings once the disk hits `DISK_PURGE_THRESHOLD` (default 95%) and keeps at most `BIRDNET_MAX_FILES_PER_SPECIES` per species. Pin clips you want to keep with the **lock** action on any detection — locked clips are never purged by either limit, and nor, unless `BIRDNET_RETAIN_REVIEWED_AUDIO=false`, is the audio of a detection someone has confirmed, rejected or commented on.
+> **Retention is off by default.** Nothing is deleted by age unless you ask for it: set **Keep Clip Audio (days)** in the UI (`CLIP_RETENTION_DAYS`) to reclaim the audio of older detections. Independently of that, once the disk hits `DISK_PURGE_THRESHOLD` (default 95%) the disk manager deletes a tenth of the clips at each pass, taken from the species with the most clips first, the lowest-confidence clip of that species first and then the oldest, and never taking a species below `PURGE_SPECIES_FLOOR` clips (default 5), and at most `BIRDNET_MAX_FILES_PER_SPECIES` clips are kept per species. Pin clips you want to keep with the **lock** action on any detection — locked clips are never purged by either limit, and nor, unless `BIRDNET_RETAIN_REVIEWED_AUDIO=false`, is the audio of a detection someone has confirmed, rejected or commented on. The one exception is a station whose `--watch-dir` is its own recordings directory, which neither installer sets up; [Backups & Recovery](../admin/backups.md#storage--retention) says what happens to its clips.
 >
 > All three limits, plus the temporary streaming folder's retention and size ceiling, can be set from **Settings → General → System & Display** in the web UI; you never have to edit a config file to change them. A value given on the command line or as a `BIRDNET_*` variable wins over the UI, which in turn wins over the config file (the order at the top of this page).
 >

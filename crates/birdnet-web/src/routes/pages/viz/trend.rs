@@ -125,9 +125,9 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     let mut series: Vec<(String, String)> =
         vec![(capitalise(o.unit), "var(--chart-other)".to_string())];
     if o.bars && !o.smooth_name.is_empty() {
-        series.push((capitalise(o.smooth_name), "var(--chart-1)".to_string()));
+        series.push((capitalise(o.smooth_name), "var(--chart-annot)".to_string()));
     } else {
-        series[0].1 = "var(--chart-1)".to_string();
+        series[0].1 = "var(--chart-annot)".to_string();
     }
     let has_prior = !prior.is_empty();
     if has_prior {
@@ -218,7 +218,7 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     // Reverse the area's fade: strong at the line, gone at the baseline.
     let _ = write!(
         svg,
-        r#"<defs><linearGradient id="{g}-area" class="ck-gr ck-c1" x1="0" y1="0" x2="0" y2="1"><stop class="a" offset="0" stop-opacity=".30"/><stop class="a" offset="1" stop-opacity="0"/></linearGradient></defs>"#
+        r#"<defs><linearGradient id="{g}-area" class="ck-gr ck-cink" x1="0" y1="0" x2="0" y2="1"><stop class="a" offset="0" stop-opacity=".30"/><stop class="a" offset="1" stop-opacity="0"/></linearGradient></defs>"#
     );
 
     for &v in &rules {
@@ -298,7 +298,7 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
         let (xa, xb) = (run[0].0, run[run.len() - 1].0);
         let _ = write!(
             svg,
-            r#"<path class="ck-area" d="{curve} L{xb:.1},{base:.1} L{xa:.1},{base:.1} Z" fill="url(#{g}-area)"/><path class="ck-line ck-c1 ck-drawn" d="{curve}" pathLength="1"/>"#,
+            r#"<path class="ck-area" d="{curve} L{xb:.1},{base:.1} L{xa:.1},{base:.1} Z" fill="url(#{g}-area)"/><path class="ck-line ck-cink ck-drawn" d="{curve}" pathLength="1"/>"#,
         );
     }
     if !o.bars {
@@ -308,7 +308,7 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
             }
             let _ = write!(
                 svg,
-                r#"<circle class="ck-ring ck-c1 ck-fadein" cx="{:.1}" cy="{:.1}" r="3"/>"#,
+                r#"<circle class="ck-ring ck-cink ck-fadein" cx="{:.1}" cy="{:.1}" r="3"/>"#,
                 x_at(i),
                 y.at(p.value)
             );
@@ -391,7 +391,7 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     // The crosshair and its marker.
     let _ = write!(
         svg,
-        r#"<line class="ck-cursor" x1="{pad_l:.1}" y1="{pad_t:.1}" x2="{pad_l:.1}" y2="{base:.1}" visibility="hidden"/><circle class="ck-dot ck-c1" cx="{pad_l:.1}" cy="{base:.1}" r="4" visibility="hidden"/>"#,
+        r#"<line class="ck-cursor" x1="{pad_l:.1}" y1="{pad_t:.1}" x2="{pad_l:.1}" y2="{base:.1}" visibility="hidden"/><circle class="ck-dot ck-cink" cx="{pad_l:.1}" cy="{base:.1}" r="4" visibility="hidden"/>"#,
     );
     svg.push_str("</svg></div>");
 
@@ -400,13 +400,13 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     if o.bars && !o.smooth_name.is_empty() {
         let _ = write!(
             svg,
-            r#"<span class="bnb-meta"><i class="ck-keyline ck-c1"></i> {}</span><span class="bnb-meta"><i class="ck-keybar"></i> Each day</span>"#,
+            r#"<span class="bnb-meta"><i class="ck-keyline ck-cink"></i> {}</span><span class="bnb-meta"><i class="ck-keybar"></i> Each day</span>"#,
             escape_html(o.smooth_name),
         );
     } else {
         let _ = write!(
             svg,
-            r#"<span class="bnb-meta"><i class="ck-keyline ck-c1"></i> {}</span>"#,
+            r#"<span class="bnb-meta"><i class="ck-keyline ck-cink"></i> {}</span>"#,
             escape_html(&capitalise(o.unit))
         );
     }
@@ -446,6 +446,20 @@ fn capitalise(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// N25-06: a trend is one total, not a species, so it wears no species' colour. It was
+    /// `ck-cink` and `--chart-1`, the colour of the station's most heard bird.
+    #[test]
+    fn a_trend_wears_no_species_colour() {
+        for bars in [true, false] {
+            let svg = trend_chart(&trend(&[33.0, 31.0, 32.0, 34.0, 33.0]), &opts(&[], bars));
+            assert!(svg.contains("ck-line"), "precondition: the line is drawn");
+            assert_eq!(
+                super::super::kit::species_colours_in(&svg),
+                Vec::<String>::new()
+            );
+        }
+    }
 
     fn trend(values: &[f64]) -> Vec<TrendPoint> {
         values
@@ -489,7 +503,7 @@ mod tests {
             "five day columns: {svg}"
         );
         assert_eq!(
-            svg.matches(r#"class="ck-line ck-c1 ck-drawn""#).count(),
+            svg.matches(r#"class="ck-line ck-cink ck-drawn""#).count(),
             1,
             "one line: {svg}"
         );
@@ -505,7 +519,7 @@ mod tests {
         let svg = trend_chart(&trend(&[13.0, 12.0, 14.0]), &opts(&[], false));
         assert!(!svg.contains("ck-cother"), "{svg}");
         assert_eq!(
-            svg.matches(r#"<circle class="ck-ring ck-c1 ck-fadein""#)
+            svg.matches(r#"<circle class="ck-ring ck-cink ck-fadein""#)
                 .count(),
             3,
             "a dot a day: {svg}"
@@ -575,13 +589,13 @@ mod tests {
         o.listened = Some(&listened);
         let svg = trend_chart(&pts, &o);
         assert_eq!(
-            svg.matches(r#"class="ck-line ck-c1 ck-drawn""#).count(),
+            svg.matches(r#"class="ck-line ck-cink ck-drawn""#).count(),
             2,
             "two runs, not one line through a zero: {svg}"
         );
         // Nothing is drawn at the off day: not a dot, not a point of the line.
         assert_eq!(
-            svg.matches(r#"<circle class="ck-ring ck-c1 ck-fadein""#)
+            svg.matches(r#"<circle class="ck-ring ck-cink ck-fadein""#)
                 .count(),
             4,
             "{svg}"
@@ -590,7 +604,7 @@ mod tests {
         o.listened = None;
         assert_eq!(
             trend_chart(&pts, &o)
-                .matches(r#"class="ck-line ck-c1 ck-drawn""#)
+                .matches(r#"class="ck-line ck-cink ck-drawn""#)
                 .count(),
             1
         );

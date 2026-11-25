@@ -103,9 +103,12 @@ Kept: the radial form, solid rings in the chart colours, the moon dial and the s
 
 ## The migration ridgeline
 
-* **Colour is the season a species peaks in** (spring window, fall window, neither): species are
-  told apart by the name beside the ridge, so the colour is free to say something, and twelve
-  species do not need twelve hues. Heights are each species' share of its own busiest week; the
+* **Colour is whether a species peaks in a migration window** (the annotation ink) **or at another
+  time** (the neutral); which window is where the peak stands, under its shading. Species are told
+  apart by the name beside the ridge, so the colour is free to say something, and twelve species
+  do not need twelve hues. Spring and fall were `--chart-1` and `--chart-5`, colours two of the
+  station's species own on every other chart, so they are no longer told apart by hue (N25-06).
+  Heights are each species' share of its own busiest week; the
   caption says so and the readout carries the real counts.
 * **Hover reads a week** (the kit's `cols` mode): every species heard that week with its count, and
   how many different species were heard. The species-per-week strip that used to be a second chart

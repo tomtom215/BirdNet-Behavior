@@ -552,3 +552,25 @@ fn text_that_is_not_a_listing_has_no_controls() {
             .is_empty()
     );
 }
+
+/// N24-05: `pactl` prints a source at the bottom of its volume as `"-inf dB"`, PulseAudio's
+/// minus infinity. Like ALSA's `-99999.99dB` above, that is a source passing nothing, not one
+/// with no dB reading: it was read as no dB, so a hardware source there was graded "too low"
+/// by its percentage, and the two sound systems disagreed about the same state.
+#[test]
+fn pulses_minus_infinity_is_silence_not_no_db() {
+    let level = parse_pactl_source(&hardware_source(0, "-inf dB"), "virt_mic").expect("listed");
+    assert_eq!(level.db, Some(f32::NEG_INFINITY));
+    assert_eq!(level.percent, 0);
+    assert_eq!(assess(&level), Advice::Silent);
+}
+
+/// The counterpart: a finite reading is kept as the number it is, and a source at a real gain
+/// near the bottom is still "too low", not silent.
+#[test]
+fn a_finite_pulse_reading_keeps_its_value() {
+    let level = parse_pactl_source(&hardware_source(5, "-78.06 dB"), "virt_mic").expect("listed");
+    assert!(near(level.db, -78.06), "{:?}", level.db);
+    assert!(near(level.hardware_db, -66.06), "{:?}", level.hardware_db);
+    assert_eq!(assess(&level), Advice::TooLow);
+}

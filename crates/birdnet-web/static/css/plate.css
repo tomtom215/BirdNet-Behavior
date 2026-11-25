@@ -89,15 +89,22 @@
 /* The key. */
 .plate-key-n { font-family: var(--font-ui); font-weight: 500; font-size: 12px; fill: var(--plate-ink-2); font-variant-numeric: tabular-nums; }
 .plate-key-sci { font-family: var(--font-display); font-style: italic; font-size: 17px; fill: var(--plate-ink); }
+/* The common name after the Latin one: a household reads the key by it (UIR-31). */
+.plate-key-com { font-family: var(--font-ui); font-style: normal; font-size: 12px; fill: var(--plate-ink-2); }
 .plate-key-c { font-family: var(--font-ui); font-size: 13px; fill: var(--plate-ink-2); font-variant-numeric: tabular-nums; }
 .plate-key-more { font-family: var(--font-display); font-style: italic; font-size: 16px; fill: var(--plate-ink-2); }
 .plate-colophon { font-family: var(--font-ui); font-size: 13px; letter-spacing: 0.06em; fill: var(--plate-ink-2); }
 
-/* The way out and the way between displays: faint until someone is at the screen. */
-.plate-ui { position: fixed; z-index: 2; font-family: var(--font-ui); font-size: 13px; color: var(--plate-ink-2); opacity: 0.35; transition: opacity var(--dur-base) var(--ease-out); }
-.plate-ui:hover, .plate-ui:focus-within { opacity: 1; }
-.plate-exit { top: 14px; right: 18px; }
-.plate-modes { top: 14px; left: 18px; display: flex; gap: 12px; }
+/* The way out and the way between displays: quiet, in the second ink, and readable at rest. They
+   were at 35 % opacity until hovered, 1.73:1 on the day paper and 2.03:1 at night, and a touch
+   display has no hover (UIR-31); the second ink is 6.6:1 and 7.6:1, still well under the title's
+   ink. Someone at the screen brings them up to the full ink. `interactions.mjs` composites what
+   is painted at rest in both palettes and holds it at 4.5:1. */
+.plate-ui { position: fixed; z-index: 2; font-family: var(--font-ui); font-size: 13px; color: var(--plate-ink-2); transition: color var(--dur-base) var(--ease-out); }
+.plate-ui:hover, .plate-ui:focus-within { color: var(--plate-ink); }
+/* Above the sheet's outer rule (27px down at 1280x900): at 14px the rule ran through the words. */
+.plate-exit { top: 5px; right: 18px; }
+.plate-modes { top: 5px; left: 18px; display: flex; gap: 12px; }
 .plate-ui a { color: inherit; text-decoration: none; }
 .plate-ui a[aria-current="true"] { text-decoration: underline; text-underline-offset: 3px; }
 /* The way out is itself a `.plate-ui`, not a link inside one, so `.plate-ui a` does not reach it:

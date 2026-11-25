@@ -37,7 +37,28 @@ curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behav
 
 The values are `birdnet-v24` and `birdnet-v3` (`--classifier`, or `BIRDNET_CLASSIFIER` for the installer, the container and `quickstart.sh`, which writes it to `.env` only if you set it). An existing station **never changes model** on an install, update, repair or reinstall: the installer reads the classifier that `/etc/birdnet/birdnet.conf` names and keeps it, and says so (a `--classifier` that disagrees is reported as not applied). A Docker volume that already holds the V3.0 model file keeps V3.0 and logs one line saying how to change that. Changing a running station's classifier splits its history between two networks that name and score birds differently, so it is something you do on purpose, by editing `MODEL_PATH`, `LABELS_PATH` and `METADATA_MODEL_PATH`; [the classifiers page](../admin/classifiers.md#choosing-and-changing-the-primary-classifier) has the details.
 
-**Where the files come from.** The installer and the container ask the binary to install V2.4 (`birdnet-behavior --install-model birdnet-v24` and `birdnet-v24-range-v2`), and the binary checks each file against a SHA-256 compiled into it. The model comes from birdnet-go's published ONNX build on Hugging Face (`huggingface.co/tphakala/BirdNET-v2.4`) and the range filter from `raw.githubusercontent.com` (`tphakala/birdnet-go`), each at a pinned revision. The label file is not downloaded: the binary carries it, with BirdNET-Pi's English names. So a default install needs `huggingface.co` and `raw.githubusercontent.com` as well as `github.com` (for the binary), and nothing in it comes from this project's own model release. (The V2.4 files are also mirrored in this repository's `models-v2.4` release, published on 2026-10-20 with `publish-model.yml`; nothing fetches from it yet, because the binary's catalogue names one origin per file.) V3.0 still comes from this project's `models-v3.0-preview3` release, with Zenodo as the fallback. Either way you never locate a model yourself; the files are installed into the data directory's `models/` folder on bare metal and `/data/model` in Docker.
+**Where the files come from.** The installer and the container ask the binary to install V2.4 (`birdnet-behavior --install-model birdnet-v24` and `birdnet-v24-range-v2`), and the binary checks each file against a SHA-256 and a size compiled into it. Each file is fetched first from this project's own `models-v2.4` release on `github.com` (published on 2026-10-20 with `publish-model.yml`; GitHub reports the same SHA-256 and size for its two assets as the binary pins), and only if that fails from where it is published: birdnet-go's ONNX build on Hugging Face (`huggingface.co/tphakala/BirdNET-v2.4`) for the model, and `raw.githubusercontent.com` (`tphakala/birdnet-go`) for the range filter, each at a pinned revision. Whichever host answers, a file that does not match is thrown away and the next one is tried. The label file is not downloaded: the binary carries it, with BirdNET-Pi's English names. So a default install needs `github.com` (for the binary and the model), and `huggingface.co` and `raw.githubusercontent.com` only when the release cannot be reached. V3.0 comes from this project's `models-v3.0-preview3` release, with Zenodo as the fallback. Either way you never locate a model yourself; the files are installed into the data directory's `models/` folder on bare metal and `/data/model` in Docker. `birdnet-behavior --install-model list` prints each model's source and licence (BirdNET V2.4 and its range filter are CC BY-NC-SA 4.0: free to use, not for commercial purposes).
+
+### When the model cannot be downloaded
+
+The download is tried three times, 30 seconds and then 90 seconds apart. If it still fails, the install **finishes anyway** — the configuration, the service and the dashboard are all put in place — and ends with a boxed warning that the station is **not detecting birds**, why, and how to install the model. The installer then exits with status **75**, so a script can tell this apart from success (0) and from an install that stopped (any other status). To install the model afterwards, run the installer again once the machine is online:
+
+```bash
+sudo bash install.sh repair
+```
+
+On a station set up for the default classifier (BirdNET V2.4), the dashboard offers the same install as a button under Settings → Capture. A station set up for the V3.0 preview has no button: the page says its model file is missing, and `install.sh repair` is the way. Docker follows the same rule: the container retries, then starts without the model and says so in its log; every later start tries again. `BIRDNET_MODEL_RETRY_WAITS` sets the waits (`"30 90"` by default; `""` for a single attempt).
+
+### Installing without internet
+
+Download the model on another machine (for V2.4, `birdnet-v24.onnx` from this project's [`models-v2.4` release](https://github.com/tomtom215/BirdNet-Behavior/releases/tag/models-v2.4), which lists its SHA-256), carry it over, and point the installer at it:
+
+```bash
+sudo BIRDNET_BINARY_TARBALL=/path/to/birdnet-behavior-<ver>-<target>.tar.gz \
+    bash install.sh --local-model /path/to/birdnet-v24.onnx
+```
+
+The file passes exactly the check a download passes — for V2.4 the binary compares its size and SHA-256 with the ones it was built with (`birdnet-behavior --install-model birdnet-v24 --from-file PATH` is the same check by hand), for V3.0 the installer compares its SHA-256 — and a file that does not match is refused and not installed. V2.4's labels are written by the binary, so nothing else is needed for the classifier; the range filter is still fetched, and without it the station runs without the occurrence filter and says so. In Docker, mount the file and set `BIRDNET_LOCAL_MODEL` to its path inside the container.
 
 ## Option 1 — Docker quick start
 

@@ -459,7 +459,7 @@ fn render_quality_page(data: &QualityData, names: &birdnet_core::i18n::NameLocal
   </div>
   <p class="bnb-meta q-meta-mb">
     Detection counts (bars) and average confidence (colour intensity) by hour.
-    Dawn (04–08) and dusk (18–22) typically run the busiest.
+    Activity typically peaks around sunrise and again towards sunset.
   </p>
   {hour_html}
 </section>

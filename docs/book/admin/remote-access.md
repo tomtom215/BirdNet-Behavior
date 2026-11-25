@@ -16,7 +16,7 @@ To make the dashboard reachable **only from the machine itself**, bind to loopba
 BIRDNET_LISTEN=127.0.0.1:8502
 ```
 
-(Or answer "restrict to this device" in the interactive installer.) Then reach it remotely with an SSH tunnel (`ssh -L 8502:localhost:8502 pi@host`) or a VPN — see [the private-tunnel section](#a-safer-alternative-a-private-tunnel) below.
+The interactive installer does not ask this. On a bare-metal install, put that line in `/etc/birdnet/birdnet.conf` and run `sudo bash install.sh repair`, which writes it into the service's `--listen` (the running program does not read the key from the file). Then reach it remotely with an SSH tunnel (`ssh -L 8502:localhost:8502 pi@host`) or a VPN — see [the private-tunnel section](#a-safer-alternative-a-private-tunnel) below.
 
 ## Built-in HTTPS
 

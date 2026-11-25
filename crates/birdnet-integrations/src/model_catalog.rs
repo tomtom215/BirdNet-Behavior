@@ -128,8 +128,27 @@ pub struct CatalogEntry {
     pub id: &'static str,
     /// What to call it to an operator.
     pub name: &'static str,
-    /// Where the ONNX file comes from.
+    /// Where the ONNX file comes from: the upstream file, at a fixed revision.
     pub model_url: &'static str,
+    /// This project's own copy of that file, tried before [`Self::model_url`]
+    /// (OOB-20). The same bytes: the copy is checked against the same
+    /// [`Self::model_sha256`] and [`Self::model_bytes`], so a mirror that served
+    /// anything else would be refused exactly as a bad upstream is, and the
+    /// install would go on to the upstream URL.
+    ///
+    /// Set only where the release asset was seen to carry the pinned digest and
+    /// size (the `models-v2.4` release: its assets' sha256 digests and sizes, as
+    /// GitHub reports them, are this catalogue's). `None` where the upstream URL
+    /// already is this project's release (V3.0) or nothing is mirrored (Perch).
+    pub mirror_url: Option<&'static str>,
+    /// Who made the model and where it is published (MMP-20).
+    pub source: &'static str,
+    /// The licence the model file is published under, by its short name, or
+    /// `None` when no source this repository can cite records one (MMP-20).
+    /// Never a guess: a station that sells what it records needs the real one.
+    pub licence: Option<&'static str>,
+    /// Where [`Self::licence`] was read, so anyone can check it again.
+    pub licence_cited_from: &'static str,
     /// Lowercase hex sha256 of that file, measured from the file itself.
     pub model_sha256: &'static str,
     /// Its size in bytes, for the free-space check before downloading.
@@ -176,6 +195,15 @@ pub const CATALOG: &[CatalogEntry] = &[
         name: "BirdNET+ V3.0 preview3 (global, 11K species)",
         model_url: "https://github.com/tomtom215/BirdNet-Behavior/releases/download/\
                     models-v3.0-preview3/BirdNET%2B_V3.0-preview3_Global_11K_FP32.onnx",
+        mirror_url: None,
+        source: "BirdNET+ V3.0 developer preview 3 (Lasseck, Eibl, Klinck, Kahl; K. Lisa Yang \
+                 Center for Conservation Bioacoustics), published on Zenodo (record 18247420); \
+                 fetched from this project's models-v3.0-preview3 release, which mirrors it",
+        licence: Some("CC BY-SA 4.0"),
+        licence_cited_from: "the models-v3.0-preview3 release notes written by \
+                             .github/workflows/publish-model.yml (\"licensed CC-BY-SA-4.0\", \
+                             pointing to the upstream record's TERMS_OF_USE.txt), and \
+                             docs/book/reference/taxonomy-overlap.md for its labels",
         model_sha256: "2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743",
         model_bytes: 541_391_777,
         labels_url: Some(
@@ -194,6 +222,15 @@ pub const CATALOG: &[CatalogEntry] = &[
         name: "Google Perch v2 (14 795 classes)",
         model_url: "https://huggingface.co/justinchuby/Perch-onnx/resolve/\
                     da88bf8c37c0b3068fc706fe509f633b9fbd28c1/perch_v2.onnx",
+        mirror_url: None,
+        source: "Google's Perch v2 (bird-vocalization-classifier v2, \
+                 kaggle.com/models/google/bird-vocalization-classifier), as the ONNX \
+                 conversion published at huggingface.co/justinchuby/Perch-onnx",
+        licence: Some("Apache-2.0"),
+        licence_cited_from: "the model card of huggingface.co/justinchuby/Perch-onnx at the \
+                             pinned revision (license: apache-2.0), read 2026-11-25; the \
+                             labels' source, cgeorgiaw/Perch, declares the same \
+                             (crates/birdnet-core/data/labels/README.md)",
         model_sha256: "bf0c8467a924cb074663970ca4a0ab1e143602121930209657d0dff5d5cefa1f",
         model_bytes: 409_148_616,
         // No labels file accompanies the ONNX conversion. Google's list of the
@@ -227,6 +264,18 @@ pub const CATALOG: &[CatalogEntry] = &[
         // `main`, so the bytes behind the URL cannot change under the digest.
         model_url: "https://huggingface.co/tphakala/BirdNET-v2.4/resolve/\
                     acd49768d227c726ac94550c94f0effb3e1dd04c/BirdNET_v2.4_fp32_dfttrunc.onnx",
+        mirror_url: Some(
+            "https://github.com/tomtom215/BirdNet-Behavior/releases/download/\
+             models-v2.4/birdnet-v24.onnx",
+        ),
+        source: "BirdNET V2.4 (K. Lisa Yang Center for Conservation Bioacoustics, Cornell Lab of \
+                 Ornithology, and Chemnitz University of Technology), as birdnet-go's FP32 ONNX \
+                 conversion at huggingface.co/tphakala/BirdNET-v2.4; mirrored in this \
+                 project's models-v2.4 release",
+        licence: Some("CC BY-NC-SA 4.0"),
+        licence_cited_from: "the model card of huggingface.co/tphakala/BirdNET-v2.4 at the \
+                             pinned revision (license: cc-by-nc-sa-4.0), read 2026-11-25; \
+                             also installer/lib/55-model.sh and the models-v2.4 release notes",
         model_sha256: "3b72e88b3ad0c310a41adabccf8cf75b1a05daeeb40884ebd38038c91d0e423d",
         model_bytes: 54_068_648,
         // Not downloaded: the birdnet-go file this model is paired with names 460
@@ -259,6 +308,18 @@ pub const CATALOG: &[CatalogEntry] = &[
         model_url: "https://raw.githubusercontent.com/tphakala/birdnet-go/\
                     f4f019a3d79cb547b432bd8729fb4cf9c71aa2e7/internal/classifier/data/\
                     BirdNET_MData_V2.onnx",
+        mirror_url: Some(
+            "https://github.com/tomtom215/BirdNet-Behavior/releases/download/\
+             models-v2.4/birdnet-v24-range-v2.onnx",
+        ),
+        source: "BirdNET's species-occurrence (metadata) model V2, by the authors of BirdNET \
+                 V2.4, as the ONNX file birdnet-go ships (github.com/tphakala/birdnet-go); \
+                 mirrored in this project's models-v2.4 release",
+        licence: Some("CC BY-NC-SA 4.0"),
+        licence_cited_from: "the models-v2.4 release notes written by \
+                             .github/workflows/publish-model.yml (\"BirdNET V2.4 and its \
+                             metadata (range) model ... CC BY-NC-SA 4.0\"); no upstream page \
+                             for this file was read",
         model_sha256: "b1810073d16c6c39df95a7419f9a11a02f98dbea562c96d4993c6af52b54b271",
         model_bytes: 29_524_170,
         labels_url: None,
@@ -280,6 +341,57 @@ pub const CATALOG: &[CatalogEntry] = &[
 #[must_use]
 pub fn find(id: &str) -> Option<&'static CatalogEntry> {
     CATALOG.iter().find(|e| e.id == id)
+}
+
+/// Which taxonomy a labels file follows, where that can be cited (RES-32).
+///
+/// A row's scientific names are free text, and `labels_sha256` in an analysis
+/// run says which label file named them, not which checklist those names come
+/// from. This table is that second step, keyed by the label file's digest. A
+/// label file not in it has no recorded edition, and says so: an edition is
+/// written here only where a source can be cited, never inferred from what the
+/// names look like.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaxonomyEdition {
+    /// Lowercase hex sha256 of the labels file, as [`CatalogEntry::labels_sha256`].
+    pub labels_sha256: &'static str,
+    /// The taxonomy and its edition.
+    pub edition: &'static str,
+    /// Where that was read.
+    pub cited_from: &'static str,
+}
+
+/// The label files whose taxonomy edition can be cited.
+///
+/// Every other label file's is not recorded: BirdNET V2.4's (neither its model
+/// card nor the BirdNET-Analyzer README, read 2026-11-25, names one) and
+/// BirdNET+ V3.0's (nothing in this repository names one).
+pub const TAXONOMY_EDITIONS: &[TaxonomyEdition] = &[TaxonomyEdition {
+    labels_sha256: birdnet_core::inference::labels::PERCH_V2_LABELS_SHA256,
+    edition: "iNaturalist 2024 taxa (Google's label set inat2024_fsd50k), plus 200 FSD50K \
+              sound classes; English names from BirdNET V2.4's, then IOC World Bird List 15.2",
+    cited_from: "crates/birdnet-core/data/labels/README.md (the label set's first line, and \
+                 \"14,595 classes are Latin binomials (iNaturalist 2024 taxa ...)\")",
+}];
+
+/// The taxonomy edition a labels file follows, by its sha256, when it can be
+/// cited; `None` when it is not recorded.
+#[must_use]
+pub fn taxonomy_edition(labels_sha256: &str) -> Option<&'static TaxonomyEdition> {
+    TAXONOMY_EDITIONS
+        .iter()
+        .find(|t| t.labels_sha256.eq_ignore_ascii_case(labels_sha256))
+}
+
+/// Where an entry's model file is fetched from, in the order they are tried:
+/// this project's mirror first, when there is one, then the upstream file.
+#[must_use]
+pub fn model_origins(entry: &CatalogEntry) -> Vec<&'static str> {
+    entry
+        .mirror_url
+        .into_iter()
+        .chain(std::iter::once(entry.model_url))
+        .collect()
 }
 
 /// What can go wrong installing a classifier.
@@ -321,6 +433,24 @@ pub enum InstallError {
         /// The most the file may be.
         limit: u64,
     },
+    /// A local model file is not the size the catalogue pins, so it is not
+    /// the file (checked before it is read).
+    WrongSize {
+        /// What the catalogue says.
+        expected: u64,
+        /// What the file is.
+        actual: u64,
+    },
+    /// A local model file of the right size whose sha256 is not the pinned
+    /// one. Nothing was installed.
+    NotThePinnedFile {
+        /// What the catalogue says.
+        expected: &'static str,
+        /// What the file has.
+        actual: String,
+    },
+    /// Every origin failed; each with its own reason, in the order tried.
+    AllOrigins(Vec<(&'static str, Self)>),
     /// A filesystem operation failed.
     Io(std::io::Error),
 }
@@ -361,6 +491,23 @@ impl fmt::Display for InstallError {
                  download was stopped and deleted",
                 limit / (1024 * 1024)
             ),
+            Self::WrongSize { expected, actual } => write!(
+                f,
+                "the file is {actual} bytes and this model is {expected}, so it is not the \
+                 model this build pins. Nothing was installed"
+            ),
+            Self::NotThePinnedFile { expected, actual } => write!(
+                f,
+                "sha256 mismatch: expected {expected}, got {actual}. The file is not the \
+                 model this build pins, so it was refused and nothing was installed"
+            ),
+            Self::AllOrigins(tried) => {
+                write!(f, "no origin served the verified file:")?;
+                for (url, e) in tried {
+                    write!(f, " {url}: {e};")?;
+                }
+                Ok(())
+            }
             Self::Io(e) => write!(f, "filesystem error: {e}"),
         }
     }
@@ -573,19 +720,45 @@ fn fetch_verified_with(
     if resp.content_length().is_some_and(|len| len > max_bytes) {
         return Err(InstallError::TooLarge { limit: max_bytes });
     }
+    let total = resp.content_length().unwrap_or(fallback_total);
+    stream_verified(
+        &mut resp,
+        &|e| InstallError::Network(format!("read failed: {e}")),
+        expected,
+        dest,
+        &part,
+        total,
+        max_bytes,
+        progress,
+    )
+}
 
+/// Write everything `source` yields to `part`, hashing as it goes, and rename
+/// it to `dest` only once the digest is `expected`. The staging file is removed
+/// on every failure. `read_error` says what a failed read was (a network or a
+/// filesystem fault).
+#[allow(clippy::too_many_arguments)]
+fn stream_verified(
+    source: &mut dyn std::io::Read,
+    read_error: &dyn Fn(std::io::Error) -> InstallError,
+    expected: &'static str,
+    dest: &Path,
+    part: &Path,
+    total: u64,
+    max_bytes: u64,
+    progress: &mut dyn FnMut(&Progress),
+) -> Result<(), InstallError> {
     // `create_new`: the name is unique to this call, so a file already there is
     // something else's and must not be written into.
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
-        .open(&part)?;
+        .open(part)?;
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; CHUNK];
     let name = dest
         .file_name()
         .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-    let total = resp.content_length().unwrap_or(fallback_total);
     let mut done: u64 = 0;
     progress(&Progress {
         file: name.clone(),
@@ -595,9 +768,7 @@ fn fetch_verified_with(
     // Everything from here until the rename removes the staging file on failure.
     let streamed = (|| -> Result<(), InstallError> {
         loop {
-            let n = resp
-                .read(&mut buf)
-                .map_err(|e| InstallError::Network(format!("read failed: {e}")))?;
+            let n = source.read(&mut buf).map_err(read_error)?;
             if n == 0 {
                 break;
             }
@@ -628,7 +799,7 @@ fn fetch_verified_with(
     })();
     drop(file);
     if let Err(e) = streamed {
-        let _ = fs::remove_file(&part);
+        let _ = fs::remove_file(part);
         return Err(e);
     }
 
@@ -643,12 +814,56 @@ fn fetch_verified_with(
     };
     if !actual.eq_ignore_ascii_case(expected) {
         // Deleted rather than left for somebody to find and wonder about.
-        let _ = fs::remove_file(&part);
+        let _ = fs::remove_file(part);
         return Err(InstallError::Integrity { expected, actual });
     }
 
-    fs::rename(&part, dest)?;
+    fs::rename(part, dest)?;
     Ok(())
+}
+
+/// [`fetch_verified_with`] from each of `origins` in turn, until one serves
+/// the bytes `expected` names (OOB-20: this project's mirror, then upstream).
+///
+/// An origin that is unreachable, answers with an error, or serves anything
+/// else (a wrong digest, too many bytes) is passed over for the next; nothing
+/// it sent is kept. A filesystem fault or a full disk is not the origin's, and
+/// stops the install at once. With one origin the error is that origin's own.
+fn fetch_from_origins(
+    client: &reqwest::blocking::Client,
+    origins: &[&'static str],
+    expected: &'static str,
+    dest: &Path,
+    fallback_total: u64,
+    max_bytes: u64,
+    progress: &mut dyn FnMut(&Progress),
+) -> Result<(), InstallError> {
+    let mut tried = Vec::new();
+    for &url in origins {
+        tracing::info!(url, "downloading");
+        match fetch_verified_with(
+            client,
+            url,
+            expected,
+            dest,
+            fallback_total,
+            max_bytes,
+            progress,
+        ) {
+            Ok(()) => return Ok(()),
+            Err(e @ (InstallError::Io(_) | InstallError::NotEnoughSpace { .. })) => return Err(e),
+            Err(e) => {
+                tracing::warn!(url, error = %e, "this origin did not serve the verified file; trying the next");
+                tried.push((url, e));
+            }
+        }
+    }
+    if tried.len() == 1 {
+        return Err(tried
+            .pop()
+            .map_or_else(|| InstallError::Network("no origin".to_owned()), |(_, e)| e));
+    }
+    Err(InstallError::AllOrigins(tried))
 }
 
 /// Lowercase hex SHA-256 of a file's contents, or `None` if it cannot be read.
@@ -823,11 +1038,81 @@ pub fn install_with_progress(
     dest_dir: &Path,
     progress: &mut dyn FnMut(&Progress),
 ) -> Result<Installed, InstallError> {
-    let entry = find(id).ok_or_else(|| InstallError::Unknown {
+    install_entry(lookup(id)?, dest_dir, None, progress)
+}
+
+/// [`install`], with the model taken from `model_file`, a copy already on this
+/// machine, instead of the network (OOB-20: an install with no internet).
+///
+/// The file passes the same check a download does, and nothing weaker: its
+/// size must be [`CatalogEntry::model_bytes`] (looked at first, so a wrong file
+/// is refused without reading it) and its sha256 [`CatalogEntry::model_sha256`];
+/// it is copied to a name the station never loads and renamed into place only
+/// once it verifies. A file that does not match is refused, and nothing lands
+/// under the model's name. The labels are installed as [`install`] installs
+/// them (written from the binary for the entries that embed them, so those need
+/// no network at all).
+///
+/// # Errors
+///
+/// As [`install`], and [`InstallError::WrongSize`] or
+/// [`InstallError::NotThePinnedFile`] for a file that is not the pinned model.
+pub fn install_from_file(
+    id: &str,
+    model_file: &Path,
+    dest_dir: &Path,
+) -> Result<Installed, InstallError> {
+    install_entry(lookup(id)?, dest_dir, Some(model_file), &mut |_| {})
+}
+
+/// The catalogue entry for `id`, or the error that lists what there is.
+fn lookup(id: &str) -> Result<&'static CatalogEntry, InstallError> {
+    find(id).ok_or_else(|| InstallError::Unknown {
         id: id.to_owned(),
         known: CATALOG.iter().map(|e| e.id).collect(),
-    })?;
+    })
+}
 
+/// Copy `src` to `dest` through a staging file, keeping it only if it is the
+/// pinned size and has the pinned digest.
+fn copy_verified(entry: &CatalogEntry, src: &Path, dest: &Path) -> Result<(), InstallError> {
+    let actual = fs::metadata(src)?.len();
+    if actual != entry.model_bytes {
+        return Err(InstallError::WrongSize {
+            expected: entry.model_bytes,
+            actual,
+        });
+    }
+    let mut file = fs::File::open(src)?;
+    clear_stale_parts(dest);
+    let part = part_path(dest);
+    stream_verified(
+        &mut file,
+        &InstallError::Io,
+        entry.model_sha256,
+        dest,
+        &part,
+        entry.model_bytes,
+        entry.model_bytes,
+        &mut |_| {},
+    )
+    .map_err(|e| match e {
+        // Not "the download": say what this was.
+        InstallError::Integrity { expected, actual } => {
+            InstallError::NotThePinnedFile { expected, actual }
+        }
+        other => other,
+    })
+}
+
+/// The one install path: the model from `model_file` when given, else from the
+/// entry's origins; then its labels.
+fn install_entry(
+    entry: &'static CatalogEntry,
+    dest_dir: &Path,
+    model_file: Option<&Path>,
+    progress: &mut dyn FnMut(&Progress),
+) -> Result<Installed, InstallError> {
     // Before the network: an entry that can never verify must not cost
     // somebody 400 MB of a metered uplink to discover that.
     require_digest(entry.id, entry.model_sha256)?;
@@ -853,15 +1138,15 @@ pub fn install_with_progress(
 
     if already_installed(&model_path, entry.model_sha256) {
         tracing::info!(id = entry.id, path = %model_path.display(), "classifier already installed and verified; not downloading it again");
+    } else if let Some(src) = model_file {
+        tracing::info!(id = entry.id, from = %src.display(), "installing classifier from a local file");
+        copy_verified(entry, src, &model_path)?;
+        tracing::info!(id = entry.id, path = %model_path.display(), "classifier verified and installed");
     } else {
-        tracing::info!(
-            id = entry.id,
-            url = entry.model_url,
-            "downloading classifier"
-        );
-        fetch_verified_with(
+        tracing::info!(id = entry.id, "downloading classifier");
+        fetch_from_origins(
             &client,
-            entry.model_url,
+            &model_origins(entry),
             entry.model_sha256,
             &model_path,
             entry.model_bytes,
@@ -1035,7 +1320,7 @@ mod tests {
                 entry.id,
                 entry.model_url
             );
-            if let Some(url) = entry.labels_url {
+            for url in entry.labels_url.into_iter().chain(entry.mirror_url) {
                 assert!(url.starts_with("https://"), "{}: {url}", entry.id);
             }
         }
@@ -1719,5 +2004,270 @@ mod tests {
         assert!(!legacy.exists(), "the old fixed name");
         assert!(live.exists(), "this process's may be in flight");
         assert!(other.exists(), "another file's staging is not ours");
+    }
+
+    /// The sha256 of `body`, leaked to the `'static` the catalogue's fields are.
+    fn digest_of(body: &[u8]) -> &'static str {
+        use sha2::{Digest as _, Sha256};
+        use std::fmt::Write as _;
+        let mut hex = String::new();
+        for b in &Sha256::digest(body) {
+            let _ = write!(hex, "{b:02x}");
+        }
+        Box::leak(hex.into_boxed_str())
+    }
+
+    /// A listener that answers nothing and counts nobody: if anything connects
+    /// to it, `accept` finds the connection afterwards.
+    fn silent_listener() -> (std::net::TcpListener, String) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        listener.set_nonblocking(true).expect("nonblocking");
+        let port = listener.local_addr().expect("addr").port();
+        (listener, format!("http://127.0.0.1:{port}/model.onnx"))
+    }
+
+    /// OOB-20, mirror first: when the first origin serves bytes that do not
+    /// verify, the second is tried and its verified bytes are installed. And
+    /// what the first sent is not kept anywhere.
+    ///
+    /// Observed failing with `fetch_from_origins` cut to its first origin
+    /// (`origins.iter().take(1)`): "Integrity { expected: .., actual: .. }".
+    #[test]
+    fn an_origin_that_serves_the_wrong_bytes_falls_back_to_the_next() {
+        const BODY: &[u8] = b"the model both origins should serve";
+        let expected = digest_of(BODY);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("model.onnx");
+        let bad: &'static str = Box::leak(serve_once(b"a mirror gone wrong").into_boxed_str());
+        let good: &'static str = Box::leak(serve_once(BODY).into_boxed_str());
+
+        super::fetch_from_origins(
+            &test_client(),
+            &[bad, good],
+            expected,
+            &dest,
+            0,
+            1024,
+            &mut |_| {},
+        )
+        .expect("the second origin's verified bytes install");
+        assert_eq!(std::fs::read(&dest).expect("read"), BODY);
+        assert_no_part_files(dir.path(), "a fallback");
+    }
+
+    /// Counterpart: the first origin that verifies is the one used; the next is
+    /// never contacted. (The order is the point: a mirror tried second would
+    /// spare upstream nothing.)
+    #[test]
+    fn the_first_origin_that_verifies_is_the_only_one_contacted() {
+        const BODY: &[u8] = b"served by the mirror";
+        let expected = digest_of(BODY);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("model.onnx");
+        let first: &'static str = Box::leak(serve_once(BODY).into_boxed_str());
+        let (listener, second) = silent_listener();
+        let second: &'static str = Box::leak(second.into_boxed_str());
+
+        super::fetch_from_origins(
+            &test_client(),
+            &[first, second],
+            expected,
+            &dest,
+            0,
+            1024,
+            &mut |_| {},
+        )
+        .expect("the first origin verifies");
+        assert_eq!(std::fs::read(&dest).expect("read"), BODY);
+        assert!(
+            listener.accept().is_err(),
+            "the second origin was contacted after the first had verified"
+        );
+    }
+
+    /// When every origin fails, the error names each one and why, in order.
+    #[test]
+    fn when_every_origin_fails_each_is_named() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("model.onnx");
+        let a: &'static str = Box::leak(serve_once(b"wrong").into_boxed_str());
+        let err = super::fetch_from_origins(
+            &test_client(),
+            &[a, "https://example.invalid/model.onnx"],
+            digest_of(b"right"),
+            &dest,
+            0,
+            1024,
+            &mut |_| {},
+        )
+        .expect_err("nothing verifies");
+        let text = err.to_string();
+        let first = text.find(a).expect("the first origin is named");
+        let second = text
+            .find("example.invalid")
+            .expect("the second origin is named");
+        assert!(first < second, "{text}");
+        assert!(!dest.exists());
+        assert_no_part_files(dir.path(), "every origin failing");
+    }
+
+    /// The catalogue's own order: the V2.4 files come from this project's
+    /// models-v2.4 release first, under the names they are installed as, and
+    /// from their pinned upstream second. Every mirror is HTTPS, on this
+    /// project's releases, under a fixed tag.
+    #[test]
+    fn the_mirror_is_tried_before_upstream() {
+        for id in ["birdnet-v24", "birdnet-v24-range-v2"] {
+            let e = find(id).expect("entry");
+            let origins = super::model_origins(e);
+            assert_eq!(
+                origins,
+                vec![
+                    format!(
+                        "https://github.com/tomtom215/BirdNet-Behavior/releases/download/models-v2.4/{id}.onnx"
+                    )
+                    .as_str(),
+                    e.model_url
+                ],
+                "{id}"
+            );
+        }
+        for e in CATALOG {
+            if let Some(m) = e.mirror_url {
+                assert!(
+                    m.starts_with(
+                        "https://github.com/tomtom215/BirdNet-Behavior/releases/download/models-"
+                    ),
+                    "{}: {m}",
+                    e.id
+                );
+                assert_ne!(m, e.model_url, "{}: a mirror of itself", e.id);
+            } else {
+                assert_eq!(super::model_origins(e), vec![e.model_url]);
+            }
+        }
+    }
+
+    /// A small catalogue entry for `body`, for the local-file tests.
+    fn entry_for(body: &[u8]) -> super::CatalogEntry {
+        let mut e = *find("birdnet-v24-range-v2").expect("entry");
+        e.model_sha256 = digest_of(body);
+        e.model_bytes = body.len() as u64;
+        e
+    }
+
+    /// OOB-20, a local file: installed when it has the pinned size and digest,
+    /// through a staging name, exactly as a download is.
+    #[test]
+    fn a_local_file_with_the_pinned_size_and_digest_is_installed() {
+        const BODY: &[u8] = b"the model, carried in on a USB stick";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("carried.onnx");
+        std::fs::write(&src, BODY).expect("write");
+        let dest = dir.path().join("installed.onnx");
+        super::copy_verified(&entry_for(BODY), &src, &dest).expect("the pinned file installs");
+        assert_eq!(std::fs::read(&dest).expect("read"), BODY);
+        assert_no_part_files(dir.path(), "a local install");
+    }
+
+    /// Counterpart, and the integrity the decision promises does not weaken: a
+    /// local file of the wrong size is refused before it is read, and one of
+    /// the right size with other bytes is refused on its digest. Neither leaves
+    /// anything under the installed name.
+    ///
+    /// Observed failing with the size check removed from `copy_verified`
+    /// (a digest refusal where `WrongSize` was asserted), and with the digest
+    /// comparison in `stream_verified` made to pass (the impostor installed).
+    #[test]
+    fn a_local_file_that_is_not_the_pinned_one_is_refused() {
+        const BODY: &[u8] = b"the model, carried in on a USB stick";
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("installed.onnx");
+
+        let short = dir.path().join("short.onnx");
+        std::fs::write(&short, b"the model").expect("write");
+        let err = super::copy_verified(&entry_for(BODY), &short, &dest).expect_err("wrong size");
+        assert!(matches!(err, InstallError::WrongSize { .. }), "{err:?}");
+        assert!(!dest.exists());
+
+        let impostor = dir.path().join("impostor.onnx");
+        std::fs::write(&impostor, b"THE MODEL, CARRIED IN ON A USB STICK").expect("write");
+        let err =
+            super::copy_verified(&entry_for(BODY), &impostor, &dest).expect_err("wrong bytes");
+        assert!(
+            matches!(err, InstallError::NotThePinnedFile { .. }),
+            "{err:?}"
+        );
+        assert!(err.to_string().contains("refused"), "{err}");
+        assert!(!dest.exists());
+        assert_no_part_files(dir.path(), "a refused local file");
+    }
+
+    /// The public entry point, end to end with no network: V2.4's model from a
+    /// file is held to the catalogue's real pins, so anything but the real
+    /// 54 MB model is refused, and its labels (embedded) are not written either.
+    #[test]
+    fn install_from_file_holds_a_file_to_the_catalogues_real_pins() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("not-the-model.onnx");
+        std::fs::write(&src, b"not 54 MB of BirdNET").expect("write");
+        let dest = dir.path().join("models");
+        // The free-space check runs first; a machine with less than ~565 MB free
+        // cannot run this case, and says so rather than passing.
+        match super::install_from_file("birdnet-v24", &src, &dest) {
+            Err(InstallError::WrongSize { expected, actual }) => {
+                assert_eq!(expected, 54_068_648);
+                assert_eq!(actual, 20);
+            }
+            Err(InstallError::NotEnoughSpace { .. }) => {
+                panic!("this machine has too little free space to run this test");
+            }
+            other => panic!("expected a refusal on size, got {other:?}"),
+        }
+        assert!(!dest.join("birdnet-v24.onnx").exists());
+        assert!(!dest.join("birdnet-v24_labels.txt").exists());
+    }
+
+    /// RES-32: the taxonomy table names only label files the catalogue ships,
+    /// and a label file it does not know has no edition (not a guess).
+    #[test]
+    fn every_taxonomy_row_is_a_label_file_the_catalogue_ships() {
+        for row in super::TAXONOMY_EDITIONS {
+            assert!(
+                CATALOG
+                    .iter()
+                    .any(|e| e.labels_sha256 == Some(row.labels_sha256)),
+                "{} is no catalogue entry's labels",
+                row.labels_sha256
+            );
+            assert!(!row.cited_from.is_empty() && !row.edition.is_empty());
+        }
+        let v24 = find("birdnet-v24")
+            .and_then(|e| e.labels_sha256)
+            .expect("labels");
+        assert!(
+            super::taxonomy_edition(v24).is_none(),
+            "V2.4's edition is not recorded"
+        );
+        let perch = find("perch-v2")
+            .and_then(|e| e.labels_sha256)
+            .expect("labels");
+        assert!(
+            super::taxonomy_edition(perch).is_some_and(|t| t.edition.contains("iNaturalist 2024"))
+        );
+    }
+
+    /// MMP-20: every entry carries where it comes from and, when it states a
+    /// licence, where that was read.
+    #[test]
+    fn every_entry_says_where_it_comes_from_and_where_its_licence_was_read() {
+        for e in CATALOG {
+            assert!(!e.source.trim().is_empty(), "{}: no source", e.id);
+            assert!(
+                !e.licence_cited_from.trim().is_empty(),
+                "{}: a licence (or its absence) with nowhere it was read",
+                e.id
+            );
+        }
     }
 }

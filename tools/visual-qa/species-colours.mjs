@@ -17,6 +17,14 @@
 //   * a page it visits contributes no named swatch at all, or fewer than two species carry a
 //     colour that is not the neutral (it would be grading nothing).
 //
+// The second half (N25-06) grades the marks that are NOT a species: the temperature line under
+// Today's hours, the hours around sunrise and sunset on Patterns, the migration ridgeline's
+// seasons, a trend's line, the life list's curve and a species page's one-series bars. Each is
+// named by a selector below, and each fails when the browser paints it in a colour a species
+// owns (any of --chart-1 .. --chart-8, or within 6 OKLab units of one), because "the green one
+// is the Robin" is then false on that figure. A selector that matches nothing on its page fails
+// too, so a renamed class cannot turn the check into a pass.
+//
 // Run against the fixture server (see .github/workflows/a11y.yml for how to start it):
 //   BASE=http://127.0.0.1:8502 CHROMIUM_PATH=... node species-colours.mjs
 // THEMES=light,dark (default both).
@@ -36,6 +44,25 @@ const ROUTES = [
   ['/patterns?tab=sequences', 'the running order, the assembling chorus'],
   ['/reports?tab=year', 'who led each month'],
   ['/species', 'the species list\'s sparklines'],
+];
+
+// The marks that are not a species, where they are drawn. Each selector must match on its page.
+async function speciesDetail() {
+  try {
+    const r = await fetch(`${BASE}/api/v2/detections?limit=1`);
+    const d = (await r.json()).detections[0];
+    return `/species/detail?name=${encodeURIComponent(d.com_name)}`;
+  } catch (e) {
+    throw new Error(`species-colours: no detection to name a species page at ${BASE} (${e})`);
+  }
+}
+const NOT_SPECIES = [
+  ['/', 'svg[data-ck-id^="today-hourly"] path.ck-line', 'the temperature line under Today\'s hours'],
+  ['/patterns', 'svg[data-ck-id="hourly-totals"] path.ck-grow:not(.ck-ov)', 'the hour bars on Patterns'],
+  ['/patterns?tab=migration', 'g.rd-ridge path.rd-line, path.rd-bar', 'the ridgeline\'s seasons'],
+  ['/patterns?tab=trends', 'svg path.ck-line', 'a trend\'s line'],
+  ['/species?view=lifelist', 'svg path.ck-line, svg circle.ck-ring', 'the life list\'s curve'],
+  [await speciesDetail(), 'svg[data-ck-id^="species-"] path.ck-grow:not(.ck-ov)', 'a species page\'s one-series bars'],
 ];
 
 /** Load everything a reader would: scroll through, open the closed figures, wait for htmx. */
@@ -157,9 +184,76 @@ async function readKeys(page) {
   });
 }
 
+/**
+ * For every element `selector` matches, the colour it is painted in (a gradient's own colour for a
+ * `url(#…)` fill), and those that are a species' colour: equal to `--chart-k`, or within 6 OKLab
+ * units of it once both are drawn on a pixel (a near-copy reads as the same bird).
+ */
+async function readNonSpecies(page, selector) {
+  return page.evaluate((sel) => {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 1;
+    const cx = cv.getContext('2d', { willReadFrequently: true });
+    const lin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+    const lab = (css) => {
+      cx.clearRect(0, 0, 1, 1);
+      cx.fillStyle = '#000';
+      cx.fillStyle = css;
+      cx.fillRect(0, 0, 1, 1);
+      const [r, g, b] = [...cx.getImageData(0, 0, 1, 1).data].map(lin);
+      const l = Math.cbrt(0.4122214708 * r + 0.5363137492 * g + 0.0514459244 * b);
+      const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+      const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+      return [0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s,
+        1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s,
+        0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s];
+    };
+    const probe = document.createElement('i');
+    document.body.appendChild(probe);
+    const resolve = (c) => { probe.style.color = ''; probe.style.color = c; return getComputedStyle(probe).color; };
+    const owned = [];
+    for (let k = 1; k <= 8; k++) owned.push(resolve(`var(--chart-${k})`));
+    const paintOf = (el) => {
+      const cs = getComputedStyle(el);
+      const fill = cs.fill || '';
+      const url = fill.match(/url\("?#([^")]+)"?\)/);
+      if (url) {
+        const grad = document.getElementById(url[1]);
+        if (!grad) return '';
+        const c = getComputedStyle(grad).getPropertyValue('--c').trim();
+        if (c) return resolve(c);
+        const stop = grad.querySelector('stop');
+        return stop ? resolve(getComputedStyle(stop).stopColor) : '';
+      }
+      if (el.matches('path.ck-line, path.rd-line, path.line')) return resolve(cs.stroke);
+      if (fill && fill !== 'none') return resolve(fill);
+      return resolve(cs.stroke);
+    };
+    let marks = 0;
+    const bad = [];
+    for (const el of document.querySelectorAll(sel)) {
+      const colour = paintOf(el);
+      if (!colour) continue;
+      marks++;
+      const a = lab(colour);
+      owned.forEach((o, i) => {
+        const b = lab(o);
+        const de = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) * 100;
+        if (colour === o || de < 6) {
+          const where = el.tagName.toLowerCase() + '.' + [...el.classList].join('.');
+          if (!bad.some((x) => x.where === where && x.slot === i + 1)) bad.push({ where, colour, slot: i + 1, de: de.toFixed(1) });
+        }
+      });
+    }
+    probe.remove();
+    return { marks, owned: bad };
+  }, selector);
+}
+
 const browser = await chromium.launch(CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {});
 const failures = [];
 let graded = 0;
+let nonSpecies = 0;
 for (const theme of THEMES) {
   const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: theme });
   await ctx.addInitScript((t) => {
@@ -210,6 +304,26 @@ for (const theme of THEMES) {
   }
   graded += seen.size;
   console.log(`  ${theme}: ${seen.size} species named, ${owner.size} with a colour of their own`);
+
+  // The marks that are not a species never wear a species' colour (N25-06).
+  for (const [route, selector, what] of NOT_SPECIES) {
+    const resp = await page.goto(BASE + route, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    if (!resp || !resp.ok()) {
+      failures.push(`${theme} ${route}: answered ${resp ? resp.status() : 'nothing'}`);
+      continue;
+    }
+    await settle(page);
+    const got = await readNonSpecies(page, selector);
+    if (!got.marks) {
+      failures.push(`${theme} ${route}: "${selector}" matched nothing (${what}); the check grades nothing here`);
+      continue;
+    }
+    for (const bad of got.owned) {
+      failures.push(`${theme} ${route}: ${what} (${bad.where}) is painted ${bad.colour}, within ${bad.de} of --chart-${bad.slot}, a colour a species owns`);
+    }
+    nonSpecies += got.marks;
+    console.log(`  ${theme} ${route}: ${got.marks} marks that are not a species, ${got.owned.length} in an owned colour`);
+  }
   await ctx.close();
 }
 await browser.close();
@@ -219,4 +333,4 @@ if (failures.length) {
   for (const f of failures) console.log(`  FAIL ${f}`);
   process.exit(1);
 }
-console.log(`\nspecies-colours: ${graded} species graded across ${ROUTES.length} pages and ${THEMES.length} themes, each in one colour`);
+console.log(`\nspecies-colours: ${graded} species graded across ${ROUTES.length} pages and ${THEMES.length} themes, each in one colour; ${nonSpecies} marks that are not a species, none in a species' colour`);

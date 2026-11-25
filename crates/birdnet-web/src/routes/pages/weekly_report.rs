@@ -219,7 +219,7 @@ fn render_weekly_content(
         r#"<div class="rp-stats">
   <div class="rp-stat"><div class="v moss">{total}</div><div class="l">detections</div><div class="d">{det_detail}</div></div>
   <div class="rp-stat"><div class="v">{species_count}</div><div class="l">species</div><div class="d">{species_detail}</div></div>
-  <div class="rp-stat"><div class="v rare">{new_count}</div><div class="l">new to your list</div></div>
+  <div class="rp-stat"><div class="v">{new_count}</div><div class="l">new to your list</div></div>
   <div class="rp-stat"><div class="v">{busy_label}</div><div class="l">busiest day</div><div class="d">{busy_count} detections</div></div>
 </div>"#,
     );
@@ -321,7 +321,6 @@ fn render_weekly_chart(
         desc: "Detections for each day of the week, Monday to Sunday; the busiest day is labelled and every day has a tooltip.",
         unit: "detections",
         days: &days,
-        slot: 0,
         width: 560.0,
         plot_h: 120.0,
         listened: None,

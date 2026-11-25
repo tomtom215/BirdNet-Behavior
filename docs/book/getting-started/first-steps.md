@@ -8,7 +8,7 @@ http://<your-ip>:8502
 
 > Not sure of the address? Scan the QR code the installer printed at the end, or look for the Pi in your router's list of connected devices. On the Pi itself, `hostname -I` prints it.
 
-The dashboard binds to all interfaces by default, so it's reachable from any device on your LAN — no extra step. Viewing needs no login; the **Admin** panel, the Settings management tabs and every action that changes something do. The bare-metal installer prints an auto-generated admin password once in its post-install summary (username `admin`) — log in with that when you open `/admin`. Lost it? See [Remote Access & Security](../admin/remote-access.md#built-in-admin-sign-in) to read or reset `CADDY_PWD`. To restrict the dashboard to the Pi itself, set `BIRDNET_LISTEN=127.0.0.1:8502`.
+The dashboard binds to all interfaces by default, so it's reachable from any device on your LAN — no extra step. Viewing needs no login; the **Admin** panel, the Settings management tabs and every action that changes something do. The bare-metal installer prints an auto-generated admin password once in its post-install summary (username `admin`) — log in with that when you open `/admin`. Lost it? See [Remote Access & Security](../admin/remote-access.md#built-in-admin-sign-in) to read or reset `CADDY_PWD`. To restrict the dashboard to the Pi itself, bind it to `127.0.0.1:8502`; [Security Hardening](../field/hardening.md#1-network-exposure) says how for each kind of install.
 
 If you set your latitude/longitude and an audio source, detections start appearing within a minute or two of the first bird call — no further configuration required.
 
@@ -25,7 +25,12 @@ The UI has six homes — the tabs along the top (and the phone bottom bar):
 
 ## First-run wizard
 
-You do not need a terminal, a config file or a command-line flag to get a new station detecting. Open **`/onboarding`** (a fresh station is sent there automatically the first time you open the dashboard) and answer a seven-step wizard — about two minutes:
+You do not need a terminal, a config file or a command-line flag to get a new station detecting. Open **`/onboarding`** and answer a seven-step wizard — about two minutes. Whether the dashboard takes you there by itself depends on how the station was set up:
+
+- **No location yet** — a Docker run without `BIRDNET_LATITUDE`/`BIRDNET_LONGITUDE`, or an install where the location question was skipped or never asked (a non-interactive install). While the station has no detection, no location and no finished wizard, opening the dashboard sends you to `/onboarding`.
+- **The installer recorded a location** (you answered its latitude/longitude question). The station counts as set up: the dashboard opens on **Today**, which shows a setup checklist (location, model, microphone, admin password) until the first detection. The wizard is still at `/onboarding` if you want to walk through the rest of it.
+
+The seven steps:
 
 1. **Welcome** — on a station with no admin password (a Docker run without `CADDY_PWD`, say) this step asks you to choose one, and the browser that finishes setup is signed in with it. If the installer generated a password for you, you are asked to sign in first and then land on the wizard.
 2. **Model** — the bird-identifying model is a download of about 54 MB that the program does not ship. This step says whether it is installed; if not, one button downloads and checks it, with a progress bar. A download that fails says why and can be retried.

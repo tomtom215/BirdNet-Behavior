@@ -17,7 +17,7 @@ If you're getting both at once, it's almost always an **audio** problem (wind, c
 
 ### 1. Confidence threshold
 
-The minimum score (0–1) a detection must clear to be logged. This is your main dial.
+The minimum score (0–1) a detection must clear to be logged. This is your main dial. The score is the model's own output, not a validated probability: this project has not measured how often a detection at a given score is right (a 0.70 does not mean 70 % of such detections are correct), so read it as a ranking and judge a threshold by listening to what it keeps.
 
 - **Default 0.70**, which is BirdNET-Pi's own (it was 0.75 up to v0.17.1). Raise toward **0.8–0.85** to aggressively cut false positives (you'll lose some faint genuine calls).
 - Lower toward **0.5–0.6** only if you're confident your audio is clean and you want maximum recall.
@@ -40,7 +40,7 @@ The BirdNET sensitivity parameter (0.5–1.5; also `SENSITIVITY` in `birdnet.con
 - **Lower (→0.5)** is a *steeper* curve: strong calls score higher and more of them clear the bar.
 - The default, 1.25, is a slope of 0.75: the same figure BirdNET-Pi gives a station with its defaults. A magpie whose raw score is 3.12 reads 91.2 % here and there.
 - Most stations leave this at the default and tune the confidence threshold instead. Reach for sensitivity only when the threshold alone can't find a good balance.
-- It only affects BirdNET V2.4 models; the BirdNET+ V3.0 preview reports calibrated probabilities and ignores it.
+- It only affects BirdNET V2.4 models; the BirdNET+ V3.0 preview's scores already come out between 0 and 1, and it ignores it.
 - birdnet-go's setting of the same name is the slope itself (its default, 1.0, is a plain sigmoid). To carry a birdnet-go value across, enter `2 − value`.
 
 ### 4. Species-frequency (SF) filter
@@ -243,9 +243,10 @@ Each level names the fraction of the windows within six seconds that must carry
 the species — 20%, 30%, 50%, 70% — rounded up, and never fewer than the
 detection itself.
 
-**It does nothing without `BIRDNET_OVERLAP`.** With no overlap, six seconds is
-two 3-second windows, and 20% of two rounds up to one — which every detection
-already satisfies. How much overlap each level needs:
+**`lenient` and `moderate` do nothing without `BIRDNET_OVERLAP`.** With BirdNET
+V2.4's 3-second windows and no overlap, six seconds holds three windows (the
+window and one either side), and 20% or 30% of three rounds up to one — which
+every detection already satisfies. How much overlap each level needs at 3 s:
 
 | Level | Fraction | Windows it looks at | Minimum useful `OVERLAP` |
 |---|---|---|---|
@@ -253,6 +254,19 @@ already satisfies. How much overlap each level needs:
 | `moderate` | 30% | 6 s | `1.5` |
 | `balanced` | 50% | 6 s | any (already 2 of 3) |
 | `strict` | 70% | 6 s | any (already 3 of 3) |
+
+A longer window needs more. With the V3.0 preview's 4.5-second window and no
+overlap, each window is the only one within six seconds of itself, so no level
+rejects anything; `balanced` and `strict` start at `OVERLAP=1.5`, and `lenient`
+and `moderate` need more overlap than the 2.9 s the setting allows.
+
+**Each recording segment is judged on its own.** Its first and last windows
+have neighbours on one side only, and they are held to the count a window in
+the middle needs, capped at the windows they have: at `balanced` with no
+overlap, the first and last window of a 15-second segment each need the one
+window beside them to agree. The window on the other side of the join is in the
+next (or previous) segment and is not consulted, so a bird heard only across
+the join of two segments is dropped from both.
 
 `--doctor` reports which of these you are in, and the daemon logs a warning at
 startup when the level you set cannot reject anything at your overlap — so a

@@ -14,13 +14,12 @@
 # catalogue (crates/birdnet-integrations/src/model_catalog.rs, read through
 # installer/catalogue-field.sh — the installer does not pin V2.4, the binary
 # does). Not the labels: they are a file the binary carries (BirdNET-Pi's English
-# names), and the labels upstream publishes name 460 classes differently. NOTHING
-# FETCHES FROM THIS RELEASE YET: the installer and the container run
-# `birdnet-behavior --install-model`, whose origins are the catalogue's. The
-# mirror exists so the catalogue can name it first (with the upstream URL as the
-# fallback) when the maintainer decides to depend on our own host; the asset
-# names are birdnet-v24.onnx and birdnet-v24-range-v2.onnx, the names the binary
-# installs them under.
+# names), and the labels upstream publishes name 460 classes differently. The
+# installer and the container run `birdnet-behavior --install-model`, and the
+# catalogue names this release first (`mirror_url`) with the upstream URL as the
+# fallback, each held to the same sha256 and size; the asset names are
+# birdnet-v24.onnx and birdnet-v24-range-v2.onnx, the names the binary installs
+# them under.
 #
 # What it guarantees:
 #   * The bytes published to GitHub are byte-for-byte the bytes pinned in
@@ -496,9 +495,10 @@ jobs:
             echo "V2.4 is the network BirdNET-Pi and birdnet-go run; it is the default"
             echo "classifier of this project's installer and Docker image."
             echo ""
-            echo "**Nothing fetches from this release yet.** \`install.sh\` and the Docker"
-            echo "entrypoint run \`birdnet-behavior --install-model birdnet-v24\`, whose origins"
-            echo "are the ones in the catalogue. The labels are not here on purpose: the"
+            echo "\`install.sh\` and the Docker entrypoint run"
+            echo "\`birdnet-behavior --install-model birdnet-v24\`, which tries this release"
+            echo "first and the upstream URL second, holding each to the sha256 and size in"
+            echo "the catalogue. The labels are not here on purpose: the"
             echo "binary carries BirdNET-Pi's English names for V2.4's classes, and the labels"
             echo "published upstream name 460 of 6 522 classes differently."
             echo ""

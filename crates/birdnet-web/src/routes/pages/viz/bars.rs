@@ -14,9 +14,10 @@
 //!   00:00) that are neighbours in time are the two ends of the page in a bar chart,
 //!   which is the only cost of the bars. That cost is paid by shading the night: a
 //!   band behind the hours between sunset and sunrise says "these are one night".
-//! * **Colour.** One chart, one hue unless the colour means something: dawn and dusk
-//!   against the rest (emphasis), or a count through the sequential ramp where the
-//!   chart's own question is "how busy" (Today).
+//! * **Colour.** A species' colour belongs to the species (`kit::SpeciesSlots`), so a mark that
+//!   is not a species never wears one: a total, an emphasis or a second measure is drawn in the
+//!   annotation ink (`ck-cink`, `--chart-annot`) against the neutral, or a count goes through the
+//!   sequential ramp where the chart's own question is "how busy" (Today).
 //! * **Honesty.** The baseline is zero, always. An hour with nothing is an empty slot
 //!   with a tooltip that says so, not a missing bar that reads as missing data. Only
 //!   the peak is labelled on the chart: a number over every bar is a table drawn badly.
@@ -40,10 +41,13 @@ use crate::routes::pages::escape_html;
 pub enum Fill {
     /// The sequential ramp by count: the chart's question is "how busy".
     Seq,
-    /// Dawn (05–08) and dusk (18–21) in the brand hue, the rest neutral.
-    DawnDusk,
-    /// One categorical slot for every bar (0-based).
-    Slot(usize),
+    /// The hours around sunrise and sunset in the annotation ink, the rest neutral: by the
+    /// station's sun when `solar` is known ([`sun_hour`]), by fixed clock hours when it is not.
+    SunHours,
+    /// One series that is not a species (every detection, or one bird's on its own page): every
+    /// bar in the annotation ink. It was a categorical slot, `ck-c1`, the colour the station's most
+    /// heard species owns, so a species page drew its bird in another bird's colour (N25-06).
+    Ink,
 }
 
 /// Who was heard, hour by hour: what a column is made of when the chart says "who" and not only "how many".
@@ -107,7 +111,7 @@ pub const HOURLY_AXIS_SOLAR: f64 = 64.0;
 pub const HOURLY_TEMP: f64 = 58.0;
 
 fn clock(h: usize) -> String {
-    format!("{h:02}:00")
+    kit::clock_of_hours(h as f64)
 }
 
 /// `10.4` hours as `10 h 24 min`.
@@ -116,13 +120,53 @@ fn daylight_text(hours: f64) -> String {
     format!("{} h {:02} min of daylight", total / 60, total % 60)
 }
 
-/// `19.5` → `19:30`.
-pub fn fmt_clock(h: f64) -> String {
-    let total_min = (h * 60.0).round();
+/// Whether hour `h` (0 to 23) is one of the hours drawn in the stronger ink of a [`Fill::SunHours`] chart.
+///
+/// With the station's sunrise and sunset (`solar`, local hours, the sun rising before it sets):
+/// the hour before sunrise and the three after it, and the three hours before sunset and the hour
+/// after, each hour judged by its middle. Without them, the fixed clock hours 05:00 to 09:00
+/// (`frame::is_dawn_hour`, the window the When and Dawn tabs share) and 18:00 to 22:00. The fixed
+/// hours are called by their times and never "dawn" or "dusk": at 60° N in June they are not
+/// (UIC-26).
+#[must_use]
+pub fn sun_hour(h: usize, solar: Option<(f64, f64)>) -> bool {
+    let mid = h as f64 + 0.5;
+    match solar.filter(|&(rise, set)| set > rise) {
+        Some((rise, set)) => {
+            (rise - 1.0..rise + 3.0).contains(&mid) || (set - 3.0..set + 1.0).contains(&mid)
+        }
+        None => crate::routes::pages::frame::is_dawn_hour(h) || (18..=21).contains(&h),
+    }
+}
+
+/// The key's words for a [`Fill::SunHours`] chart: which hours are in the stronger ink, each run of them from
+/// its first hour to the end of its last, through the reader's clock.
+fn sun_hours_key(solar: Option<(f64, f64)>) -> String {
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    for h in (0..24).filter(|&h| sun_hour(h, solar)) {
+        match runs.last_mut() {
+            Some(run) if run.1 + 1 == h => run.1 = h,
+            _ => runs.push((h, h)),
+        }
+    }
+    let spans: Vec<String> = runs
+        .iter()
+        .map(|&(a, b)| {
+            format!(
+                "{} to {}",
+                crate::display::clock_hour(a),
+                crate::display::clock_hour((b + 1) % 24)
+            )
+        })
+        .collect();
+    let why = if solar.is_some_and(|(rise, set)| set > rise) {
+        "the hour before sunrise and the three after it, and the three hours before sunset and the hour after, by today's sun"
+    } else {
+        "by the clock: the station has no location, or the range is too long for one day's sun to stand for it"
+    };
     format!(
-        "{:.0}:{:02.0}",
-        (total_min / 60.0).floor() % 24.0,
-        total_min % 60.0
+        r#"<span class="bnb-meta ck-scale-note"><span class="viz-swatch ck-sw ck-cink"></span>Bars in the stronger ink: {}; {why}.</span>"#,
+        spans.join(" and ")
     )
 }
 
@@ -148,6 +192,31 @@ pub fn hourly(o: &Hourly<'_>) -> String {
         .iter()
         .map(|&v| kit::text_width(&kit::compact(v), 10.0))
         .fold(0.0_f64, f64::max);
+    // The temperature strip's two ticks stand in the same margin and are wider than a count
+    // ("11°" beside "8"; "-12°" or "104°" in the reader's other unit). Sized for the counts
+    // alone, the margin left them end-anchored 8 units from the edge on a phone, where the
+    // card cut them to ".°".
+    let widest = if o.temps.len() >= 2 {
+        let lo = o.temps.iter().map(|t| t.1).fold(f64::INFINITY, f64::min);
+        let hi = o
+            .temps
+            .iter()
+            .map(|t| t.1)
+            .fold(f64::NEG_INFINITY, f64::max);
+        [lo, hi]
+            .into_iter()
+            .flat_map(|t| {
+                [
+                    crate::display::TemperatureUnit::Celsius,
+                    crate::display::TemperatureUnit::Fahrenheit,
+                ]
+                .map(|unit| crate::display::format_temperature(t, 0, unit, false))
+            })
+            .map(|label| kit::text_width(&label, 10.0))
+            .fold(widest, f64::max)
+    } else {
+        widest
+    };
     let w = o.width;
     let (pad_l, pad_r) = (kit::axis_margin(widest, w), 6.0);
     let plot_w = w - pad_l - pad_r;
@@ -175,14 +244,14 @@ pub fn hourly(o: &Hourly<'_>) -> String {
     let class_of = |h: usize, c: i64| -> String {
         match o.fill {
             Fill::Seq => format!("ck-q{}", kit::seq_step(c as f64 / max as f64)),
-            Fill::DawnDusk => {
-                if (5..=8).contains(&h) || (18..=21).contains(&h) {
-                    "ck-c1".to_string()
+            Fill::SunHours => {
+                if sun_hour(h, o.solar) {
+                    "ck-cink".to_string()
                 } else {
                     "ck-cother".to_string()
                 }
             }
-            Fill::Slot(k) => kit::slot_class(k),
+            Fill::Ink => "ck-cink".to_string(),
         }
     };
     let mut classes: Vec<String> = o
@@ -273,6 +342,8 @@ pub fn hourly(o: &Hourly<'_>) -> String {
                 r#"<clipPath id="{g}-c{h}"><path d="{d}"/></clipPath><g class="ck-grow" clip-path="url(#{g}-c{h})" data-style="--i:{h}">"#,
             );
             let mut acc = 0_i64;
+            // Each band after the first stands on a seam in the card's colour, so two bands of one
+            // colour (two species that own none, or one and everyone else) read as two (N25-06).
             let band = |svg: &mut String, class: &str, n: i64, acc: i64| {
                 let (y1, y0) = (y.at((acc + n) as f64), y.at(acc as f64));
                 let _ = write!(
@@ -280,6 +351,13 @@ pub fn hourly(o: &Hourly<'_>) -> String {
                     r#"<rect class="ck-seg {class}" x="{x:.1}" y="{y1:.1}" width="{bar_w:.1}" height="{hh:.1}" data-ck-i="{h}"/>"#,
                     hh = y0 - y1,
                 );
+                if acc > 0 {
+                    let _ = write!(
+                        svg,
+                        r#"<line class="ck-seg-seam" x1="{x:.1}" y1="{y0:.1}" x2="{x2:.1}" y2="{y0:.1}"/>"#,
+                        x2 = x + bar_w,
+                    );
+                }
             };
             for (k, per_hour) in st.counts.iter().enumerate() {
                 let n = per_hour[h].clamp(0, c - acc);
@@ -379,9 +457,9 @@ pub fn hourly(o: &Hourly<'_>) -> String {
         let mut last_end = f64::NEG_INFINITY;
         for (word, at, x) in [("sunrise", rise, xr), ("sunset", set, xs)] {
             let label = if o.compact {
-                fmt_clock(at)
+                kit::clock_of_hours(at)
             } else {
-                format!("{word} {}", fmt_clock(at))
+                format!("{word} {}", kit::clock_of_hours(at))
             };
             let tw = kit::text_width(&label, 10.0);
             // Centred under its disc, kept inside the plot's edges.
@@ -439,7 +517,7 @@ pub fn hourly(o: &Hourly<'_>) -> String {
         );
         let _ = write!(
             svg,
-            r#"<text class="mono ck-lbl" x="{tx:.1}" y="{ly:.1}" text-anchor="end" font-size="10" {hi_attr}>{hi_text}</text><text class="mono ck-lbl" x="{tx:.1}" y="{ly2:.1}" text-anchor="end" font-size="10" {lo_attr}>{lo_text}</text><path class="ck-area ck-c5 ck-fill" d="{area}" opacity=".14"/><path class="ck-line ck-c5 ck-drawn" d="{line}" pathLength="1"/>"#,
+            r#"<text class="mono ck-lbl" x="{tx:.1}" y="{ly:.1}" text-anchor="end" font-size="10" {hi_attr}>{hi_text}</text><text class="mono ck-lbl" x="{tx:.1}" y="{ly2:.1}" text-anchor="end" font-size="10" {lo_attr}>{lo_text}</text><path class="ck-area ck-cink ck-fill" d="{area}" opacity=".14"/><path class="ck-line ck-cink ck-drawn" d="{line}" pathLength="1"/>"#,
             tx = pad_l - 6.0,
             ly = y_top + 4.0,
             ly2 = y_bot,
@@ -531,9 +609,9 @@ pub fn hourly(o: &Hourly<'_>) -> String {
             let solar_note = o.solar.and_then(|(rise, set)| {
                 let within = |t: f64| t >= h as f64 && t < (h + 1) as f64;
                 if within(rise) {
-                    Some(format!("Sunrise {}", fmt_clock(rise)))
+                    Some(format!("Sunrise {}", kit::clock_of_hours(rise)))
                 } else if within(set) {
-                    Some(format!("Sunset {}", fmt_clock(set)))
+                    Some(format!("Sunset {}", kit::clock_of_hours(set)))
                 } else {
                     None
                 }
@@ -570,6 +648,9 @@ pub fn hourly(o: &Hourly<'_>) -> String {
         n = kit::compact(unit),
         what = if unit <= 1.0 { one } else { o.unit },
     );
+    if o.fill == Fill::SunHours && o.stack.is_none() {
+        svg.push_str(&sun_hours_key(o.solar));
+    }
     if let Some(st) = o.stack {
         let named: Vec<usize> = (0..st.names.len())
             .filter(|&k| st.counts.get(k).is_some_and(|c| c.iter().any(|&n| n > 0)))
@@ -626,8 +707,6 @@ pub struct Daily<'a> {
     pub unit: &'a str,
     /// `(ISO date, count)`, oldest first.
     pub days: &'a [(String, i64)],
-    /// The categorical slot every bar takes (0-based).
-    pub slot: usize,
     /// Drawing width in viewBox units.
     pub width: f64,
     /// Height of the plot area.
@@ -702,7 +781,7 @@ pub fn daily(o: &Daily<'_>) -> String {
         .filter(|(i, _)| !off(*i) && !future(*i))
         .max_by_key(|&(i, d)| (d.1, std::cmp::Reverse(i)))
         .map_or(0, |(i, _)| i);
-    let cls = kit::slot_class(o.slot);
+    let cls = "ck-cink".to_owned();
     let g = kit::id_safe(&format!("g-{}", o.id));
     let label_of = |iso: &str| -> (String, String) {
         kit::civil_label(iso, 0).unwrap_or_else(|| {
@@ -1038,6 +1117,150 @@ mod tests {
         c
     }
 
+    /// The hours drawn in the stronger ink, read back from the bars.
+    fn ink_hours(svg: &str) -> Vec<usize> {
+        (0..24)
+            .filter(|h| svg.contains(&format!(r#"fill="url(#g-t-ck-cink)" data-ck-i="{h}""#)))
+            .collect()
+    }
+
+    /// UIC-26: with the station's sun known, the hours in the stronger ink are the ones around its sunrise and
+    /// sunset (the hour before sunrise and the three after, the three before sunset and the hour
+    /// after), not 05:00 to 09:00 and 18:00 to 22:00 wherever the sun is: in a northern June those
+    /// "dusk" bars were mid-afternoon. Seen failing on the fixed hours:
+    /// `left: [5, 6, 7, 8, 18, 19, 20, 21]`, `right: [3, 4, 5, 6, 19, 20, 21, 22]`.
+    #[test]
+    fn the_stronger_hours_follow_the_sun_when_it_is_known() {
+        let mut o = opts([10_i64; 24]);
+        o.solar = Some((4.3, 21.7));
+        let svg = hourly(&o);
+        assert_eq!(ink_hours(&svg), [3, 4, 5, 6, 19, 20, 21, 22]);
+        let key = svg.split(r#"class="ck-scale""#).nth(1).expect("the key");
+        assert!(
+            key.contains(r#"data-clk="03:00""#) && key.contains(r#"data-clk="23:00""#),
+            "the key names the hours, through the clock the reader chose: {key}"
+        );
+        // Counterpart: with no sun, the fixed clock hours, named as clock hours and not as a
+        // dawn or a dusk they may not be.
+        o.solar = None;
+        let svg = hourly(&o);
+        assert_eq!(ink_hours(&svg), [5, 6, 7, 8, 18, 19, 20, 21]);
+        let key = svg.split(r#"class="ck-scale""#).nth(1).expect("the key");
+        assert!(
+            key.contains(r#"data-clk="05:00""#) && key.contains(r#"data-clk="22:00""#),
+            "{key}"
+        );
+        let lower = svg.to_lowercase();
+        assert!(!lower.contains("dawn") && !lower.contains("dusk"), "{svg}");
+    }
+
+    /// N25-06: the hours around sunrise and sunset, the temperature under them, and a chart of
+    /// one total are not species, so none of them wears a colour a species owns. They wore
+    /// `ck-c1` (the station's most heard bird) and `ck-c5` (its fifth).
+    #[test]
+    fn marks_that_are_not_a_species_wear_no_species_colour() {
+        let temps = [(0.0, 4.2), (6.5, 3.1), (12.0, 11.8), (23.5, 6.0)];
+        let mut o = opts(sample());
+        o.temps = &temps;
+        let hours = hourly(&o);
+        assert!(
+            hours.contains("Temperature"),
+            "precondition: the strip is drawn"
+        );
+        assert_eq!(
+            super::super::kit::species_colours_in(&hours),
+            Vec::<String>::new(),
+            "the hour chart paints with a species' colour"
+        );
+        let days = daily_of(&[3, 9, 4, 0, 12]);
+        assert_eq!(
+            super::super::kit::species_colours_in(&days),
+            Vec::<String>::new(),
+            "the day chart of one total paints with a species' colour"
+        );
+        // Counterpart: a column made of species still wears their colours.
+        let names = ["Blue Jay".to_owned()];
+        let slots = kit::SpeciesSlots::new([("Blue Jay", "Cyanocitta cristata", "Blue Jay")]);
+        let mut counts = [[0_i64; 24]];
+        counts[0][6] = 50;
+        let st = Stack {
+            names: &names,
+            slots: &slots,
+            counts: &counts,
+        };
+        let mut o = opts(sample());
+        o.stack = Some(&st);
+        assert!(
+            hourly(&o).contains("ck-seg ck-c1"),
+            "the species' own colour"
+        );
+    }
+
+    /// N25-06: two bands of one colour in a column (a species that owns none, then everyone
+    /// else) stand on a seam, so they read as two. They met edge to edge.
+    #[test]
+    fn neighbouring_bands_of_a_column_have_a_seam() {
+        let names = ["Indigo Bunting".to_owned(), "Juniper Titmouse".to_owned()];
+        let slots = kit::SpeciesSlots::default();
+        let mut counts = [[0_i64; 24]; 2];
+        counts[0][6] = 40;
+        counts[1][6] = 30;
+        let st = Stack {
+            names: &names,
+            slots: &slots,
+            counts: &counts,
+        };
+        let mut o = opts(sample());
+        o.stack = Some(&st);
+        let svg = hourly(&o);
+        let col = svg
+            .split(r#"clip-path="url(#g-t-c6)""#)
+            .nth(1)
+            .and_then(|s| s.split("</g>").next())
+            .expect("hour 6's column");
+        assert_eq!(
+            col.matches(r#"class="ck-seg ck-cother""#).count(),
+            3,
+            "precondition: two unowned species and everyone else, all neutral: {col}"
+        );
+        assert_eq!(
+            col.matches("ck-seg-seam").count(),
+            2,
+            "a seam between each two bands, none under the first: {col}"
+        );
+    }
+
+    /// An hour chart with a sky, a "now", a note and a temperature strip, from one fixed input,
+    /// reduced to its length and hash. Taken before `clock` and `fmt_clock` moved to the kit
+    /// (UIC-18), so a changed time or rounding shows here as a changed picture. The one change
+    /// the move made on purpose: the sun's captions print the hour with two digits, as every
+    /// other time on the page does ("sunrise 06:22", was "sunrise 6:22"; the caption's `x`
+    /// moves with its width). Before it: `(13276, 4_905_990_690_813_501_481)`. Then N25-06:
+    /// the hours around the sun and the temperature line are `ck-cink`, not `ck-c1` and
+    /// `ck-c5` (before it: `(13278, 16_920_649_687_254_706_049)`). Then UIC-26: with this sun the
+    /// evening hours in the stronger ink are 17-20 and not 18-21, and the key under the chart names them
+    /// (before it: `(13292, 861_900_518_338_093_380)`).
+    #[test]
+    fn the_hour_chart_is_pinned() {
+        let temps = [
+            (0.0, 4.2),
+            (6.5, 3.1),
+            (12.0, 11.8),
+            (18.25, 9.4),
+            (23.5, 6.0),
+        ];
+        let mut o = opts(sample());
+        o.solar = Some((6.37, 19.81));
+        o.now_h = Some(14.53);
+        o.temps = &temps;
+        let svg = hourly(&o);
+        assert_eq!(
+            super::super::kit::pin("hour-chart", &svg),
+            (13728, 14_811_197_866_716_694_081),
+            "the hour chart changed"
+        );
+    }
+
     fn opts(counts: [i64; 24]) -> Hourly<'static> {
         Hourly {
             id: "t",
@@ -1045,7 +1268,7 @@ mod tests {
             desc: "Detections for each hour of the day.",
             unit: "detections",
             counts,
-            fill: Fill::DawnDusk,
+            fill: Fill::SunHours,
             width: 720.0,
             plot_h: 150.0,
             solar: None,
@@ -1071,7 +1294,6 @@ mod tests {
             desc: "d",
             unit: "detections",
             days: &days,
-            slot: 0,
             width: 600.0,
             plot_h: 150.0,
             listened: None,
@@ -1182,17 +1404,17 @@ mod tests {
         assert!(svg.contains(">122<"), "{svg}");
     }
 
-    /// Dawn and dusk hours get the brand hue, the rest the neutral (emphasis, not a
+    /// Dawn and dusk hours get the annotation ink, the rest the neutral (emphasis, not a
     /// rainbow); a count chart through the ramp gets one step per bar.
     #[test]
     fn colour_means_something() {
         let svg = hourly(&opts(sample()));
         assert!(
-            svg.contains("g-t-ck-c1") && svg.contains("g-t-ck-cother"),
+            svg.contains("g-t-ck-cink") && svg.contains("g-t-ck-cother"),
             "{svg}"
         );
         assert_eq!(
-            svg.matches(r#"fill="url(#g-t-ck-c1)""#).count(),
+            svg.matches(r#"fill="url(#g-t-ck-cink)""#).count(),
             5,
             "05,06,07,18,21: {svg}"
         );
@@ -1236,7 +1458,7 @@ mod tests {
         o.solar = Some((6.7, 18.0));
         let svg = hourly(&o);
         assert!(
-            svg.contains("sunrise 6:42") && svg.contains("sunset 18:00"),
+            svg.contains("sunrise 06:42") && svg.contains("sunset 18:00"),
             "{svg}"
         );
         // The night is the sky: a gradient across the plot, dark until first light, bright by day.
@@ -1253,11 +1475,13 @@ mod tests {
             "no location, no sky"
         );
         assert!(
-            svg.contains("Sunrise 6:42"),
+            svg.contains("Sunrise 06:42"),
             "the hour it happens says so: {svg}"
         );
         o.solar = Some((12.0, 12.2));
         let close = hourly(&o);
+        // The labels drawn on the chart; the key under it (UIC-26) names sunrise and sunset too.
+        let close = close.split("</svg>").next().unwrap_or_default();
         assert_eq!(
             close.matches("sunrise").count()
                 + close.matches("sunset").count()

@@ -77,7 +77,9 @@
 //   entrance                     CSS only (the .ck-in classes in app.css), so it is
 //                                gated by prefers-reduced-motion and the operator's
 //                                Motion setting like every other animation. The kit
-//                                only decides *not* to repeat it (`.ck-still`).
+//                                only decides *not* to repeat it (`.ck-still`): on a
+//                                chart swapped in again under its id, on a chart whose
+//                                entrance has finished, and on every chart after a resize.
 //   after htmx swaps             scanned on htmx:afterSwap, which runs before paint.
 //   resize                       a ResizeObserver drops the tooltip rather than leave
 //                                it pointing at where a mark used to be.
@@ -91,6 +93,8 @@
 
   var SVGNS = "http://www.w3.org/2000/svg";
   var seen = Object.create(null); // data-ck-id -> true, so a refresh does not re-animate
+  // The entrance animations (app.css, the `/* charts */` region): what "still arriving" means.
+  var ENTRANCES = ["ck-grow", "ck-reveal", "ck-draw", "ck-fade", "dc-bloom"];
   var uid = 0;
   var fmt = typeof Intl !== "undefined" ? new Intl.NumberFormat("en-US") : null;
 
@@ -127,6 +131,22 @@
     if (id) {
       if (seen[id]) svg.classList.add("ck-still");
       else seen[id] = true;
+    }
+    // The entrance plays once (UIR-33). When nothing in the chart is still arriving it is marked
+    // still, so a later restyle that would start its animations again (a card hidden and shown by
+    // a media query as the window is resized) leaves it at rest.
+    if (!svg.classList.contains("ck-still")) {
+      var settled = function () {
+        if (svg.getAnimations) {
+          var anims = svg.getAnimations({ subtree: true });
+          for (var k = 0; k < anims.length; k++) {
+            if (anims[k].playState === "running" && ENTRANCES.indexOf(anims[k].animationName) >= 0) return;
+          }
+        }
+        svg.removeEventListener("animationend", settled);
+        svg.classList.add("ck-still");
+      };
+      svg.addEventListener("animationend", settled);
     }
 
     // A time series that scrolls sideways starts at its newest end: that is the part a reader came for.
@@ -700,6 +720,14 @@
   // is what lets `.ck-still` stop a refreshed chart from replaying its entrance.
   document.addEventListener("htmx:afterSwap", scan);
   document.addEventListener("htmx:afterSettle", scan);
+  // A chart drawn twice, once for a card and once for a phone, has one of the two hidden by a media
+  // query; the other's entrance would start the moment a resize shows it, after the page has long
+  // arrived (UIR-33). A resize leaves every chart on the page at rest. The `resize` event runs
+  // before the style that shows it is worked out, so the drawing never starts to move.
+  window.addEventListener("resize", function () {
+    var list = document.querySelectorAll("svg.ck-in");
+    for (var i = 0; i < list.length; i++) list[i].classList.add("ck-still");
+  });
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", scan);
   else scan();
 })();

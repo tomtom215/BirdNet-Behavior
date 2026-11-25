@@ -225,13 +225,11 @@ On a pull request each shard runs `--in-diff`, so it mutates only the lines the 
 - **Mirroring the model files.** `publish-model.yml` was run (run 39469063446, from the
   previous branch): the release `models-v2.4` holds `birdnet-v24.onnx` (54,068,648 bytes),
   `birdnet-v24-range-v2.onnx` (29,524,170) and `SHA256SUMS` (`gh api …/releases`, sizes read
-  2026-10-21). **Nothing fetches from it**: `crates/birdnet-integrations/src/model_catalog.rs`
-  has one URL per entry and no mention of the mirror, so a default install still depends on
-  Hugging Face and `raw.githubusercontent.com`. To do: name the mirror first with the
-  upstream as the fallback (the V3.0 model already works that way in the installer's
-  shell), and re-run the workflow from `main` after the merge so its attestation names
-  `main`. The previous hand-off recorded that the attestation step succeeded; nobody ran
-  `gh attestation verify`.
+  2026-10-21). The catalogue names it first since `fda952f` (2026-11-25): `--install-model` tries the
+  release and then the upstream address, each against the same sha256 and size. To do: re-run
+  the workflow from `main` so its attestation names `main` and its published notes stop saying
+  nothing fetches from it. The previous hand-off recorded that the attestation step succeeded;
+  nobody ran `gh attestation verify`.
 - **Three things BirdNET-Pi has and this project does not, with no recorded decision**
   (A-16, A-17, A-18 in the gap analysis): Reboot and Shutdown from the browser (the unit's
   `SystemCallFilter` forbids `@reboot`, which is a decision nobody wrote where a user would

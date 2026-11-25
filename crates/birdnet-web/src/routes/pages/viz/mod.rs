@@ -13,8 +13,11 @@
 //! - `ridge` — the migration ridgeline and the species-per-week lane under it.
 //! - `assembly` — the dawn chorus coming together, a staircase per morning.
 //!
-//! Colours come from `super::atoms::species_color` so a species keeps the same
-//! hue across every screen.
+//! A chart that colours species takes the station's `kit::SpeciesSlots`: the
+//! eight species heard most over the 90 days ending yesterday own `--chart-1` …
+//! `--chart-8` on every chart, and every other species is `--chart-other`. The
+//! hashed hue of `super::atoms::species_color` is for avatars and species cards,
+//! not for charts.
 
 // The funnel is the one viz used only by the analytics-gated dawn card, so it
 // is gated to match — keeping the slim `--no-default-features` build free of an

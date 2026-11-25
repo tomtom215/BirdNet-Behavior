@@ -258,8 +258,12 @@ run_acquire() {
         log()  { :; }
         warn() { :; }
         # shellcheck disable=SC1090
-        source <(sed -n '/^acquire_default_models()/,/^}/p' "${ENTRYPOINT}")
+        source <(sed -n '/^acquire_default_models()/,/^}/p;/^retry_with_backoff()/,/^}/p;/^classifier_not_installed()/,/^}/p' "${ENTRYPOINT}")
         if ! declare -F acquire_default_models >/dev/null; then echo "NO_FUNCTION"; exit 0; fi
+        # What the entrypoint sets before this runs (OOB-20): one attempt, no
+        # local file.
+        # shellcheck disable=SC2034  # read by the sourced functions
+        { MODEL_RETRY_WAITS=""; LOCAL_MODEL=""; CLASSIFIER_MISSING=0; }
         ensure_model_file() { echo "managed:$1"; return 0; }
         # shellcheck disable=SC2034  # read by the sourced function
         {

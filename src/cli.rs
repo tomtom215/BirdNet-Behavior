@@ -234,6 +234,15 @@ pub struct Cli {
     #[arg(long, value_name = "ID")]
     pub install_model: Option<String>,
 
+    /// With `--install-model ID`: install the model from this file instead of
+    /// downloading it (an install with no internet).
+    ///
+    /// The file is held to the size and sha256 this binary pins for ID, the
+    /// same check a download passes, and copied into place only when both
+    /// match; a file that does not match is refused and nothing is installed.
+    #[arg(long, value_name = "PATH", requires = "install_model")]
+    pub from_file: Option<PathBuf>,
+
     /// Seconds of audio saved around each detection (default 6).
     ///
     /// BirdNET-Pi's `EXTRACTION_LENGTH`. Longer clips are easier to verify by
@@ -829,11 +838,24 @@ pub struct Cli {
     /// six seconds that must carry the same species — 20%, 30%, 50%, 70% —
     /// rounded up, and never less than the detection itself.
     ///
-    /// **This does nothing without `--overlap`.** With no overlap a six-second
-    /// neighbourhood holds two 3-second windows, and 20% or 30% of two rounds
-    /// to one, which every detection already satisfies. `--doctor` reports the
-    /// overlap each level needs, and the daemon warns at startup when the
-    /// level it was given cannot reject anything.
+    /// **`lenient` and `moderate` do nothing without `--overlap`.** With
+    /// BirdNET V2.4's 3-second windows and no overlap, a six-second
+    /// neighbourhood holds three windows (the window and one either side), and
+    /// 20% or 30% of three rounds up to one, which every detection already
+    /// satisfies; `balanced` asks for two of the three and `strict` for all
+    /// three. A longer window needs more overlap: at 4.5 seconds with none,
+    /// each window is its own neighbourhood and no level rejects anything.
+    /// `--doctor` reports the overlap each level needs, and the daemon warns
+    /// at startup when the level it was given cannot reject anything.
+    ///
+    /// Each recording segment is judged on its own. Its first and last
+    /// windows have neighbours on one side only and are held to the count a
+    /// window in the middle needs, capped at the windows they have: at
+    /// `balanced` with no overlap, the first and last window of a 15-second
+    /// segment each need the one window beside them to agree. The window on
+    /// the other side of the join is in another segment and is not consulted,
+    /// so a bird heard only across the join of two segments is dropped from
+    /// both.
     ///
     /// Off by default: it removes rows, so switching it on puts a visible step
     /// in every chart. Config key: `CONFIRMATION_LEVEL`.

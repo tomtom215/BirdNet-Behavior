@@ -515,8 +515,34 @@ fn write_figures(svg: &mut String, input: &Input<'_>, sheet: &Sheet, placements:
     }
 }
 
+/// Gap between a key row's Latin name and its common name.
+const KEY_GAP: f64 = 8.0;
+/// Size of a key row's Latin name.
+const KEY_SCI_SIZE: f64 = 17.0;
+/// Size of a key row's common name.
+const KEY_COM_SIZE: f64 = 12.0;
+
+/// A key row's two names, each cut to share `room`: whole where both fit; otherwise the common
+/// name keeps at least half the room (it is the one a household reads the key by) and the Latin
+/// name has the rest.
+fn key_names(bird: &Heard, room: f64) -> (String, String) {
+    let sci_w = est_width(&bird.sci, KEY_SCI_SIZE, Face::Serif);
+    let com_w = est_width(&bird.com, KEY_COM_SIZE, Face::Sans);
+    if sci_w + KEY_GAP + com_w <= room {
+        return (bird.sci.clone(), bird.com.clone());
+    }
+    let com = fit(
+        &bird.com,
+        KEY_COM_SIZE,
+        (room - sci_w - KEY_GAP).max(room / 2.0),
+        Face::Sans,
+    );
+    let left = room - est_width(&com, KEY_COM_SIZE, Face::Sans) - KEY_GAP;
+    (fit(&bird.sci, KEY_SCI_SIZE, left, Face::Serif), com)
+}
+
 /// The numbered key at the foot: every species up to [`MAX_KEY`], a number where it has a figure
-/// and a dot where it does not.
+/// and a dot where it does not, each named in Latin and then by its common name.
 fn write_key(svg: &mut String, input: &Input<'_>, sheet: &Sheet, placements: &[Placement]) {
     if sheet.listed == 0 {
         return;
@@ -540,12 +566,14 @@ fn write_key(svg: &mut String, input: &Input<'_>, sheet: &Sheet, placements: &[P
         } else {
             "·".to_owned()
         };
+        let (sci, com) = key_names(bird, col_w - 26.0 - 74.0);
         let _ = writeln!(
             svg,
-            r#"<text class="plate-key-n" x="{x:.1}" y="{y:.1}">{mark}</text><text class="plate-key-sci" x="{xs:.1}" y="{y:.1}">{sci}</text><text class="plate-key-c" x="{xc:.1}" y="{y:.1}" text-anchor="end">{count}</text>"#,
+            r#"<text class="plate-key-n" x="{x:.1}" y="{y:.1}">{mark}</text><text class="plate-key-sci" x="{xs:.1}" y="{y:.1}">{sci}<tspan class="plate-key-com" dx="{KEY_GAP:.0}">{com}</tspan></text><text class="plate-key-c" x="{xc:.1}" y="{y:.1}" text-anchor="end">{count}</text>"#,
             xs = x + 26.0,
             xc = x + col_w - 22.0,
-            sci = escape_html(&fit(&bird.sci, 17.0, col_w - 26.0 - 74.0, Face::Serif)),
+            sci = escape_html(&sci),
+            com = escape_html(&com),
             count = group_thousands(i64::try_from(bird.count).unwrap_or(i64::MAX)),
         );
     }
@@ -707,6 +735,50 @@ mod tests {
             latest_only: false,
             credit: None,
             paper: true,
+        }
+    }
+
+    /// The key named every bird by its Latin name only, and a household reading a wall display
+    /// knows most birds by their common names (UIR-31). Each row carries both: the Latin first, as
+    /// the plate does, and the common name after it, within the row's room.
+    #[test]
+    fn every_bird_in_the_key_is_named_in_both_ways() {
+        let mut h = heard(12);
+        h[0].sci = "Cardinalis cardinalis".into();
+        h[0].com = "Northern Cardinal".into();
+        for aspect in [1.6, 0.7, 2.2] {
+            let mut i = input(&h);
+            i.aspect = aspect;
+            let svg = render(&i);
+            let key = svg
+                .split(r#"<g class="plate-key">"#)
+                .nth(1)
+                .and_then(|k| k.split("</g>").next())
+                .expect("a key");
+            let rows: Vec<&str> = key.split(r#"<text class="plate-key-n""#).skip(1).collect();
+            assert_eq!(rows.len(), 12, "{aspect}: {key}");
+            for (row, bird) in rows.iter().zip(&h) {
+                let com = row
+                    .split(r#"class="plate-key-com""#)
+                    .nth(1)
+                    .and_then(|c| c.split_once('>'))
+                    .and_then(|(_, c)| c.split('<').next())
+                    .unwrap_or_else(|| panic!("{aspect}: no common name in {row}"));
+                let shown = com.trim_end_matches('…');
+                assert!(
+                    shown.chars().count() >= 4 && bird.com.starts_with(shown),
+                    "{aspect}: {com:?} is not {:?}",
+                    bird.com
+                );
+                assert!(row.contains("plate-key-sci"), "{row}");
+            }
+            // The longest pair fits whole on a landscape sheet of four columns.
+            if (aspect - 1.6).abs() < f64::EPSILON {
+                assert!(
+                    key.contains(">Cardinalis cardinalis<") && key.contains(">Northern Cardinal<"),
+                    "{key}"
+                );
+            }
         }
     }
 

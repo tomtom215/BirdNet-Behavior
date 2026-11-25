@@ -8,9 +8,12 @@
 //!   wren heard twenty times a week and a robin heard two hundred have the same peak, which
 //!   is the point of the chart (when each is here, not how loud) and also the reason it
 //!   cannot say who is commoner. The tooltip carries the real counts.
-//! * Its **colour** is the season it peaks in: the spring window, the fall window, or
-//!   neither. Species are told apart by the name beside the ridge, so the colour is free to
-//!   say something, and twelve species do not need twelve hues (the palette has eight).
+//! * Its **colour** says whether it peaks in a migration window (the spring one or the fall
+//!   one: where the peak stands says which, under the window's shading) or at another time.
+//!   Species are told apart by the name beside the ridge, so the colour is free to say
+//!   something; and it is the annotation ink against the neutral, never a species' colour
+//!   (N25-06): spring was `--chart-1` and fall `--chart-5`, which two of the station's species
+//!   own on every other chart.
 //! * Its **shape** between weeks is a monotone cubic: the curve never rises above a week's
 //!   peak or dips below a quiet one, so smoothing cannot invent a peak.
 //! * **Weeks that have not happened yet** are hatched, not drawn as zero.
@@ -54,8 +57,7 @@ impl Season {
     /// The kit colour class of a ridge that peaks in this window.
     pub const fn class(self) -> &'static str {
         match self {
-            Self::Spring => "ck-c1",
-            Self::Fall => "ck-c5",
+            Self::Spring | Self::Fall => "ck-cink",
             Self::Elsewhere => "ck-cother",
         }
     }
@@ -231,8 +233,7 @@ pub fn ridgeline(p: &Phenology<'_>) -> String {
         .map(|r| {
             let s = season_of(r.peak_week(), p.spring, p.fall);
             let var = match s {
-                Season::Spring => "var(--chart-1)",
-                Season::Fall => "var(--chart-5)",
+                Season::Spring | Season::Fall => "var(--chart-annot)",
                 Season::Elsewhere => "var(--chart-other)",
             };
             (r.name.clone(), var.to_owned())
@@ -461,19 +462,13 @@ fn key(p: &Phenology<'_>) -> String {
         )
     };
     format!(
-        r#"<div class="viz-legend rd-key">{a}{b}{c}</div><p class="bnb-meta rd-note">A ridge is a species' detections each week as a share of its own busiest week, so a rare bird and a common one reach the same height; the real counts are in the readout and the table. Colour is when it peaks. Lower: how many different species were heard.</p>"#,
+        r#"<div class="viz-legend rd-key">{a}{c}</div><p class="bnb-meta rd-note">A ridge is a species' detections each week as a share of its own busiest week, so a rare bird and a common one reach the same height; the real counts are in the readout and the table. Colour is whether it peaks in a migration window; which window is where the peak stands. Lower: how many different species were heard.</p>"#,
         a = swatch(
             Season::Spring.class(),
             format!(
-                "peaks in spring migration (weeks {}–{})",
+                "peaks in a migration window: spring (weeks {}–{}) or fall (weeks {}–{})",
                 p.spring.0 + 1,
-                p.spring.1 + 1
-            )
-        ),
-        b = swatch(
-            Season::Fall.class(),
-            format!(
-                "peaks in fall migration (weeks {}–{})",
+                p.spring.1 + 1,
                 p.fall.0 + 1,
                 p.fall.1 + 1
             )
@@ -668,8 +663,25 @@ mod tests {
         assert_eq!(short_name("Yellow-rumped Warbler"), "Yellow-rumped Warbler");
     }
 
+    /// N25-06: a season is not a species, so no ridge wears a species' colour. Spring was
+    /// `ck-c1` and fall `ck-c5`, which the station's first and fifth birds own everywhere else.
+    #[test]
+    fn a_season_wears_no_species_colour() {
+        let ridges = vec![ridge("Spring bird", 12, 30.0), ridge("Fall bird", 40, 30.0)];
+        let div = [1; WEEKS];
+        let svg = ridgeline(&phen(&ridges, &div, Some(51)));
+        assert!(
+            svg.contains("rd-ridge"),
+            "precondition: the ridges are drawn"
+        );
+        assert_eq!(
+            super::super::kit::species_colours_in(&svg),
+            Vec::<String>::new()
+        );
+    }
+
     /// Colour says where a species peaks, not which species it is: two species that peak in
-    /// spring share a hue, and the name beside each ridge is what tells them apart.
+    /// a migration window share the ink, and the name beside each ridge is what tells them apart.
     #[test]
     fn colour_is_the_season_of_the_peak() {
         let ridges = vec![
@@ -689,7 +701,7 @@ mod tests {
                     .expect("class")
             })
             .collect();
-        assert_eq!(classes, ["ck-c1", "ck-c5", "ck-cother"]);
+        assert_eq!(classes, ["ck-cink", "ck-cink", "ck-cother"]);
     }
 
     /// The table has every number: a row per species of 52 weeks and one for the kinds.

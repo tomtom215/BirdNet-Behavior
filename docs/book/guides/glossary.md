@@ -26,7 +26,7 @@ Plain-English definitions for the terms you'll meet around the dashboard.
 
 **Quarantine** — a holding queue for borderline rare-bird detections, so a human can approve or reject them before they join your life list. See the [review queue](../guide/reviews.md#reviews-vs-quarantine).
 
-**Repeat confirmation** — a filter that records a species only when enough of the analysis windows around it heard the same thing. A real bird sings across several; an artefact usually fires once. Needs overlapping windows to mean anything. See [Tuning](./tuning.md#10-asking-for-a-second-opinion).
+**Repeat confirmation** — a filter that records a species only when enough of the analysis windows around it heard the same thing. A real bird sings across several; an artefact usually fires once. With BirdNET V2.4 and no overlap only its two strictest levels reject anything, and every recording segment is judged on its own, so its first and last windows cannot be confirmed by the segment beside them. See [Tuning](./tuning.md#10-asking-for-a-second-opinion).
 
 **RTSP** — a streaming protocol many IP cameras use. BirdNet-Behavior can listen to an RTSP stream's audio as if it were a microphone.
 

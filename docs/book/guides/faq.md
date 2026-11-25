@@ -12,7 +12,7 @@ No. It runs on any x86_64 Linux machine too. The Pi 5 is recommended and the Pi 
 
 ## Does it work offline / without internet?
 
-Yes, once set up. The only things that need the network are the **one-time model install**, optional **Wikipedia photo** caching, and any **notification/upload** channels you enable. The UI itself is fully self-contained — all fonts are embedded in the binary and it never calls out to a CDN.
+Yes, once set up. The only things that need the network are the **one-time model install** (which can also be done from a file you carry over: see [Installing without internet](../getting-started/installation.md#installing-without-internet)), optional **Wikipedia photo** caching, and any **notification/upload** channels you enable. The UI itself is fully self-contained — all fonts are embedded in the binary and it never calls out to a CDN.
 
 ## Does it need a camera, or just a microphone?
 
@@ -65,8 +65,10 @@ See [Backups & Recovery](../admin/backups.md#offsite-backups).
 
 Almost certainly because the analysis windows do not overlap. The filter asks
 how many of the windows within six seconds heard the same species — and with no
-overlap, six seconds is two 3-second windows, so "20% of them" rounds up to one,
-which every detection already satisfies.
+overlap, six seconds is three 3-second windows, so "20% of them" or "30% of
+them" rounds up to one, which every detection already satisfies. (`balanced` and
+`strict` ask for two and three of the three; with a 4.5-second window and no
+overlap, no level asks for more than the detection itself.)
 
 Set `BIRDNET_OVERLAP` as well. `birdnet-behavior --doctor` reports which side of
 that line your station is on, the dropdown on the settings page prints the

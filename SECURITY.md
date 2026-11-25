@@ -91,11 +91,15 @@ Out of scope:
 
 ## Threat model
 
-A high-level threat model and risk register live in
-[`docs/architecture/12-risks.md`](docs/architecture/12-risks.md). It
-covers the deployment topology, trust boundaries, and the mitigations
-currently in place. Reporters are encouraged (but not required) to map
-findings to that document.
+A risk register lives in
+[`docs/architecture/12-risks.md`](docs/architecture/12-risks.md), and its
+[Trust Boundaries](docs/architecture/12-risks.md#trust-boundaries) section
+says who can reach what without signing in: the default bind address, the
+routes open to anyone on the network (live audio and recorded clips among
+them), the admin gate and its no-password bypass, private mode, the login
+throttle and its limits, and what is stored in plain text. Each statement
+there cites the code it was read from. Reporters are encouraged (but not
+required) to map findings to that document.
 
 ## Hardening guidance
 

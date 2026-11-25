@@ -15,6 +15,9 @@
 //   4. LATER CONTENT. A row arriving after load (htmx, the live feed) is printed
 //      too.
 //   5. STORAGE THAT THROWS leaves the canonical text and no page error.
+//   6. CHART AXES (UIR-19). The hour ticks drawn in SVG (the dawn rings, each bird's
+//      day, the bursts, the running order) are marked times too: with 12-hour chosen
+//      each prints as one, and no chart keeps a vocabulary of its own ("6a", "12p").
 //
 // Usage:  BASE=http://127.0.0.1:8516 FIXTURE_DB=/path/to/bnb_screenshots.db \
 //         CHROMIUM_PATH=... node display-format.mjs
@@ -169,6 +172,40 @@ if (setStationDefault('time_format', '12h') && setStationDefault('temperature_un
 }
 setStationDefault('time_format', '');
 setStationDefault('temperature_unit', '');
+
+// ---- 6: the hour ticks on the charts --------------------------------------------------
+
+{
+  const { ctx, page, errors } = await newPage(() => { try { localStorage.setItem('bnb-time', '12h'); } catch (e) { /* blocked */ } });
+  // The figures that draw a 24-hour axis in SVG, and what each must show.
+  const AXES = [
+    ['/patterns?tab=dawn', 'svg.dcv-svg, svg.dc-svg, svg[class*="dc"]', 'the dawn rings and each bird\'s day'],
+    ['/patterns?tab=behavior', 'svg.bt-svg', 'the bursts'],
+    ['/patterns?tab=sequences', 'svg.mo-svg', 'the running order'],
+  ];
+  for (const [route, , what] of AXES) {
+    await page.goto(BASE + route, { waitUntil: 'networkidle' });
+    await page.evaluate(async () => {
+      for (const d of document.querySelectorAll('details:not([open])')) d.open = true;
+      for (let y = 0; y < document.body.scrollHeight; y += 600) { window.scrollTo(0, y); await new Promise((r) => setTimeout(r, 60)); }
+    });
+    await page.waitForLoadState('networkidle').catch(() => {});
+    await page.waitForTimeout(400);
+    const got = await page.evaluate(() => {
+      const texts = [...document.querySelectorAll('svg text, svg tspan')].map((t) => t.textContent.trim());
+      return {
+        own: texts.filter((t) => /^\d{1,2}[ap]$/.test(t)),
+        ticks: [...document.querySelectorAll('svg text[data-clk]')].map((t) => [t.getAttribute('data-clk'), t.textContent.trim()]),
+      };
+    });
+    ok(got.own.length === 0, `${route} (${what}): an hour axis keeps its own vocabulary: ${JSON.stringify(got.own.slice(0, 6))}`);
+    ok(got.ticks.length >= 4, `${route} (${what}): ${got.ticks.length} hour ticks are marked times (at least four expected)`);
+    ok(got.ticks.every(([, t]) => is12(t)), `${route} (${what}): with 12-hour chosen every tick prints that way: ${JSON.stringify(got.ticks.slice(0, 6))}`);
+    console.log(`${route}: ${got.ticks.length} marked hour ticks, ${got.own.length} in a vocabulary of their own`);
+  }
+  ok(errors.length === 0, `no page errors on the chart pages: ${errors.join('; ')}`);
+  await ctx.close();
+}
 
 // ---- 5: storage that throws ---------------------------------------------------------
 

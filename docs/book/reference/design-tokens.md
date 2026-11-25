@@ -397,7 +397,8 @@ reason: the sun and moon glyphs on the day strip and the polar clock are the sun
 moon. A heat cell interpolates `--heat-lo` → `--heat-mid` → `--heat-hi` in OKLab and is
 drawn at full strength with no `fill-opacity`, so what is painted is what was graded. The
 one place that keeps its own ramp is the History calendar, which prints a day number on
-each cell and so uses a lighter, capped tint of `--moss` that keeps that number at 4.5:1.
+each cell and so uses a lighter, capped tint of `--moss` that keeps that number at 4.5:1;
+its steps are the kit's square-root steps, so a day reads the same way there as on a heat map.
 
 ## Chart ramps and data ink
 

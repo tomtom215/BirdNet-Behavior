@@ -583,6 +583,15 @@ mod tests {
             birdnet_db::settings::SettingsCategory::System,
         )
         .expect("setting");
+        // Not the disk guard's tests: at the default 95 % two of these failed on any machine
+        // whose disk was that full, a test run's own build output included.
+        birdnet_db::settings::set(
+            &conn,
+            "purge_threshold",
+            "100",
+            birdnet_db::settings::SettingsCategory::System,
+        )
+        .expect("setting");
         let tree = work.join("BirdSongs");
         let species = tree.join("Extracted/By_Date/2020-01-01/Eurasian_Magpie");
         std::fs::create_dir_all(&species).unwrap();
