@@ -160,7 +160,7 @@ handled	crates/birdnet-web/src/routes/system.rs	db_health	is_ok	conn.query_row("
 handled	crates/birdnet-web/src/routes/system.rs	health	unwrap_or	tokio::task::spawn_blocking({ let state = state.clone(); move || db_health(&state) }) .await .unwrap_or(DbHeal
 handled	crates/birdnet-web/src/routes/system.rs	sound_level	match-err	match state .with_read_db(|conn| birdnet_db::sound_levels::latest_hour(conn, &source)) { Err .. }
 handled	crates/birdnet-web/src/routes/system.rs	sound_level	match-err	match state .with_read_db(|conn| birdnet_db::sound_levels::recent_broadband(conn, 24)) { Err .. }
-handled	crates/birdnet-web/src/state.rs	approve_quarantine	ok	self.with_read_db(|conn| { birdnet_db::sqlite::detected_at_utc_for(conn, &r.date, &r.time, &r.sci_name) }) .ok
+handled	crates/birdnet-web/src/state.rs	approve_quarantine_by	ok	self.with_read_db(|conn| { birdnet_db::sqlite::detected_at_utc_for(conn, &r.date, &r.time, &r.sci_name) }) .ok
 handled	crates/birdnet-web/src/state.rs	clear_detection_review_by	match-err	match review_clip(conn, row)? { Err .. }
 handled	crates/birdnet-web/src/state.rs	run_blocking	match-err	match tokio::task::spawn_blocking(move || f(&state)).await { Err .. }
 handled	crates/birdnet-web/src/state.rs	set_detection_review_by	match-err	match review_clip(conn, row)? { Err .. }
@@ -193,7 +193,7 @@ setting-default	src/helpers/settings_overlay.rs	seed_db_settings_from_config	is_
 setting-default	src/helpers/settings_overlay.rs	seed_db_settings_from_config	ok	ensure_settings_table(conn).ok()
 setting-default	src/helpers/settings_overlay.rs	seed_db_settings_from_config	map_or_default	list(conn, None) .map_or_default(|rows| rows.into_iter().map(|s| s.key).collect())
 handled	src/helpers/state.rs	observed_names	match-err	match state.with_db(|conn| birdnet_db::sqlite::top_species(conn, 100_000)) { Err .. }
-fail-closed	src/helpers/system.rs	locked_clips	match-err	match state.with_db(birdnet_db::sqlite::locked_file_names) { Err .. }
+fail-closed	src/helpers/system.rs	locked_clips	match-err	match state.with_db(|conn| birdnet_db::sqlite::kept_back_file_names(conn, retain_reviewed)) { Err .. }
 handled	src/integrations/acoustic_health.rs	sample_once	match-err	match state.with_db(|conn| record_sample(conn, &date, hour, &source, assessment.level)) { Err .. }
 handled	src/integrations/acoustic_health.rs	sample_once	match-err	match state.with_db(|conn| { record_observation(conn, &date, hour, &source, &assessment.bands, broadband) }) {
 handled	src/integrations/acoustic_health.rs	spawn_acoustic_health	match-err	match pruner.with_db(|conn| birdnet_db::audio_levels::prune(conn, KEEP_DAYS)) { Err .. }
