@@ -80,7 +80,7 @@ pub(super) fn render(out: &mut String, s: &HashMap<String, String>) {
         <input id="sensitivity" name="sensitivity" type="text"
                inputmode="decimal" pattern="[0-9]*[.,]?[0-9]*"
                value="{sens}" placeholder="{sens_default}">
-        <p class="hint">BirdNET's own sigmoid setting, applied exactly as BirdNET-Pi applies it: a higher value flattens the confidence curve, so at the usual confidence thresholds (above 0.5) it gives fewer detections, not more. Applies to V2.4 models; the bundled V3.0 model uses calibrated probabilities and ignores it. Same key and same meaning as BirdNET-Pi's SENSITIVITY.</p>
+        <p class="hint">BirdNET's own sigmoid setting, applied exactly as BirdNET-Pi applies it: a higher value flattens the confidence curve, so at the usual confidence thresholds (above 0.5) it gives fewer detections, not more. Applies to V2.4 models; the BirdNET+ V3.0 preview's scores already come out between 0 and 1, and it ignores it. Same key and same meaning as BirdNET-Pi's SENSITIVITY.</p>
       </div>
     </div>
     <div class="grid-2">

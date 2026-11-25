@@ -17,7 +17,7 @@ If you're getting both at once, it's almost always an **audio** problem (wind, c
 
 ### 1. Confidence threshold
 
-The minimum score (0–1) a detection must clear to be logged. This is your main dial.
+The minimum score (0–1) a detection must clear to be logged. This is your main dial. The score is the model's own output, not a validated probability: this project has not measured how often a detection at a given score is right (a 0.70 does not mean 70 % of such detections are correct), so read it as a ranking and judge a threshold by listening to what it keeps.
 
 - **Default 0.70**, which is BirdNET-Pi's own (it was 0.75 up to v0.17.1). Raise toward **0.8–0.85** to aggressively cut false positives (you'll lose some faint genuine calls).
 - Lower toward **0.5–0.6** only if you're confident your audio is clean and you want maximum recall.
@@ -40,7 +40,7 @@ The BirdNET sensitivity parameter (0.5–1.5; also `SENSITIVITY` in `birdnet.con
 - **Lower (→0.5)** is a *steeper* curve: strong calls score higher and more of them clear the bar.
 - The default, 1.25, is a slope of 0.75: the same figure BirdNET-Pi gives a station with its defaults. A magpie whose raw score is 3.12 reads 91.2 % here and there.
 - Most stations leave this at the default and tune the confidence threshold instead. Reach for sensitivity only when the threshold alone can't find a good balance.
-- It only affects BirdNET V2.4 models; the BirdNET+ V3.0 preview reports calibrated probabilities and ignores it.
+- It only affects BirdNET V2.4 models; the BirdNET+ V3.0 preview's scores already come out between 0 and 1, and it ignores it.
 - birdnet-go's setting of the same name is the slope itself (its default, 1.0, is a plain sigmoid). To carry a birdnet-go value across, enter `2 − value`.
 
 ### 4. Species-frequency (SF) filter
