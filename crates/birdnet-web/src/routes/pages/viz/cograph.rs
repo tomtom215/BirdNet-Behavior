@@ -25,9 +25,11 @@
 /// Species and the strength of every pair among them.
 #[derive(Clone, Debug, Default)]
 pub struct CoGraph {
-    /// Display names, busiest species first. The index is the species' colour slot, so a
-    /// species keeps its colour however the pictures order it.
+    /// Display names, busiest species first.
     pub names: Vec<String>,
+    /// The station's species colours: a species is drawn in the colour it owns on the station,
+    /// on every one of these pictures and on every other chart, however they order it.
+    pub slots: super::kit::SpeciesSlots,
     /// `strength[i][j]` in `0..=1`: the pair's share, relative to the strongest pair
     /// among these species. Symmetric, zero on the diagonal.
     pub strength: Vec<Vec<f64>>,
@@ -61,6 +63,13 @@ pub struct Link {
 }
 
 impl CoGraph {
+    /// The colour class species `i` is drawn in (`ck-c1` … `ck-c8`, or `ck-cother`).
+    #[must_use]
+    pub fn class(&self, i: usize) -> String {
+        self.slots
+            .class(self.names.get(i).map_or("", String::as_str))
+    }
+
     /// How many species.
     #[must_use]
     pub const fn n(&self) -> usize {
@@ -299,6 +308,7 @@ mod tests {
             s[b][a] = v;
         }
         CoGraph {
+            slots: crate::routes::pages::viz::kit::SpeciesSlots::default(),
             names: (0..n).map(|i| format!("Species {i}")).collect(),
             share: s.clone(),
             strength: s,

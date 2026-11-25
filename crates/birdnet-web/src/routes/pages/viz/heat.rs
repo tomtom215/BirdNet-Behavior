@@ -164,7 +164,15 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
     let row_avg: Vec<f64> = (0..7)
         .map(|d| row_tot[d] as f64 / f64::from(o.occurrences[d].max(1)))
         .collect();
-    let row_max = row_avg.iter().copied().fold(0.0_f64, f64::max);
+    // A weekday the sentence leaves out, for having been listened on too few times to average,
+    // gets no bar and no say in how long the others are (N05-04): two days of one name gave the
+    // longest bar beside a sentence that, rightly, compared only the other six.
+    let compared =
+        |d: usize| o.occurrences[d] >= crate::routes::pages::insight::MIN_WEEKDAY_OCCURRENCES;
+    let row_max = (0..7)
+        .filter(|&d| compared(d))
+        .map(|d| row_avg[d])
+        .fold(0.0_f64, f64::max);
     let col_max = col_tot.iter().copied().max().unwrap_or(1).max(1);
 
     let (label_w, cw, ch) = (46.0_f64, 31.0_f64, 28.0_f64);
@@ -291,12 +299,12 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
         // the unit the sentence above the chart compares (UIR-02). The period's total drew
         // Saturday longest beside a sentence naming Thursday, because Saturday occurred
         // five times in the window and Thursday four.
-        let bw = if row_max > 0.0 {
+        let bw = if row_max > 0.0 && compared(d) {
             row_avg[d] / row_max * 34.0
         } else {
             0.0
         };
-        if row_tot[d] > 0 {
+        if row_tot[d] > 0 && compared(d) {
             let _ = write!(
                 svg,
                 r#"<path class="ck-fill ck-cother" d="{p}"/>"#,
@@ -310,6 +318,8 @@ pub fn hour_by_weekday(o: &HourByWeekday<'_>) -> String {
             y = y0 + ch / 2.0 + 3.5,
             t = if o.occurrences[d] == 0 && o.coverage_known {
                 "off".to_string()
+            } else if !compared(d) {
+                "too few days".to_string()
             } else {
                 format!("{}/day", kit::compact(row_avg[d]))
             },
@@ -650,6 +660,74 @@ mod tests {
             kit::WEEKDAYS[named],
             "the sentence says {sentence:?}; the margin draws {drawn:?}"
         );
+    }
+
+    /// N05-04. The sentence leaves out a weekday the station listened on fewer than three times
+    /// (`insight::MIN_WEEKDAY_OCCURRENCES`), so the margin does too: no bar, the words "too few
+    /// days", and no say in how long the other bars are. The fixture is the one the finding was
+    /// written from: Friday listened on twice, every other weekday four times, 40 detections on
+    /// each and 30 on Friday, so Friday's 15 a day was the longest bar beside a sentence saying
+    /// no weekday stands out.
+    #[test]
+    fn a_weekday_the_sentence_leaves_out_has_no_margin_bar() {
+        // A row's margin: what is drawn before its label (the bar, if any).
+        fn margin(row: &str) -> &str {
+            let end = row.find(r#"class="mono ck-annot""#).expect("a label");
+            &row[..end]
+        }
+        let mut g = grid();
+        g.counts = [[0; 24]; 7];
+        for (d, row) in g.counts.iter_mut().enumerate() {
+            row[8] = if d == 5 { 30 } else { 40 };
+        }
+        g.occurrences = [4, 4, 4, 4, 4, 2, 4];
+        g.window_days = 30;
+        let sentence =
+            crate::routes::pages::insight::weekday_sentence(&g.counts, g.occurrences, 30)
+                .expect("a sentence");
+        assert!(
+            sentence.starts_with("No weekday stands out"),
+            "precondition: {sentence}"
+        );
+        let svg = hour_by_weekday(&g);
+        // Each weekday's margin: from its row label to the next one.
+        let rows: Vec<&str> = svg
+            .split(r#"text-anchor="end" font-size="10">"#)
+            .skip(1)
+            .take(7)
+            .collect();
+        assert_eq!(rows.len(), 7, "{svg}");
+        let label = |row: &str| -> (f64, String) {
+            let s = row
+                .split(r#"class="mono ck-annot" x=""#)
+                .nth(1)
+                .expect("a margin label");
+            let x = s[..s.find('"').expect("x")]
+                .parse::<f64>()
+                .expect("a number");
+            let t = s.split('>').nth(1).and_then(|t| t.split('<').next());
+            (x, t.unwrap_or_default().to_owned())
+        };
+        let (_, fri) = label(rows[5]);
+        assert_eq!(fri, "too few days", "Friday's margin: {}", rows[5]);
+        assert!(
+            !margin(rows[5]).contains("ck-cother"),
+            "Friday has no bar: {}",
+            margin(rows[5])
+        );
+        // Counterpart: the six weekdays the sentence compares keep their bars, and with
+        // Friday out of the maximum they are all the longest bar, as the sentence says.
+        let full = 46.0 + 24.0 * 31.0 + 10.0 + 34.0 + 5.0;
+        for d in (0..7).filter(|&d| d != 5) {
+            assert!(margin(rows[d]).contains("ck-cother"), "{d}: {}", rows[d]);
+            let (x, t) = label(rows[d]);
+            assert_eq!(t, "10/day", "{d}");
+            assert!(
+                (x - full).abs() < 0.05,
+                "{}: its bar ends at {x}, not at the full length {full}: Friday still sets the scale",
+                kit::WEEKDAYS[d]
+            );
+        }
     }
 
     #[test]

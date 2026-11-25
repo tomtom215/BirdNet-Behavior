@@ -41,9 +41,8 @@ use axum::{Router, routing::get};
 
 use crate::state::AppState;
 
-use super::atoms::series_color;
 use super::escape_html;
-use super::viz::kit::slot_class;
+use super::viz::kit::SpeciesSlots;
 use super::viz::svg_a11y;
 
 static PAGE_HTML: crate::seal::Sealed =
@@ -199,9 +198,9 @@ fn collect_chorus(
 
     ribbons.sort_by_key(|r| std::cmp::Reverse(r.total));
     ribbons.truncate(top_n);
-    // Colour is the ring's rank in this chart (`viz::kit::slot_class`), not a hash of
-    // the name: several species are drawn as adjacent rings, and the hash palette put pairs
-    // of them 2-3 degrees apart in hue at constant lightness.
+    // Colour is the one the species owns on the station (`viz::kit::SpeciesSlots`), the same as
+    // on every other chart; never a hash of the name, which put adjacent rings 2-3 degrees apart
+    // in hue at constant lightness.
     Ok(ribbons)
 }
 
@@ -242,12 +241,19 @@ fn sky_over(conn: &rusqlite::Connection) -> Option<Sky> {
 async fn polar_partial(State(state): State<AppState>) -> impl IntoResponse {
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| (collect_chorus(conn, WINDOW_DAYS, RINGS), sky_over(conn)))
+        let slots = super::viz::kit::station_slots(&state);
+        let chorus =
+            state.with_read_db(|conn| (collect_chorus(conn, WINDOW_DAYS, RINGS), sky_over(conn)));
+        (slots, chorus)
     })
     .await;
 
-    let (ribbons, sky) = match result {
-        Ok((Ok(r), sky)) if !r.is_empty() => (r, sky),
+    let (ribbons, sky, slots) = match result {
+        Ok((Ok(slots), (Ok(r), sky))) if !r.is_empty() => (r, sky, slots),
+        Ok((Err(e), _)) => {
+            tracing::warn!(error = %e, "dawn chorus: the species colours could not be read");
+            return super::error_states::failed_partial("the dawn chorus");
+        }
         _ => return ok_html(super::empty_states::no_chorus()),
     };
 
@@ -255,7 +261,7 @@ async fn polar_partial(State(state): State<AppState>) -> impl IntoResponse {
     // clock the ribbons are bucketed in. Without a configured location there is no honest sun
     // position to draw, so the sky is omitted rather than invented: the previous fallback drew
     // a (40.0 N, -74.0 W) sun over every station on Earth.
-    ok_html(polar_figure(&ribbons, sky, &names))
+    ok_html(polar_figure(&ribbons, sky, &names, &slots))
 }
 
 /// The chart and the key that says which ring is which bird.
@@ -267,17 +273,18 @@ fn polar_figure(
     ribbons: &[ChorusRibbon],
     sky: Option<Sky>,
     names: &birdnet_core::i18n::NameLocalizer,
+    slots: &SpeciesSlots,
 ) -> String {
     let mut out = String::from(r#"<div class="dc-polar-col ck">"#);
     out.push_str(r#"<div class="dc-polar-plot">"#);
-    out.push_str(&render_polar_svg(ribbons, sky, names));
+    out.push_str(&render_polar_svg(ribbons, sky, names, slots));
     out.push_str("</div>");
     out.push_str(r#"<div class="dc-key-col"><p class="bnb-meta dc-key-note">Rings, outermost first. Each ring swells at the hours that bird sings most, scaled to its own busiest hour.</p><div class="viz-legend ck-legend dc-key">"#);
     for (i, ribbon) in ribbons.iter().enumerate() {
         let _ = write!(
             out,
             r#"<button type="button" class="ck-leg dc-leg" data-ck-s="{i}" aria-pressed="false"><span class="viz-swatch ck-sw {slot}"></span><span class="dc-leg-name">{n}</span><span class="bnb-meta mono dc-leg-peak">peaks {p}</span></button>"#,
-            slot = slot_class(i),
+            slot = slots.class(&ribbons[i].name),
             n = escape_html(names.name_of_stored(&ribbon.name)),
             p = crate::display::clock(&fmt_hour(f64::from(ribbon.peak_hour))),
         );
@@ -415,6 +422,7 @@ fn render_polar_svg(
     ribbons: &[ChorusRibbon],
     sky: Option<Sky>,
     names: &birdnet_core::i18n::NameLocalizer,
+    slots: &SpeciesSlots,
 ) -> String {
     let n = ribbons.len();
     let ring_step = (RING_MAX - RING_MIN) / (n as f64 + 1.0);
@@ -553,7 +561,7 @@ fn render_polar_svg(
         let _ = write!(
             s,
             r#"<path class="dc-ring {slot}" d="{d}" data-ck-s="{i}" data-style="--i:{i}"><title>{name} — peaks {p}</title></path>"#,
-            slot = slot_class(i),
+            slot = slots.class(&ribbons[i].name),
             d = ring_outline(base_of(i), amp, &samples[i]),
             p = fmt_hour(f64::from(ribbon.peak_hour)),
         );
@@ -583,7 +591,7 @@ fn render_polar_svg(
                     (
                         &when,
                         &super::viz::kit::thousands(count.round() as i64),
-                        Some(&ribbon_key(i)),
+                        Some(&ribbon_key(&ribbons[i], slots)),
                     ),
                     (
                         "Its share of the day",
@@ -701,9 +709,9 @@ fn render_polar_svg(
     s
 }
 
-/// The key colour of ring `i` for a tooltip row: the colour itself, so it follows the theme.
-fn ribbon_key(i: usize) -> String {
-    series_color(i, RINGS)
+/// The key colour of a ring for a tooltip row: the colour itself, so it follows the theme.
+fn ribbon_key(ribbon: &ChorusRibbon, slots: &SpeciesSlots) -> String {
+    slots.colour(&ribbon.name)
 }
 
 // ---------------------------------------------------------------------------
@@ -713,14 +721,21 @@ fn ribbon_key(i: usize) -> String {
 async fn list_partial(State(state): State<AppState>) -> impl IntoResponse {
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| (collect_chorus(conn, WINDOW_DAYS, RINGS), sky_over(conn)))
+        let slots = super::viz::kit::station_slots(&state);
+        let chorus =
+            state.with_read_db(|conn| (collect_chorus(conn, WINDOW_DAYS, RINGS), sky_over(conn)));
+        (slots, chorus)
     })
     .await;
-    let (ribbons, sky) = match result {
-        Ok((Ok(r), sky)) if !r.is_empty() => (r, sky),
+    let (ribbons, sky, slots) = match result {
+        Ok((Ok(slots), (Ok(r), sky))) if !r.is_empty() => (r, sky, slots),
+        Ok((Err(e), _)) => {
+            tracing::warn!(error = %e, "dawn chorus: the species colours could not be read");
+            return super::error_states::failed_partial("each bird's day");
+        }
         _ => return ok_html(super::empty_states::no_chorus()),
     };
-    ok_html(day_strips(&ribbons, sky, &names))
+    ok_html(day_strips(&ribbons, sky, &names, &slots))
 }
 
 /// Every ring's day, one row each, as small columns: the same numbers as the rings, laid
@@ -734,6 +749,7 @@ fn day_strips(
     ribbons: &[ChorusRibbon],
     sky: Option<Sky>,
     names: &birdnet_core::i18n::NameLocalizer,
+    slots: &SpeciesSlots,
 ) -> String {
     // Drawn 560 wide with each bird's name above its row, not beside it: a name column would
     // be most of a phone's width, and the picture has to read there without being enlarged.
@@ -817,7 +833,7 @@ fn day_strips(
         let _ = write!(
             s,
             r#"<rect class="ck-fill {slot}" x="{x0}" y="{ky:.1}" width="8" height="8" rx="2"/><text class="dc-strip-name" x="{nx:.1}" y="{ny:.1}">{shown}</text><text class="mono dc-strip-sub" x="{rx:.1}" y="{ny:.1}" text-anchor="end">peaks {p}{off}</text>"#,
-            slot = slot_class(i),
+            slot = slots.class(&ribbons[i].name),
             ky = top + 4.0,
             nx = x0 + 14.0,
             ny = top + 13.0,
@@ -851,7 +867,7 @@ fn day_strips(
                             fmt_hour(hr as f64 + 1.0 - 1.0 / 60.0)
                         ),
                         &super::viz::kit::thousands(count.round() as i64),
-                        Some(&ribbon_key(i)),
+                        Some(&ribbon_key(&ribbons[i], slots)),
                     ),
                     (
                         "Its share of the day",
@@ -868,7 +884,7 @@ fn day_strips(
                 let _ = write!(
                     s,
                     r#"<path class="dc-bar {slot}{peak}" d="{d}" data-ck-i="{k}"/>"#,
-                    slot = slot_class(i),
+                    slot = slots.class(&ribbons[i].name),
                     peak = if hr == usize::from(ribbon.peak_hour) {
                         " is-peak"
                     } else {
@@ -1027,7 +1043,7 @@ mod tests {
     /// answers that wrongly while looking authoritative.
     #[test]
     fn no_location_draws_no_sun() {
-        let svg = render_polar_svg(&[], None, &english());
+        let svg = render_polar_svg(&[], None, &english(), &SpeciesSlots::default());
         assert!(!svg.contains("data-sunrise"), "no sunrise attribute");
         assert!(!svg.contains(r#"data-sun="rise""#), "no rise marker");
         assert!(!svg.contains("var(--night)"), "no night wedge");
@@ -1071,7 +1087,7 @@ mod tests {
             "local {local} utc {utc}"
         );
 
-        let svg = render_polar_svg(&[], None, &english());
+        let svg = render_polar_svg(&[], None, &english(), &SpeciesSlots::default());
         let hand = svg
             .split("<line ")
             .find(|l| l.starts_with(r#"class="dc-now" "#))
@@ -1093,7 +1109,12 @@ mod tests {
 
     #[test]
     fn a_known_location_draws_both_markers() {
-        let svg = render_polar_svg(&[], Some(sky(6.0, 18.0)), &english());
+        let svg = render_polar_svg(
+            &[],
+            Some(sky(6.0, 18.0)),
+            &english(),
+            &SpeciesSlots::default(),
+        );
         assert!(svg.contains(r#"data-sunrise="06:00""#), "{svg:.400}");
         assert!(svg.contains(r#"data-sunset="18:00""#));
         assert!(svg.contains("var(--night)"), "night wedge is drawn");
@@ -1103,7 +1124,12 @@ mod tests {
     fn render_polar_svg_includes_four_moon_segments() {
         // Empty ribbons + arbitrary sunrise/sunset are enough — the
         // moon ring is independent of the chorus data.
-        let svg = render_polar_svg(&[], Some(sky(6.0, 18.0)), &english());
+        let svg = render_polar_svg(
+            &[],
+            Some(sky(6.0, 18.0)),
+            &english(),
+            &SpeciesSlots::default(),
+        );
         assert!(svg.contains(r#"data-moon-segment="new""#));
         assert!(svg.contains(r#"data-moon-segment="waxing-half""#));
         assert!(svg.contains(r#"data-moon-segment="full""#));
@@ -1201,7 +1227,7 @@ mod tests {
             morning_singer("American Robin"),
             morning_singer("Song Sparrow"),
         ];
-        let svg = render_polar_svg(&rings, None, &english());
+        let svg = render_polar_svg(&rings, None, &english(), &SpeciesSlots::default());
         assert_eq!(svg.matches(r#"class="ck-hit""#).count(), 2 * 24);
         for k in 0..48 {
             assert!(svg.contains(&format!(r#"data-ck-i="{k}""#)), "mark {k}");
@@ -1223,7 +1249,12 @@ mod tests {
     /// The middle of the chart says the time and the window, and is not the orphan "chorus 24 h".
     #[test]
     fn the_centre_says_something_true() {
-        let svg = render_polar_svg(&[morning_singer("A")], None, &english());
+        let svg = render_polar_svg(
+            &[morning_singer("A")],
+            None,
+            &english(),
+            &SpeciesSlots::default(),
+        );
         assert!(svg.contains(">NOW<") && svg.contains("60 days"));
         assert!(
             !svg.contains(">24 h<") && !svg.contains(">chorus<"),
@@ -1243,7 +1274,12 @@ mod tests {
             dawn: Some(6.2),
             dusk: Some(18.3),
         };
-        let svg = render_polar_svg(&[morning_singer("A")], Some(sky), &english());
+        let svg = render_polar_svg(
+            &[morning_singer("A")],
+            Some(sky),
+            &english(),
+            &SpeciesSlots::default(),
+        );
         assert_eq!(svg.matches("dc-sky-night").count(), 1);
         assert_eq!(svg.matches("dc-sky-twilight").count(), 2);
         assert_eq!(svg.matches("dc-sky-day").count(), 1);
@@ -1256,11 +1292,21 @@ mod tests {
             dusk: None,
             ..sky
         };
-        let svg = render_polar_svg(&[morning_singer("A")], Some(bright), &english());
+        let svg = render_polar_svg(
+            &[morning_singer("A")],
+            Some(bright),
+            &english(),
+            &SpeciesSlots::default(),
+        );
         assert_eq!(svg.matches("dc-sky-twilight").count(), 0);
         assert!(svg.contains("dc-sky-night"));
         // Without a location, nothing.
-        let svg = render_polar_svg(&[morning_singer("A")], None, &english());
+        let svg = render_polar_svg(
+            &[morning_singer("A")],
+            None,
+            &english(),
+            &SpeciesSlots::default(),
+        );
         assert!(!svg.contains("dc-sky"));
         // Arcs run clockwise from the first hour to the second, across midnight too.
         let (a0, a1) = clock_arc(6.0, 18.0);
@@ -1280,7 +1326,7 @@ mod tests {
             morning_singer("American Robin"),
             morning_singer("Song Sparrow"),
         ];
-        let html = day_strips(&rings, None, &english());
+        let html = day_strips(&rings, None, &english(), &SpeciesSlots::default());
         assert_eq!(html.matches(r#"class="ck-hit""#).count(), 48);
         assert_eq!(
             html.matches("dc-bar ").count(),
@@ -1300,7 +1346,10 @@ mod tests {
             h[1] = 9.0;
             h
         });
-        assert!(day_strips(&[night], None, &english()).contains(" · off-chorus"));
+        assert!(
+            day_strips(&[night], None, &english(), &SpeciesSlots::default())
+                .contains(" · off-chorus")
+        );
     }
 
     /// The chorus is the one aggregate that cannot read `detections_analytic`

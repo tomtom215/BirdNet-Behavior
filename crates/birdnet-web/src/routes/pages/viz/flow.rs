@@ -86,9 +86,16 @@ fn fit(name: &str) -> String {
     }
 }
 
-/// The flow for `trigger` with its `before` and `after` neighbours.
+/// The flow for `trigger` with its `before` and `after` neighbours. `trigger_class` is the
+/// colour class the trigger owns on the station (`kit::SpeciesSlots::class`), so the bird in the
+/// middle is the colour it is on every other chart.
 #[must_use]
-pub fn neighbours_flow(trigger: &str, before: &[Neighbour], after: &[Neighbour]) -> String {
+pub fn neighbours_flow(
+    trigger: &str,
+    before: &[Neighbour],
+    after: &[Neighbour],
+    trigger_class: &str,
+) -> String {
     if before.is_empty() && after.is_empty() {
         return EMPTY.to_string();
     }
@@ -194,7 +201,7 @@ pub fn neighbours_flow(trigger: &str, before: &[Neighbour], after: &[Neighbour])
     s.push_str(&flows);
     let _ = write!(
         s,
-        r#"<rect class="fl-mid ck-c1 ck-fill" x="{MID_X}" y="{mid_top:.1}" width="{MID_W}" height="{mid_h:.1}" rx="3"/><text class="fl-trigger" x="{cx:.1}" y="{ty:.1}" text-anchor="middle">{name}</text>"#,
+        r#"<rect class="fl-mid {trigger_class} ck-fill" x="{MID_X}" y="{mid_top:.1}" width="{MID_W}" height="{mid_h:.1}" rx="3"/><text class="fl-trigger" x="{cx:.1}" y="{ty:.1}" text-anchor="middle">{name}</text>"#,
         cx = MID_X + MID_W / 2.0,
         ty = mid_top - 10.0,
         name = escape_html(&fit(trigger)),
@@ -244,7 +251,7 @@ mod tests {
 
     #[test]
     fn nothing_either_side_is_the_placeholder() {
-        assert_eq!(neighbours_flow("Blue Jay", &[], &[]), EMPTY);
+        assert_eq!(neighbours_flow("Blue Jay", &[], &[], "ck-c1"), EMPTY);
     }
 
     /// A node and its ribbon are as thick as the share it stands for: a bird that comes before
@@ -283,7 +290,7 @@ mod tests {
         let mut again = n("Blue Jay", 0.13, 74);
         again.is_trigger = true;
         let after = [n("Northern Cardinal", 0.15, 89), again];
-        let svg = neighbours_flow("Blue Jay", &before, &after);
+        let svg = neighbours_flow("Blue Jay", &before, &after, "ck-c1");
         assert_eq!(svg.matches("<path class=\"fl-flow").count(), 4);
         assert_eq!(svg.matches("<rect class=\"fl-node\"").count(), 4);
         assert!(
@@ -304,7 +311,7 @@ mod tests {
     fn the_flow_stays_inside_its_picture() {
         let before = [n("A", 0.9, 90), n("B", 0.05, 5), n("C", 0.02, 2)];
         let after = [n("D", 0.01, 1)];
-        let svg = neighbours_flow("Middle", &before, &after);
+        let svg = neighbours_flow("Middle", &before, &after, "ck-c1");
         let h: f64 = svg
             .split("viewBox=\"0 0 700 ")
             .nth(1)
@@ -329,7 +336,7 @@ mod tests {
     /// side, which is the engine's denominator, and not every session the middle bird was in.
     #[test]
     fn the_reading_says_what_the_share_is_of() {
-        let svg = neighbours_flow("Blue Jay", &[n("A", 0.6, 3)], &[n("D", 1.0, 2)]);
+        let svg = neighbours_flow("Blue Jay", &[n("A", 0.6, 3)], &[n("D", 1.0, 2)], "ck-c1");
         assert!(svg.contains("Of sessions with a bird before"), "{svg}");
         assert!(svg.contains("Of sessions with a bird after"), "{svg}");
         assert!(!svg.contains("it came just"), "the old wording is gone");
@@ -338,7 +345,7 @@ mod tests {
     /// One side alone is drawn, with its ribbons; the empty side is just empty.
     #[test]
     fn one_side_alone_is_drawn() {
-        let svg = neighbours_flow("Blue Jay", &[], &[n("A", 0.3, 30)]);
+        let svg = neighbours_flow("Blue Jay", &[], &[n("A", 0.3, 30)], "ck-c1");
         assert_eq!(svg.matches("<path class=\"fl-flow").count(), 1);
         assert!(svg.contains("Heard just after"));
     }

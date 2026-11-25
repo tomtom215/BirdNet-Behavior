@@ -32,7 +32,9 @@ These are the reason the charts are not simply "prettier". Each one is held by a
    A day that has not happened yet is "Not yet", which is a third thing.
 4. **Thickness is the real total.** A streamgraph shows the eight busiest species as
    bands and **every other species as one more band**, so a day's total thickness is
-   that day's detections and not "the top eight's".
+   that day's detections and not "the top eight's". (A band's colour is its species' on
+   the station, so two neutral bands can sit side by side; the seam between them and the
+   legend keep them two.)
 5. **A second measure gets its own axis.** Temperature is a labelled strip beneath
    Today's hour bars, never a second scale on the same plot (a dual axis invents a
    correlation).
@@ -60,6 +62,11 @@ These are the reason the charts are not simply "prettier". Each one is held by a
    for the likeness (by year, or by an effective n) is not written yet.
    Held for the reporting-frequency figure and the retention table by their tests; the
    other figures that print a share do not follow it yet (CHT-23).
+11. **Words do not name a lightness.** Every sequential ramp runs dark-to-light on paper
+   and light-to-dark in the dark theme, so "darker squares were busier" tells half the
+   readers to read the chart backwards. Chart copy says "a stronger colour"
+   (`chart_copy_does_not_say_darker_means_more.rs`, with a named list of the uses that are
+   true in both themes).
 
 ## The vocabulary beyond the bar
 
@@ -78,7 +85,8 @@ a promise a test holds.
   column's height is the true value; the seams only mark the steps. A day chart draws them only on bars at
   least 8 units wide: across ninety thin bars they would be a texture, not a tally.
 * **Who a column is made of** (`bars::Stack`). Today's hour columns are stacked by species: the day's eight
-  most heard each in their own chart colour from the baseline up in a fixed order, and everyone else as one
+  most heard, each in the colour it owns on the station (the neutral if it owns none), from the baseline up in
+  a fixed order, and everyone else as one
   "Other species" band whose height is the hour's total minus the named species. A column is exactly as tall
   as the hour's count (honesty rule 4); the bands add up to it. The key names each colour and says what a
   notch is.
@@ -146,8 +154,18 @@ because the question is about one bird; a figure comparing many species belongs 
 * *Who is singing, over time* is a centred stream; *how busy, over time* is a line or
   column chart; *how many kinds, so far* is a rising curve.
 
-Colour follows the job: identity is `--chart-1` .. `--chart-8` in fixed order (a ninth
-series is `--chart-other`, never a generated hue); magnitude is `--seq-*` (or
+Colour follows the job: identity is the **station's**, not the chart's. The eight species
+heard most over the 90 days that end yesterday own `--chart-1` .. `--chart-8` in that order
+(most heard first, ties by name), on every chart; a station with fewer than eight fills its
+free colours from today, after the ones it has. Every other species is `--chart-other`, the
+neutral that already meant "everything else", never a generated hue and never a colour another
+species owns: lending an unused slot to a chart's ninth bird would make "the green one is the
+Robin" false on the next page. The assignment is made in one place (`kit::station_slots`,
+cached, the same all day because its window ends yesterday) and every species chart takes its
+colour from it (`kit::SpeciesSlots`); a figure whose assignment cannot be read says so, or, for
+decoration such as a list's sparklines, draws the neutral. A category that is not a species
+(a season, the dawn and dusk hours, one series) keeps a fixed slot, and
+`tests/a_species_keeps_its_colour_on_every_chart.rs` names each such site. Magnitude is `--seq-*` (or
 `--seq-moss-*`), stepped by the **square root** of the count and spaced so one detection
 and ten are told apart; a state is hatched. The colour key is printed under every heat
 map with the counts its steps start at.

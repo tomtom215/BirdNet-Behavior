@@ -38,8 +38,9 @@ linked to both ends also holds: three arcs stayed in the foreground, not two. Th
 overlaps), the top ten are kept, and a pair's strength is its overlap scaled to the strongest pair
 among those ten. The overlap is the pair's share of the five-minute blocks either was heard in
 (Jaccard), and it travels with the picture: the reading says "38%", not "0.71 of the strongest".
-The species' rank is its colour slot in every picture, so a species keeps its colour when the order
-round the ring changes.
+Each species is drawn in the colour it owns on the station (`kit::SpeciesSlots`, see
+[charts.md](charts.md)), the same as on every other chart, so it keeps its colour when the order
+round the ring changes; a species that owns none is the neutral.
 
 **The ring is for wide screens, the ladder for narrow ones.** The ring's names stand upright on
 either side of it and the whole picture needs about 760 units of width. At 390 px that is drawn at

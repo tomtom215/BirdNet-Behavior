@@ -46,7 +46,10 @@ pub(super) struct Sun {
 /// The feed's JSON for `date`: `rows` are the day's accepted detections (any order), `floor` the
 /// station's accept cut-off in `0..=1`, `now_secs` the local time of day (`None` for a day that
 /// is over), `names` the station's language. Species are ranked by how often they were heard,
-/// ties by name, so the same day always draws the same colours.
+/// ties by name. The day's eight most heard are named, and so is every species that owns a colour
+/// on the station, so each colour drawn is in the key; the rest are one "Other species" entry
+/// (`"other": true`). Each named species carries the colour it owns on the station (`slots`:
+/// `slot` 1 to 8, or 0 for the neutral), the same as on every other chart.
 pub(super) fn songs_json(
     date: &str,
     now_secs: Option<u32>,
@@ -54,6 +57,7 @@ pub(super) fn songs_json(
     floor: f64,
     rows: &[DetectionRow],
     names: &birdnet_core::i18n::NameLocalizer,
+    slots: &super::viz::kit::SpeciesSlots,
 ) -> Value {
     let mut tally: HashMap<&str, (usize, &str)> = HashMap::new();
     for r in rows {
@@ -67,18 +71,17 @@ pub(super) fn songs_json(
         .map(|(com, (n, sci))| (com, n, sci))
         .collect();
     ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(b.0)));
-    let index_of: HashMap<&str, usize> = ranked
+    let keyed: Vec<&(&str, usize, &str)> = ranked
         .iter()
-        .take(NAMED)
         .enumerate()
-        .map(|(i, r)| (r.0, i))
+        .filter(|&(i, r)| i < NAMED || slots.slot(r.0).is_some())
+        .map(|(_, r)| r)
         .collect();
+    let index_of: HashMap<&str, usize> = keyed.iter().enumerate().map(|(i, r)| (r.0, i)).collect();
 
-    let mut species: Vec<Value> = ranked
+    let mut species: Vec<Value> = keyed
         .iter()
-        .take(NAMED)
-        .enumerate()
-        .map(|(i, (com, _, sci))| json!({ "name": names.name(sci, com), "slot": i + 1 }))
+        .map(|(com, _, sci)| json!({ "name": names.name(sci, com), "slot": slots.number(com) }))
         .collect();
     let mut other_used = false;
     let songs: Vec<Value> = rows
@@ -90,7 +93,7 @@ pub(super) fn songs_json(
                 .copied()
                 .unwrap_or_else(|| {
                     other_used = true;
-                    NAMED.min(ranked.len())
+                    keyed.len()
                 });
             Some(json!({
                 "t": t,
@@ -106,7 +109,7 @@ pub(super) fn songs_json(
         })
         .collect();
     if other_used {
-        species.push(json!({ "name": "Other species", "slot": 0 }));
+        species.push(json!({ "name": "Other species", "slot": 0, "other": true }));
     }
     json!({
         "date": date,
@@ -124,6 +127,8 @@ pub(super) async fn today_songs(State(state): State<AppState>) -> impl IntoRespo
     let names_state = state.clone();
     let day = today.clone();
     let result = tokio::task::spawn_blocking(move || {
+        // Each bird in the colour it owns on the station, as on every other chart.
+        let slots = super::viz::kit::station_slots(&state)?;
         state.with_read_db(|conn| {
             let by = name_search::todays_filter(&day, None, TodayFilter::All, state.names());
             let rows = birdnet_db::sqlite::search_detections(conn, &by, MAX_SONGS, 0)?;
@@ -138,15 +143,23 @@ pub(super) async fn today_songs(State(state): State<AppState>) -> impl IntoRespo
                     dusk,
                 }
             });
-            Ok::<_, birdnet_db::sqlite::DbError>((rows, floor, sun, total))
+            Ok::<_, birdnet_db::sqlite::DbError>((rows, floor, sun, total, slots))
         })
     })
     .await;
     match result {
-        Ok(Ok((rows, floor, sun, total))) => {
+        Ok(Ok((rows, floor, sun, total, slots))) => {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             let now = (super::now_hour_local() * 3600.0).clamp(0.0, 86_399.0) as u32;
-            let mut body = songs_json(&today, Some(now), sun, floor, &rows, names_state.names());
+            let mut body = songs_json(
+                &today,
+                Some(now),
+                sun,
+                floor,
+                &rows,
+                names_state.names(),
+                &slots,
+            );
             // When the day holds more songs than one answer carries, say how many it holds, so the
             // picture and its summary can say they show part of it.
             if i64::try_from(rows.len()).is_ok_and(|n| total > n) {
@@ -198,6 +211,15 @@ mod tests {
         }
     }
 
+    /// The station's colours as if its most heard species were Bird 0, Bird 1, …: the order the
+    /// tests below were written for, when a species' colour was its rank in the day.
+    fn owners(n: usize) -> crate::routes::pages::viz::kit::SpeciesSlots {
+        let names: Vec<String> = (0..n).map(|i| format!("Bird {i}")).collect();
+        crate::routes::pages::viz::kit::SpeciesSlots::new(
+            names.iter().map(|b| (b.as_str(), "", b.as_str())),
+        )
+    }
+
     fn english() -> birdnet_core::i18n::NameLocalizer {
         birdnet_core::i18n::NameLocalizer::english()
     }
@@ -222,13 +244,22 @@ mod tests {
                 rows.push(row(&format!("Bird {i}"), &format!("06:{k:02}:00"), 0.9));
             }
         }
-        let v = songs_json("2026-10-31", Some(40_000), None, 0.7, &rows, &english());
+        let v = songs_json(
+            "2026-10-31",
+            Some(40_000),
+            None,
+            0.7,
+            &rows,
+            &english(),
+            &owners(9),
+        );
         let sp = v["species"].as_array().expect("species");
         assert_eq!(sp.len(), 9, "eight named and one band for the rest");
         assert_eq!(sp[0]["name"], "Bird 0");
         assert_eq!(sp[0]["slot"], 1);
         assert_eq!(sp[8]["name"], "Other species");
         assert_eq!(sp[8]["slot"], 0);
+        assert_eq!(sp[8]["other"], true);
         let songs = v["songs"].as_array().expect("songs");
         assert_eq!(songs.len(), rows.len());
         let in_other = songs.iter().filter(|s| s["s"] == 8).count();
@@ -239,7 +270,7 @@ mod tests {
             .filter(|r| r.com_name != "Bird 8")
             .cloned()
             .collect();
-        let v = songs_json("2026-10-31", None, None, 0.7, &few, &english());
+        let v = songs_json("2026-10-31", None, None, 0.7, &few, &english(), &owners(9));
         assert_eq!(v["species"].as_array().map(Vec::len), Some(8));
     }
 
@@ -251,7 +282,7 @@ mod tests {
             row("Blue Jay", "garbage", 0.9),
             row("Blue Jay", "08:14:00", 0.87),
         ];
-        let v = songs_json("2026-10-31", None, None, 0.7, &rows, &english());
+        let v = songs_json("2026-10-31", None, None, 0.7, &rows, &english(), &owners(9));
         assert_eq!(v["songs"].as_array().map(Vec::len), Some(1));
         assert!(v["sun"].is_null());
         assert!(v["nowSec"].is_null());
@@ -273,6 +304,7 @@ mod tests {
             0.7,
             &rows,
             &english(),
+            &owners(9),
         );
         assert_eq!(with["sun"]["rise"], 6.5);
         assert!(with["sun"]["dusk"].is_null());

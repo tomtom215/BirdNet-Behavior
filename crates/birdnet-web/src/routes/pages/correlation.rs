@@ -71,7 +71,7 @@ pub(super) fn content() -> String {
         help: &super::help::help_link(super::help::Topic::Analytics),
         title: "Who sings with <em>whom</em>",
         lead: "Species joined by a ribbon are often heard in the same five-minute block.",
-        lede: "A wider, darker ribbon means the two birds share more of their time. Point at a name to see only its ribbons. It's correlation, not cause: they may just share the same good morning.",
+        lede: "A wider ribbon, in a stronger colour, means the two birds share more of their time. Point at a name to see only its ribbons. It's correlation, not cause: they may just share the same good morning.",
         aside: ranges,
     });
     CORRELATION_CONTENT.replace("{{page_head}}", &head)
@@ -176,10 +176,12 @@ fn compute_cooccurrence_matrix(state: &AppState, days: u32) -> Option<String> {
     let pairs = state
         .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 120, MIN_SHARED_BLOCKS))
         .ok()?;
+    let slots = super::viz::kit::station_slots_for(state, "co-occurrence ladder")?;
     Some(super::viz::cooccurrence_matrix(&build_graph(
         &pairs,
         MAX_SPECIES,
         state.names(),
+        slots,
     )))
 }
 
@@ -206,7 +208,8 @@ fn compute_acoustic_network(state: &AppState, days: u32, links: usize) -> Option
     if pairs.is_empty() {
         return Some(super::empty_states::no_co_signal());
     }
-    let graph = build_graph(&pairs, MAX_SPECIES, state.names());
+    let slots = super::viz::kit::station_slots_for(state, "co-occurrence chord")?;
+    let graph = build_graph(&pairs, MAX_SPECIES, state.names(), slots);
     Some(super::viz::co_figure(
         &graph,
         links,
@@ -232,8 +235,8 @@ async fn acoustic_network_partial(
 
 /// Reduce co-occurrence pairs to the graph over the `max_species` most connected species.
 ///
-/// Species are ranked by the sum of the overlap they take part in, busiest first, and that
-/// rank is their colour slot in every picture. Strength is the pair's overlap scaled to the
+/// Species are ranked by the sum of the overlap they take part in, busiest first; each is
+/// drawn in the colour it owns on the station (`slots`), the same in every picture. Strength is the pair's overlap scaled to the
 /// strongest pair among those species, so the pictures read as a relative picture; the
 /// overlap as measured and the blocks behind it travel along, because a reading must say
 /// "38 % of the blocks either was heard in", not "0.71 of the strongest".
@@ -241,6 +244,7 @@ fn build_graph(
     pairs: &[birdnet_db::sqlite::SpeciesPair],
     max_species: usize,
     names: &birdnet_core::i18n::NameLocalizer,
+    slots: super::viz::kit::SpeciesSlots,
 ) -> super::viz::CoGraph {
     use std::collections::HashMap;
 
@@ -281,6 +285,7 @@ fn build_graph(
             .iter()
             .map(|l| names.name_of_stored(l).to_owned())
             .collect(),
+        slots,
         strength,
         share,
         blocks,
@@ -394,19 +399,25 @@ fn render_companion_table(
             .to_string();
     }
 
-    let max_days = companions.iter().map(|c| c.shared_days).max().unwrap_or(1);
-
-    let mut html = String::from(
-        r"<table>
+    // Ranked by the share of their days the two have in common, not by how many: the commonest
+    // residents share most of anyone's days and were every species' first companion (UIC-04).
+    // The bar is that share itself, not a length relative to the first row.
+    let trigger = companions
+        .first()
+        .map_or("", |c| names.name_of_stored(&c.trigger));
+    let mut html = format!(
+        r#"<p class="co-hint">Ranked by the share of their days the two have in common: the days both were heard, out of the days either was. So a bird heard every day is not first merely for being common: it shares all of {who}'s days, and many more besides.</p>
+<table>
 <thead>
   <tr>
-    <th>Companion Species</th>
-    <th>Days heard together</th>
+    <th>Companion species</th>
+    <th>Heard on the same day</th>
     <th>How sure (average)</th>
-    <th>Against the most</th>
+    <th>Share of their days</th>
   </tr>
 </thead>
-<tbody>",
+<tbody>"#,
+        who = escape_html(trigger),
     );
 
     for c in companions {
@@ -417,7 +428,7 @@ fn render_companion_table(
             clippy::cast_possible_wrap,
             clippy::cast_lossless
         )]
-        let bar_pct = (c.shared_days as f64 / max_days as f64 * 100.0).round() as u64;
+        let share_pct = (c.overlap.clamp(0.0, 1.0) * 100.0).round() as u64;
         #[allow(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
@@ -434,17 +445,29 @@ fn render_companion_table(
   <td>{days}</td>
   <td>{conf}%</td>
   <td>
-    <div class="bar" data-style="width:{bar_pct}%;min-width:4px;"></div>
+    {share_pct}%<div class="bar" data-style="width:{share_pct}%;min-width:4px;"></div>
   </td>
 </tr>"#,
             name = escape_html(names.name_of_stored(&c.companion)),
-            days = c.shared_days,
+            days = companion_days_text(c, trigger),
             conf = conf_pct,
         );
     }
 
     html.push_str("</tbody></table>");
     html
+}
+
+/// "8 of the Nutcracker's 10 days": the shared days, out of the trigger's, in the station's
+/// language and escaped.
+pub(super) fn companion_days_text(c: &birdnet_db::sqlite::FollowOn, trigger_shown: &str) -> String {
+    format!(
+        "{} of the {}’s {} day{}",
+        c.shared_days,
+        escape_html(trigger_shown),
+        c.trigger_days,
+        if c.trigger_days == 1 { "" } else { "s" }
+    )
 }
 
 /// Pre-compute and cache the default 30-day co-occurrence fragments so the
@@ -527,7 +550,12 @@ mod tests {
             pair("Wren", "Jay", 6, 0.12),
             pair("Jay", "Owl", 3, 0.05),
         ];
-        let g = build_graph(&pairs, 3, &birdnet_core::i18n::NameLocalizer::english());
+        let g = build_graph(
+            &pairs,
+            3,
+            &birdnet_core::i18n::NameLocalizer::english(),
+            crate::routes::pages::viz::kit::SpeciesSlots::default(),
+        );
         // Robin (0.90) and Wren (0.72) and Jay (0.47) are the three most connected; Owl is cut.
         assert_eq!(g.names, vec!["Robin", "Wren", "Jay"]);
         assert!(
@@ -567,7 +595,12 @@ mod tests {
         ];
         // X and Y (0.45 each) are less connected in total than A (0.70), B (0.60), C (0.50)
         // and are cut at three, though their pair is stronger than A-B.
-        let g = build_graph(&pairs, 3, &birdnet_core::i18n::NameLocalizer::english());
+        let g = build_graph(
+            &pairs,
+            3,
+            &birdnet_core::i18n::NameLocalizer::english(),
+            crate::routes::pages::viz::kit::SpeciesSlots::default(),
+        );
         assert_eq!(g.names, vec!["A", "B", "C"]);
         assert!((g.strength[0][1] - 1.0).abs() < 1e-12, "{:?}", g.strength);
     }
@@ -591,11 +624,23 @@ mod tests {
             trigger: "Robin".into(),
             companion: "Blue Tit".into(),
             shared_days: 8,
+            trigger_days: 10,
+            companion_days: 12,
+            overlap: 8.0 / 14.0,
             avg_confidence: 0.85,
         }];
         let html =
             render_companion_table(&companions, &birdnet_core::i18n::NameLocalizer::english());
         assert!(html.contains("Blue Tit"));
         assert!(html.contains("85%"));
+        // UIC-04: what the rank is made of, said in words: the shared days out of the trigger's,
+        // and the share (8 of the 14 days either was heard), not a length relative to the top row.
+        assert!(html.contains("8 of the Robin’s 10 days"), "{html}");
+        assert!(
+            html.contains("57%<div class=\"bar\" data-style=\"width:57%"),
+            "{html}"
+        );
+        assert!(html.contains("<th>Share of their days</th>"), "{html}");
+        assert!(!html.contains("Against the most"), "{html}");
     }
 }

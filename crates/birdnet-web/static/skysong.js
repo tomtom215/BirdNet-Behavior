@@ -225,6 +225,10 @@ export function moonHour(sun, minHours) {
  * The feed as the picture uses it, or null when it is not a feed. Defensive: a song whose time or
  * sureness is not a number is dropped, a species index out of range falls to "Other species", at
  * most `MAX_SONGS` songs are read. Parallel typed arrays, so 2,000 songs cost four arrays.
+ *
+ * A species' `slot` is the colour it owns on the station (1 to 8, the same on every chart), or 0
+ * for the neutral; a named species can be neutral. The band of everyone else is the entry marked
+ * `other: true`, which is what "Other species" means here, not its slot.
  */
 export function parseFeed(json) {
   if (!json || typeof json !== "object" || json.error || !Array.isArray(json.songs)) return null;
@@ -234,9 +238,9 @@ export function parseFeed(json) {
     if (!sp || typeof sp.name !== "string") continue;
     const slot = Number.isInteger(sp.slot) && sp.slot >= 1 && sp.slot <= SLOTS ? sp.slot : 0;
     const n = Number(sp.n);
-    species.push({ name: sp.name.slice(0, 160), slot, n: Number.isFinite(n) && n >= 0 ? n : null });
+    species.push({ name: sp.name.slice(0, 160), slot, other: sp.other === true, n: Number.isFinite(n) && n >= 0 ? n : null });
   }
-  let other = species.findIndex((s) => s.slot === 0);
+  let other = species.findIndex((s) => s.other);
   const raw = json.songs.length > MAX_SONGS ? json.songs.slice(0, MAX_SONGS) : json.songs;
   const t = [];
   const c = [];
@@ -250,7 +254,7 @@ export function parseFeed(json) {
     let si = Number.isInteger(song.s) ? song.s : -1;
     if (si < 0 || si >= species.length) {
       if (other < 0) {
-        species.push({ name: "Other species", slot: 0, n: null });
+        species.push({ name: "Other species", slot: 0, other: true, n: null });
         other = species.length - 1;
       }
       si = other;
@@ -269,7 +273,7 @@ export function parseFeed(json) {
     nowSec: json.nowSec === null || json.nowSec === undefined || !Number.isFinite(Number(json.nowSec)) ? null : clamp(Number(json.nowSec), 0, DAY - 1),
     sun: cleanSun(json.sun),
     floor,
-    species: species.map((sp, i) => ({ name: sp.name, slot: sp.slot, n: sp.n !== null && sp.n >= counts[i] ? sp.n : counts[i] })),
+    species: species.map((sp, i) => ({ name: sp.name, slot: sp.slot, other: sp.other, n: sp.n !== null && sp.n >= counts[i] ? sp.n : counts[i] })),
     n: t.length,
     t: Float64Array.from(t),
     c: Float64Array.from(c),
@@ -313,7 +317,7 @@ export function timeOrder(m) {
  * species the less sure first, so the surest song of a crowd is on top.
  */
 export function paintOrder(m) {
-  const rank = (i) => (m.species[m.s[i]] && m.species[m.s[i]].slot === 0 ? -1 : m.s[i]);
+  const rank = (i) => (m.species[m.s[i]] && m.species[m.s[i]].other ? -1 : m.s[i]);
   const idx = new Int32Array(m.n);
   for (let i = 0; i < m.n; i++) idx[i] = i;
   return idx.sort((a, b) => rank(a) - rank(b) || m.c[a] - m.c[b] || m.t[a] - m.t[b] || a - b);
@@ -355,7 +359,7 @@ export function summarize(m, opts = {}) {
   let kinds = 0;
   let hasOther = false;
   for (const si of seen) {
-    if (m.species[si] && m.species[si].slot === 0) hasOther = true;
+    if (m.species[si] && m.species[si].other) hasOther = true;
     else kinds += 1;
   }
   let speciesText;

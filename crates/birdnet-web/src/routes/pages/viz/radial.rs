@@ -37,7 +37,7 @@ use std::f64::consts::{PI, TAU};
 use std::fmt::Write as _;
 
 use super::cograph::{CoGraph, Link, chord_order, share_step};
-use super::kit::{slot_class, text_width, tip};
+use super::kit::{text_width, tip};
 use super::{EMPTY, svg_a11y};
 use crate::routes::pages::escape_html;
 
@@ -274,7 +274,7 @@ pub fn chord_diagram(g: &CoGraph, max_links: usize) -> String {
     svg.push_str(&svg_a11y(
         "Acoustic co-occurrence network",
         &format!(
-            "{} species on a ring joined by the {} strongest links; a wider, darker ribbon joins two species that were heard together in the same five-minute block more of the time. The strongest is {} with {}.",
+            "{} species on a ring joined by the {} strongest links; a wider ribbon, in a stronger colour, joins two species that were heard together in the same five-minute block more of the time. The strongest is {} with {}.",
             nodes.len(),
             links.len(),
             g.names[links[0].a],
@@ -388,7 +388,7 @@ pub fn chord_diagram(g: &CoGraph, max_links: usize) -> String {
             )
             .collect::<Vec<_>>()
             .join(" ");
-        let slot = slot_class(i);
+        let slot = g.class(i);
 
         let band = arc_band_path(cx, cy, RING, RING + ARC, node.a0 + 0.004, node.a1 - 0.004);
         let _ = write!(
@@ -441,6 +441,7 @@ mod tests {
             s[b][a] = v;
         }
         CoGraph {
+            slots: crate::routes::pages::viz::kit::SpeciesSlots::default(),
             names: (0..n).map(|i| format!("Species {i}")).collect(),
             share: s
                 .iter()
