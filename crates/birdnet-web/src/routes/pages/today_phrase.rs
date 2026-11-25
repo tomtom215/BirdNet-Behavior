@@ -126,7 +126,13 @@ fn baseline_counts(
     rows.collect()
 }
 
-/// The hero's two lines, from today's numbers and the baseline.
+/// The line under the heading, as an out-of-band swap of `#today-sub` (`today.html`).
+fn sub_line(inner: &str) -> String {
+    format!(r#"<div class="bnb-meta td-sub" id="today-sub" hx-swap-oob="true">{inner}</div>"#)
+}
+
+/// The hero's two lines, from today's numbers and the baseline: the sentence that goes inside
+/// Today's static `<h1>`, then the line under it, out of band.
 fn phrase_html(count: i64, species: i64, baseline: &[i64], time_phrase: &str) -> String {
     let counts = format!(
         r#"<span class="mono tabular">{count}</span> detections ·
@@ -134,28 +140,23 @@ fn phrase_html(count: i64, species: i64, baseline: &[i64], time_phrase: &str) ->
     );
     if baseline.len() < MIN_BASELINE_DAYS {
         return format!(
-            r#"<h1 class="display td-h1">
-Getting to know your <em class="tp-c-moss-ink">yard</em>.
-</h1>
-<p class="bnb-meta td-sub">
-  {counts} so far today · after a week of listening, each day is compared with the ones before it ({days} so far).
-</p>"#,
-            days = baseline.len(),
+            r#"Getting to know your <em class="tp-c-moss-ink">yard</em>.{}"#,
+            sub_line(&format!(
+                "{counts} so far today · after a week of listening, each day is compared with the ones before it ({days} so far).",
+                days = baseline.len(),
+            )),
         );
     }
     let pct = percentile(baseline, count);
     let (verb, color) = tier_for(pct);
     format!(
-        r#"<h1 class="display td-h1">
-A <em class="tp-c-{color}">{verb}</em> {time_phrase}.
-</h1>
-<p class="bnb-meta td-sub">
-  {counts} ·
-  {pct_str} for this time of day, over your last {days} days.
-</p>"#,
+        r#"A <em class="tp-c-{color}">{verb}</em> {time_phrase}.{sub}"#,
         verb = escape_html(verb),
-        pct_str = percentile_phrase(pct),
-        days = baseline.len(),
+        sub = sub_line(&format!(
+            "{counts} · {pct_str} for this time of day, over your last {days} days.",
+            pct_str = percentile_phrase(pct),
+            days = baseline.len(),
+        )),
     )
 }
 
@@ -164,11 +165,8 @@ A <em class="tp-c-{color}">{verb}</em> {time_phrase}.
 /// nothing about.
 fn static_fallback() -> String {
     format!(
-        r#"<h1 class="display td-h1">
-Today at the station.
-</h1>
-{}"#,
-        super::error_states::inline("today's summary")
+        "Today at the station.{}",
+        sub_line(&super::error_states::inline("today's summary"))
     )
 }
 
@@ -260,6 +258,32 @@ mod tests {
             ]
         );
         assert_eq!(percentile_phrase(0.21), "21st percentile");
+    }
+
+    /// Today's `<h1>` was inside the region that is swapped every five minutes, so the page's
+    /// heading was a different node after each poll, in a `div` named by `aria-label` (UIC-13).
+    /// The heading is static in `today.html` now and every answer of this partial is the
+    /// sentence inside it, with the line under it swapped beside it out of band.
+    #[test]
+    fn what_is_swapped_is_the_sentence_and_never_the_heading() {
+        let answers = [
+            phrase_html(12, 3, &[], "morning"),
+            phrase_html(55, 3, &[10, 20, 30, 40, 50, 60, 70], "morning"),
+            static_fallback(),
+        ];
+        for html in &answers {
+            assert!(
+                !html.contains("<h1"),
+                "the partial carries a heading: {html}"
+            );
+            assert!(
+                html.contains(r#"id="today-sub" hx-swap-oob="true""#),
+                "the line under the heading is not swapped beside it: {html}"
+            );
+        }
+        // Counterpart: the sentence itself is still there, outside the out-of-band line.
+        let sentence = answers[1].split("<div").next().unwrap_or_default();
+        assert!(sentence.contains("morning."), "{}", answers[1]);
     }
 
     #[test]

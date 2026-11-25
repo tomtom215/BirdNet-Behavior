@@ -3036,7 +3036,6 @@ details.bnb-add-form[open] .bnb-add-form__plus { transform: rotate(45deg); }
   position: absolute; left: 0; top: 0; bottom: 0;
   border-radius: var(--r-xs);
 }
-.bnb-mvr-bar.model > .fill { background: var(--moss); }
 .bnb-mvr-bar.human > .fill { background: var(--moss-ink); }
 
 .bnb-mvr-bar > .label {
@@ -3455,7 +3454,6 @@ body:has(.bnb-tabbar) main { padding-bottom: 84px; }
 .q-sci         { color: var(--fg-3); font-style: italic; }
 .q-conf-pct    { font-size: var(--fs-md); color: var(--fg-3); }
 .q-mvr-list    { list-style: none; padding: 0; margin: 0; }
-.q-mvr-link    { color: inherit; text-decoration: none; }
 
 /* ── Accounts & audit-log pages (/admin/accounts, /admin/audit) — O-25 ────
    Faithful extraction of the inline shapes accounts.rs used to build. */
@@ -3860,6 +3858,8 @@ a.spp-inherit    { color: inherit; }
 .occ-facts div { display: flex; flex-direction: column; gap: var(--space-2); }
 .occ-facts dt { font-size: var(--fs-xs); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--fg-3); }
 .occ-facts dd { margin: 0; font-variant-numeric: tabular-nums; font-size: var(--fs-lg); }
+/* The way from "Held back" to the Always allowed list, for whoever can change it (UIR-37). */
+.occ-allow { margin: var(--space-10) 0 0; }
 .occ-count { margin: 0; }
 /* Name and number a column apart read as two lists; columns keep each pair
    together and use the width a desktop has. */
@@ -3974,7 +3974,6 @@ a.spp-inherit    { color: inherit; }
 .rp-stat { padding: var(--space-18) var(--space-20); border-right: var(--bw) solid var(--hairline); }
 .rp-stat .v { font-family: var(--font-display); font-size: 40px; line-height: 1; letter-spacing: var(--track-display); }
 .rp-stat .v.moss { color: var(--moss-ink); }
-.rp-stat .v.rare { color: var(--rare); }
 .rp-stat .l { font-size: var(--fs-sm); color: var(--fg-3); margin-top: 7px; }
 .rp-stat .d { font-size: var(--fs-xs); color: var(--fg-4); margin-top: 3px; font-family: var(--font-mono); }
 .rp-h3 { font-family: var(--font-display); font-size: var(--fs-title); font-weight: var(--fw-regular); margin: var(--space-28) 0 var(--space-12); }
@@ -5459,6 +5458,7 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 .st-uptime span.up { background: var(--moss); }
 .st-uptime span.down { background: var(--rare); }
 .st-uptime span.out { background: var(--surface-2); }
+.st-uptime-cap { margin: var(--space-4) 0 0; font-size: var(--fs-xs); color: var(--fg-3); }
 .st-source-retry { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--dawn-ink); margin-top: var(--space-8); }
 .st-source.stalled .st-source-retry { color: var(--rare); }
 
@@ -5653,14 +5653,6 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
    The one screen that is a *query builder* rather than a report, so the form
    is the page furniture and the results are the content. Tokens only — no
    literal colours — so both themes come out of the same rules. */
-.sr-head        { margin-bottom: 1.25rem; }
-/* Renamed from `.sr-h1`. The rare-bird share permalink (`share_rare.html`)
-   defines its own `.sr-h1` at 64px earlier in this sheet; equal specificity,
-   later wins, so this 24px rule was silently shrinking the hero headline of the
-   one page in the product that strangers see. The two `sr-` families are
-   unrelated — share vs. search — and `sr-h1` was their only collision. */
-.sr-title       { font-size: 1.5rem; font-weight: var(--fw-bold); margin: 0 0 0.35rem; }
-.sr-lede        { color: var(--text-muted); font-size: var(--fs-base); max-width: 60ch; margin: 0; }
 
 .sr-form        { display: flex; flex-direction: column; gap: 0.75rem;
                   background: var(--surface-2); border: 1px solid var(--border);

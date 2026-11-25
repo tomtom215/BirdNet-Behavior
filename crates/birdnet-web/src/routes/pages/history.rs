@@ -507,14 +507,19 @@ fn render_day_page(
     floor: f64,
 ) -> String {
     let mut html = String::new();
-    let _ = write!(
-        html,
-        r#"<a class="action" href="/reports?tab=history">‹ Back to history</a>
-<div class="bnb-card pad"><div class="section-header"><div><div class="bnb-eyebrow">{weekday}</div><h1 class="sh-h">{date}</h1><div class="bnb-meta">{total} detections · {n} species</div></div></div>"#,
-        weekday = weekday_name(date),
-        date = escape_html(date),
-        n = species.len(),
-    );
+    // The shared head (UIR-27): the day's heading was an `sh-h` inside its first card.
+    let head = super::frame::page_head(&super::frame::Head {
+        eyebrow: &format!("Reports · {}", weekday_name(date)),
+        help: &super::help::help_link(super::help::Topic::Reports),
+        title: &escape_html(date),
+        lead: "",
+        lede: &format!(
+            "{total} detections · {n} species. <a href=\"/reports?tab=history\">‹ Back to history</a>",
+            n = species.len()
+        ),
+        aside: "",
+    });
+    let _ = write!(html, r#"{head}<div class="bnb-card pad">"#);
 
     if total == 0 {
         html.push_str(r#"<p class="bnb-meta">No detections were recorded on this day.</p></div>"#);

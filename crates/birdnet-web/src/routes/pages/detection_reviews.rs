@@ -370,7 +370,7 @@ fn render_status_filter(view: QueueView) -> String {
         };
         let _ = write!(
             out,
-            r##"<a class="{cls}" href="{href}" hx-get="{href}" hx-target="#dr-queue" hx-swap="innerHTML"{aria}>{label}</a>"##
+            r##"<a class="{cls}" href="{href}" hx-get="{href}" hx-target="#dr-queue" hx-swap="innerHTML" data-focus-after-swap="dr-filter-{label}"{aria}>{label}</a>"##
         );
     }
     out.push_str("</nav>");
@@ -399,7 +399,7 @@ fn render_pager(view: QueueView) -> String {
         let href = format!("/pages/detection-reviews-queue?{status_q}offset={prev}");
         let _ = write!(
             out,
-            r##"<a class="bnb-btn ghost" href="{href}" hx-get="{href}" hx-target="#dr-queue" hx-swap="innerHTML">&larr; Newer</a>"##
+            r##"<a class="bnb-btn ghost" href="{href}" hx-get="{href}" hx-target="#dr-queue" hx-swap="innerHTML" data-focus-after-swap="dr-newer">&larr; Newer</a>"##
         );
     }
     let shown_to = (offset + per_page).min(view.matching);
@@ -414,7 +414,7 @@ fn render_pager(view: QueueView) -> String {
         let href = format!("/pages/detection-reviews-queue?{status_q}offset={next}");
         let _ = write!(
             out,
-            r##"<a class="bnb-btn ghost" href="{href}" hx-get="{href}" hx-target="#dr-queue" hx-swap="innerHTML">Older &rarr;</a>"##
+            r##"<a class="bnb-btn ghost" href="{href}" hx-get="{href}" hx-target="#dr-queue" hx-swap="innerHTML" data-focus-after-swap="dr-older">Older &rarr;</a>"##
         );
     }
     out.push_str("</nav>");

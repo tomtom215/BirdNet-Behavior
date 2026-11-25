@@ -269,20 +269,35 @@
       });
 
       var FOCUSABLE = 'button, a[href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-      var focused = null, parent = null, className = '';
+      var focused = null, parent = null, className = '', key = null;
       document.body.addEventListener('htmx:beforeSwap', function () {
         focused = document.activeElement;
         parent = focused ? focused.parentElement : null;
         className = focused && focused.classList.length ? '.' + focused.classList[focused.classList.length - 1] : '';
+        key = focused && focused.getAttribute ? focused.getAttribute('data-focus-after-swap') : null;
       });
-      document.body.addEventListener('htmx:afterSettle', function () {
-        if (!focused || focused === document.body || focused.isConnected || !parent || !parent.isConnected) return;
-        // Prefer the element that took the old one's place (a fresh "Show
-        // more" button), else the last focusable thing now in its container.
-        var next = className ? parent.querySelector(className + ':is(' + FOCUSABLE + ')') : null;
-        if (!next) { var all = parent.querySelectorAll(FOCUSABLE); next = all.length ? all[all.length - 1] : null; }
+      document.body.addEventListener('htmx:afterSettle', function (evt) {
+        if (!focused || focused === document.body || focused.isConnected) return;
+        var next = null;
+        if (parent && parent.isConnected) {
+          // Prefer the element that took the old one's place (a fresh "Show
+          // more" button), else the last focusable thing now in its container.
+          next = className ? parent.querySelector(className + ':is(' + FOCUSABLE + ')') : null;
+          if (!next) { var all = parent.querySelectorAll(FOCUSABLE); next = all.length ? all[all.length - 1] : null; }
+        } else if (key !== null) {
+          // The control's own container was replaced (a pager or filter inside the
+          // region it reloads), so focus fell to <body> (UIC-29). The new content
+          // names where it goes: the control with the same key, else the first
+          // one that has a key at all.
+          var root = (evt.detail && evt.detail.target) || document;
+          var marked = root.querySelectorAll('[data-focus-after-swap]');
+          for (var i = 0; i < marked.length && !next; i++) {
+            if (marked[i].getAttribute('data-focus-after-swap') === key) next = marked[i];
+          }
+          if (!next && marked.length) next = marked[0];
+        }
         if (next) next.focus();
-        focused = null; parent = null; className = '';
+        focused = null; parent = null; className = ''; key = null;
       });
     })();
     </script>

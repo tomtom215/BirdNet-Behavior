@@ -25,27 +25,32 @@
         {{scientific_name}}
       </p>
 
-      <!-- Residency / first-seen / quick-facts pills — fed by /pages/species-status -->
+      <!-- Everything from here to the end of the body is for a species the station has heard;
+           one it has no record of gets the unheard panel instead (UIR-26). -->
+      <!--heard-->
+      <!-- What the tiles below do not say: the range filter's "held back" link, from
+           /pages/species-status. The count and dates are the tiles' alone (UIR-24). -->
       <div id="species-status" class="pill-row"
            hx-get="/pages/species-status?name={{species_encoded}}"
            hx-trigger="load"
-           hx-swap="innerHTML"
-           aria-live="polite"
-           aria-label="Species status">
+           hx-swap="innerHTML">
         {{skel_species_status}}
       </div>
 
+      <!-- The Patterns tabs take no species (`?tab=` only), so these go to this bird's own
+           cards on this page, which is where its rhythm and companions are drawn. -->
       <div class="sd-actions">
         <a class="bnb-btn primary" href="/search?species={{species_encoded}}">
           All its detections →
         </a>
-        <a class="bnb-btn" href="/patterns">
+        <a class="bnb-btn" href="#sd-rhythm">
           When it's active
         </a>
-        <a class="bnb-btn" href="/patterns?tab=together">
-          Who it sings with
+        <a class="bnb-btn" href="#sd-companions">
+          Heard on the same days
         </a>
       </div>
+      <!--/heard-->
     </div>
 
     <!--
@@ -60,13 +65,16 @@
          was here on all three species-detail states, in both themes and sizes (its data said
          the aside's role was null), and a div carries no landmark role. A recording card is not
          content complementary to the page, so no landmark is lost. -->
-    <div class="bnb-card pad species-hero__media"
+    <!--heard--><div class="bnb-card pad species-hero__media"
          hx-get="/pages/species-hero?name={{species_encoded}}"
          hx-trigger="load"
          hx-swap="innerHTML">
       {{skel_hero}}
-    </div>
+    </div><!--/heard-->
   </section>
+
+  {{unheard_panel}}
+  <!--heard-->
 
   <!-- ── Summary stats ──────────────────────────────────────────────── -->
   <div class="stat-row"
@@ -82,10 +90,10 @@
   <div class="grid-2 sd-body">
     <div class="bnb-col wide">
 
-      <div class="bnb-card pad">
+      <div class="bnb-card pad" id="sd-rhythm">
         <div class="section-header">
           <div>
-            <div class="bnb-eyebrow">Circadian</div>
+            <div class="bnb-eyebrow">Daily rhythm</div>
             <h2 class="sh-h">When it's most active</h2>
           </div>
           <span class="bnb-meta">All dates · hour of day</span>
@@ -156,7 +164,7 @@
     <!-- Info rail -->
     <div class="bnb-col wide">
 
-      <div class="bnb-card pad">
+      <div class="bnb-card pad" id="sd-companions">
         <div class="section-header">
           <div>
             <div class="bnb-eyebrow">Companions</div>
@@ -188,6 +196,7 @@
 
     </div>
   </div>
+  <!--/heard-->
 </div>
 
 <style>
@@ -216,6 +225,10 @@
   .sd-actions   { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
   .sd-body      { grid-template-columns: 1.5fr 1fr; }
   .sd-comp-note { margin-bottom: 10px; }
+  .sd-unheard   { max-width: 46rem; }
+  .sd-unheard .occ-why { margin-top: var(--space-8); }
+  /* Links inside its sentences are underlined: told apart from the text by more than colour. */
+  .sd-unheard p a { text-decoration: underline; text-underline-offset: 2px; }
   @media (max-width: 520px) {
     .sd-body { grid-template-columns: 1fr; }
   }

@@ -584,3 +584,179 @@ async fn the_species_list_links_to_the_page() {
         "the Species home must offer the range lookup: it is the only way in"
     );
 }
+
+// ── a species never heard here (UIR-26) ─────────────────────────────────
+
+/// A bird the station has never heard got the whole species page: seven cards, each saying
+/// "Not heard" in its own words, and "All its detections →" for none. It is one panel now,
+/// which says so once and gives the range filter's answer for this week.
+#[tokio::test]
+async fn an_unheard_species_gets_one_panel_with_the_range_answer() {
+    let (_source, _dir, state) = answering();
+    heard(&state, "Pica pica", "Eurasian Magpie");
+    let (status, page) = get(&state, "/species/detail?name=Great%20Horned%20Owl").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(h1_count(&page), 1, "{page}");
+    assert_eq!(page.matches("Not heard here yet").count(), 1, "{page}");
+    assert!(
+        page.contains("the range model gives it 0.4 % here"),
+        "the panel carries the range answer: {page}"
+    );
+    // Asked of the `hx-get`s, not the text: the template's leading comment names every partial.
+    for card in [
+        r#"hx-get="/pages/species-summary"#,
+        r#"hx-get="/pages/species-hourly"#,
+        r#"hx-get="/pages/species-daily"#,
+        r#"hx-get="/pages/species-detections"#,
+        r#"hx-get="/pages/species-companions"#,
+        "All its detections",
+    ] {
+        assert!(
+            !page.contains(card),
+            "an unheard species still draws {card}"
+        );
+    }
+    // Counterpart: a heard species keeps its cards and has no such panel.
+    let (_, magpie) = get(&state, "/species/detail?name=Eurasian%20Magpie").await;
+    assert!(
+        magpie.contains(r#"hx-get="/pages/species-hourly"#),
+        "{magpie}"
+    );
+    assert!(!magpie.contains("Not heard here yet"), "{magpie}");
+}
+
+/// Where the range filter cannot say, the panel says the bird is not heard and claims nothing
+/// about why.
+#[tokio::test]
+async fn an_unheard_species_the_filter_cannot_score_makes_no_claim() {
+    let (_source, _dir, state) = answering();
+    let (_, page) = get(&state, "/species/detail?name=House%20Sparrow").await;
+    assert!(page.contains("Not heard here yet"), "{page}");
+    assert!(!page.contains("range model gives it"), "{page}");
+    let (_dir2, bare) = station(None);
+    let (status, page) = get(&bare, "/species/detail?name=Dickcissel").await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(page.contains("Not heard here yet"), "{page}");
+    assert!(!page.contains("range model gives it"), "{page}");
+}
+
+// ── from "Held back" to the Always allowed list (UIR-37) ────────────────
+
+/// What the link to the Always allowed list looks like for `sci`.
+fn allow_link(sci: &str) -> String {
+    format!(
+        r#"href="/station/capture?allow={}#species""#,
+        sci.replace(' ', "%20")
+    )
+}
+
+/// A station with an admin password, so a visitor is not signed in by default.
+fn locked() -> (tempfile::TempDir, AppState) {
+    let source = Arc::new(FixedOccurrence::answering(template()));
+    let (dir, state) = station(Some(source));
+    let secret = format!("range-test-{}", std::process::id());
+    let hash = birdnet_db::accounts::hash_password(&secret).expect("hash");
+    state.with_db(|conn| {
+        conn.execute(
+            "UPDATE users SET pwd_argon2 = ?1 WHERE username = 'admin'",
+            [&hash],
+        )
+        .expect("admin password");
+    });
+    (dir, state)
+}
+
+async fn get_signed_in(state: &AppState, uri: &str) -> String {
+    let token =
+        birdnet_web::session::issue_token(&birdnet_web::session::generate_session_id(), 60_000);
+    let res = birdnet_web::server::build_router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri(uri)
+                .header(
+                    axum::http::header::COOKIE,
+                    format!("{}={token}", birdnet_web::session::COOKIE_NAME),
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router responds");
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 22)
+        .await
+        .expect("body");
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// The answer named the Always allowed list and stopped there. Whoever can change the list is
+/// given a link to it with the bird filled in: a link and not a one-click change, so the
+/// change is made on the page that says what it does.
+#[tokio::test]
+async fn a_bird_held_back_by_range_links_whoever_can_change_the_list_to_it() {
+    let (_dir, state) = locked();
+    let uri = "/species/occurrence?week=22&q=great+horned";
+    let (_, visitor) = get(&state, uri).await;
+    assert!(visitor.contains("Held back: the range model"), "{visitor}");
+    assert!(
+        !visitor.contains("/station/capture?allow="),
+        "a visitor is offered a list they cannot change: {visitor}"
+    );
+    let owner = get_signed_in(&state, uri).await;
+    assert!(owner.contains(&allow_link("Bubo virginianus")), "{owner}");
+    // A form posting the change would make it in one click from a sentence.
+    assert!(!owner.contains("/admin/species/whitelist/add"), "{owner}");
+
+    // Only where the list is the answer: an admitted bird, and one the lists keep out (the
+    // Always allowed list does not override them), are offered nothing.
+    for q in ["magpie", "barn+owl"] {
+        let page = get_signed_in(&state, &format!("/species/occurrence?week=22&q={q}")).await;
+        assert!(!page.contains("/station/capture?allow="), "{q}: {page}");
+    }
+    // The unheard species panel gives the same link.
+    let page = get_signed_in(&state, "/species/detail?name=Great%20Horned%20Owl").await;
+    assert!(page.contains(&allow_link("Bubo virginianus")), "{page}");
+}
+
+/// A station with no password lets anyone on its network change the list, so its owner, who
+/// never signs in, is offered the link too.
+#[tokio::test]
+async fn an_open_station_offers_the_link_without_a_sign_in() {
+    let (_source, _dir, state) = answering();
+    let (_, page) = get(&state, "/species/occurrence?week=22&q=great+horned").await;
+    assert!(page.contains(&allow_link("Bubo virginianus")), "{page}");
+}
+
+/// The Capture tab fills the Always allowed field from the link, and only that field, and only
+/// with something that is a bird's name.
+#[tokio::test]
+async fn the_capture_tab_fills_the_always_allowed_field_from_the_link() {
+    let (_source, _dir, state) = answering();
+    let (status, page) = get(&state, "/station/capture?allow=Bubo%20virginianus").await;
+    assert_eq!(status, StatusCode::OK);
+    let whitelist = page
+        .split(r#"hx-post="/admin/species/whitelist/add""#)
+        .nth(1)
+        .and_then(|s| s.split("</form>").next())
+        .unwrap_or_default();
+    assert!(
+        whitelist.contains(r#"value="Bubo virginianus""#),
+        "the Always allowed field is not filled: {whitelist}"
+    );
+    assert_eq!(
+        page.matches(r#"value="Bubo virginianus""#).count(),
+        1,
+        "only the Always allowed field is filled"
+    );
+    // Something that is not a name is not put anywhere, as text or as markup.
+    let (status, page) = get(
+        &state,
+        "/station/capture?allow=%22%3E%3Czq-p%3EBubo%20virginianus",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!page.contains("<zq-p>"), "a tag came back");
+    assert!(
+        !page.contains("Bubo virginianus"),
+        "a refused value was printed"
+    );
+}
