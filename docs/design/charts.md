@@ -114,6 +114,20 @@ The arithmetic is `birdnet_behavioral::interval::wilson` (shares) and the existi
 `phenology::abundance::poisson_interval_exact` (rates), each tested against values worked by
 hand.
 
+## Reporting frequency (species page)
+
+"In which weeks can I expect this bird?" (`routes/pages/species_reporting.rs`, CHT-16). For each
+of 48 parts of the year (four a month: days 1–7, 8–14, 15–21, 22 to the end), the share of the
+station's *listened* days on which the species was heard at least once, pooled over years. A
+listened day is a date the `recording_effort` ledger credits with at least half the typical day
+(the trend queries' `EFFORT_FLOOR_SHARE` and typical day); a date the ledger does not cover is
+left out of both sides, and the days heard on such dates are counted in the Method panel. Four
+states, four marks: a share (dot and interval), too few to say (ring), not listening (the hatch
+of honesty rule 3), and, for the whole figure, "never heard" or "no ledger" as a sentence with
+no picture. Drawn at 700 units for a card and 360 for a phone. The reading above it names the
+part whose interval's lower bound is highest, not the highest dot. It lives on the species page
+because the question is about one bird; a figure comparing many species belongs on Patterns.
+
 ## Choosing the form
 
 * *Totals by hour of the day* are a comparison of magnitudes: columns on a common

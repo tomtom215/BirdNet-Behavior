@@ -54,6 +54,7 @@ pub mod recordings;
 pub mod search;
 pub(crate) mod skeletons;
 pub mod species_pages;
+pub(crate) mod species_reporting;
 pub mod station_health;
 pub(crate) mod station_issues;
 pub mod terrain;
@@ -144,6 +145,7 @@ pub fn router() -> Router<AppState> {
         .merge(detection_reviews::router())
         .merge(detection_comments::router())
         .merge(species_pages::router())
+        .merge(species_reporting::router())
         .merge(occurrence_page::router())
         .merge(behavioral::router())
         .merge(timeseries_dash::router())
