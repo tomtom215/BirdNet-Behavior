@@ -49,9 +49,9 @@ A saved clip is longer than the window it was detected in (see `EXTRACTION_LENGT
 Retention is **disk-based by default**, with an optional age limit on top:
 
 - **Keep Clip Audio (days)** (`BIRDNET_CLIP_RETENTION_DAYS`, `--clip-retention-days`, default `0` = keep for ever) reclaims the audio of detections older than N days.
-- The disk manager purges the **oldest** recordings once the disk crosses `DISK_PURGE_THRESHOLD` (default **95%**, in `birdnet.conf`).
+- Once the disk crosses `DISK_PURGE_THRESHOLD` (default **95%**, in `birdnet.conf`), the disk manager deletes a tenth of the clips at each pass, taken from the species with the most clips first, the lowest-confidence clip of that species first and then the oldest, and never taking a species below `PURGE_SPECIES_FLOOR` clips (default 5). With `FULL_DISK=keep` it stops recording instead and deletes nothing.
 - At most `BIRDNET_MAX_FILES_PER_SPECIES` (`--max-files-per-species`, default `0` = unlimited) clips are kept per species.
-- **Locked** clips are *never* purged — lock anything you want to keep permanently from the [Today](../guide/today.md) page or a species' recordings.
+- **Locked** clips are *never* purged — lock anything you want to keep permanently from the [Today](../guide/today.md) page or a species' recordings. (Except on a station whose `--watch-dir` is its recordings directory, which neither installer sets up: see [Backups & Recovery](./backups.md#storage--retention).)
 - The clip of a detection someone has confirmed, rejected or commented on is kept by all three limits as a locked one is, unless `BIRDNET_RETAIN_REVIEWED_AUDIO=false` (`--retain-reviewed-audio false`).
 - A disk over the threshold whose purge finds only clips it keeps is reported, not purged: the `purge-nothing-deletable` health condition and the `birdnet_purge_nothing_deletable` metric say so until there is something it may delete. Unlock clips, lower `PURGE_SPECIES_FLOOR`, set `BIRDNET_RETAIN_REVIEWED_AUDIO=false`, or move other data off the disk.
 
