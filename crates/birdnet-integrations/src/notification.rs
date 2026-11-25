@@ -846,7 +846,7 @@ mod tests {
     fn an_unrecognised_trigger_falls_back_to_the_default_not_each() {
         let default = TriggerMode::parse(birdnet_core::config::DEFAULT_NOTIFY_TRIGGER);
         assert_eq!(default, TriggerMode::NewSpecies);
-        for raw in ["unknown", "nwe-species", "bogus,worse", "eahc", ""] {
+        for raw in ["unknown", "nw-species", "bogus,worse", "eech", ""] {
             assert_eq!(TriggerMode::parse(raw), default, "{raw:?}");
         }
     }

@@ -1876,7 +1876,7 @@ mod tests {
         assert!(f.message.contains("the rest are used"), "{}", f.message);
 
         // N14-01: all unknown runs on the default, and the finding says which.
-        let cfg = Config::parse("APPRISE_TRIGGER=nwe-species").unwrap();
+        let cfg = Config::parse("APPRISE_TRIGGER=nw-species").unwrap();
         let findings = validate(&cfg);
         let f = findings
             .iter()

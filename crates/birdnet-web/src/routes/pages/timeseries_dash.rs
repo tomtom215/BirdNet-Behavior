@@ -424,7 +424,9 @@ fn render_diversity_table(
             .enumerate()
             .map(|(i, d)| {
                 reported.contains(d.as_str())
-                    && ledger.as_ref().is_none_or(|l| l.get(i).copied().unwrap_or(true))
+                    && ledger
+                        .as_ref()
+                        .is_none_or(|l| l.get(i).copied().unwrap_or(true))
             })
             .collect::<Vec<bool>>()
     });
@@ -660,7 +662,7 @@ mod tests {
         let all_listened = |dates: &[String]| Some(vec![true; dates.len()]);
         let html = super::render_diversity_table(&rows, Some("2026-10-08"), &all_listened);
         assert!(html.contains("The station was not listening"), "{html}");
-        assert!(html.contains("&quot;Wed 7 Oct&quot;,[null,"), "{html}");
+        assert!(html.contains("&quot;Wed 7 Oct&quot;,[null]"), "{html}");
 
         // Counterpart: a listened day that heard nothing is a row with zero
         // species, and is drawn as the zero it is.
@@ -672,7 +674,7 @@ mod tests {
         ];
         let html = super::render_diversity_table(&rows, Some("2026-10-08"), &all_listened);
         assert!(!html.contains("The station was not listening"), "{html}");
-        assert!(html.contains("&quot;Wed 7 Oct&quot;,[0"), "{html}");
+        assert!(html.contains("&quot;Wed 7 Oct&quot;,[0.0]"), "{html}");
 
         // And with no ledger at all the query returns every day, so nothing
         // is marked.

@@ -506,7 +506,7 @@ mod tests {
     fn a_misspelt_trigger_runs_on_the_default_not_every_detection() {
         use birdnet_integrations::notification::TriggerMode;
         let mut cli = default_cli();
-        cli.notify_trigger = "nwe-species".to_owned();
+        cli.notify_trigger = "nw-species".to_owned();
         assert_eq!(
             create_notification_filter(&cli, None).trigger,
             TriggerMode::NewSpecies
@@ -525,10 +525,10 @@ mod tests {
     fn a_trigger_word_that_is_no_rule_is_reported() {
         use super::trigger_unknown_notice;
         use birdnet_integrations::notification::TriggerMode;
-        let notice = trigger_unknown_notice("nwe-species", &TriggerMode::parse("nwe-species"))
+        let notice = trigger_unknown_notice("nw-species", &TriggerMode::parse("nw-species"))
             .expect("a typo is reported");
         assert!(
-            notice.contains("nwe-species") && notice.contains("sent on: new-species"),
+            notice.contains("nw-species") && notice.contains("sent on: new-species"),
             "{notice}"
         );
         for word in ["each", "new-species,new-species-daily", "off", ""] {

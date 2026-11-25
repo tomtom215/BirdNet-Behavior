@@ -154,15 +154,18 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   decision first: whether a probe that can never answer is "unchecked" or simply "not
   applicable here", and how the API says which.
 
-## TD-9 A relabelled detection leaves its comments under the old name
+## TD-9 A relabelled detection's comments follow it (decided by a batch, not by the maintainer)
 
-* **Where:** `crates/birdnet-db/src/detection_comments.rs` (`list` selects by date, time, species
-  and clip). Comments now name one detection by its clip (migration 62), so two sources' detections
-  of one second have their own threads; what remains is relabelling.
-* **What it does:** a comment names its detection's species, and nothing moves it when the
-  detection's `Sci_Name` changes, so the relabelled detection's thread is empty and the old thread
-  is on no detection's page (the API still lists it by the old name). Reviews handle the same case with a trigger
-  (`detections_relabel_detaches_review`, migration 59).
-* **Evidence:** read at the place above; not reproduced with a test. **PLAUSIBLE**.
-* **Why it is open:** a comment is about what was heard, and whether it should follow the new name,
-  stay as history, or be shown on both is a decision about meaning, not a key change.
+* **Where:** `crates/birdnet-db/src/migration.rs`, migration 65 (`detections_relabel_carries_comments`),
+  and `crates/birdnet-db/src/detection_comments.rs`.
+* **What it does now:** since `0f4bf36` (MSC-22 of the 2026-11 audit) a comment moves with its detection
+  when the detection's `Sci_Name` changes, so the relabelled detection's page shows its thread. Before, the
+  thread stayed under the old name and was on no detection's page. Gate:
+  `a_comment_follows_its_detection_through_a_relabel`, seen failing first.
+* **Why it is still listed:** this entry used to say that whether a comment follows the new name, stays as
+  history, or is shown on both "is a decision about meaning, not a key change". The batch of 2026-11-24
+  took the first option without that decision. Reviews do the opposite on a relabel
+  (`detections_relabel_detaches_review`, migration 59). To reverse it, drop the migration-65 trigger in a
+  new migration.
+* **What remains:** a comment with no clip (`file_name` NULL, written before migration 62) is not moved,
+  and a moved comment does not record the species it was written under.
