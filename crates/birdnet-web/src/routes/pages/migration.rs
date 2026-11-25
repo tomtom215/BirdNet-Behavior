@@ -504,13 +504,14 @@ fn onset_sql(from: &str, to: &str) -> String {
     )
 }
 
-/// The chart column `week` (0-based) of `year` as a reader says it: "late Sep (week 39)"
-/// (UIR-23). A column is named by the day in its middle, the fourth of its seven (the last
+/// The chart column `week` (0-based) of `year` as a reader says it, "late Sep", and its
+/// 1-based number, 39: the tile prints "late Sep" over "week 39" (UIR-23). A column is named by the day in its middle, the fourth of its seven (the last
 /// column's eight or nine days by the middle one, rounded down): the 1st to the 10th of a
 /// month is early, the 11th to the 20th mid, from the 21st late. The number is the column's
 /// own, as the ridgeline's axis and key count them, so there is never a week 53.
-fn week_words(year: i32, week: usize) -> String {
-    let (first, last) = ridge::week_days(year, week.min(ridge::WEEKS - 1));
+fn week_words(year: i32, week: usize) -> (String, usize) {
+    let week = week.min(ridge::WEEKS - 1);
+    let (first, last) = ridge::week_days(year, week);
     let middle = u64::from((first + last) / 2);
     let jan1 = crate::routes::pages::date_to_epoch_days(&format!("{year}-01-01"));
     let (_, m, d) = crate::routes::pages::days_to_date(jan1 + middle - 1);
@@ -520,7 +521,7 @@ fn week_words(year: i32, week: usize) -> String {
         _ => "late",
     };
     let month = super::viz::kit::MONTHS[(m as usize).clamp(1, 12) - 1];
-    format!("{part} {month} (week {})", week.min(ridge::WEEKS - 1) + 1)
+    (format!("{part} {month}"), week + 1)
 }
 
 /// The four KPI tiles, as of the local date `today`.
@@ -668,9 +669,9 @@ fn stats_fragment(
     let peak_html = peak.map_or_else(
         || r#"<span class="value mig-peak-val">—</span><span class="bnb-meta mono">no detections yet</span>"#.to_string(),
         |(wk, n)| {
+            let (when, number) = week_words(year, usize::try_from(wk).unwrap_or(0));
             format!(
-                r#"<span class="value mig-peak-val">{w}</span><span class="bnb-meta mono">{n} species</span>"#,
-                w = week_words(year, usize::try_from(wk).unwrap_or(0))
+                r#"<span class="value mig-peak-val">{when}</span><span class="bnb-meta mono">week {number} · {n} species</span>"#
             )
         },
     );
@@ -1077,7 +1078,7 @@ mod tests {
         )
         .expect("tiles");
         assert!(
-            html.contains(">late Dec (week 52)<"),
+            html.contains(">late Dec<") && html.contains(">week 52 · 3 species<"),
             "the peak week is off the chart: {html}"
         );
         assert_eq!(week_of_year("2026-12-31"), 51);
@@ -1501,23 +1502,24 @@ mod tests {
     /// of 2026 has middle 60 = 1 Mar, "early Mar (week 9)".
     #[test]
     fn the_peak_week_is_a_date_a_reader_says() {
-        for (date, words) in [
-            ("2026-09-27", "late Sep (week 39)"),
-            ("2026-01-01", "early Jan (week 1)"),
-            ("2024-12-31", "late Dec (week 52)"),
-            ("2024-02-29", "late Feb (week 9)"),
-            ("2026-03-01", "early Mar (week 9)"),
-            ("2026-05-14", "mid May (week 20)"),
+        for (date, when, week) in [
+            ("2026-09-27", "late Sep", 39),
+            ("2026-01-01", "early Jan", 1),
+            ("2024-12-31", "late Dec", 52),
+            ("2024-02-29", "late Feb", 9),
+            ("2026-03-01", "early Mar", 9),
+            ("2026-05-14", "mid May", 20),
         ] {
             let conn = station(&[("Song Sparrow", date)]);
             let html = stats_fragment(&conn, date, &english()).expect("tiles");
             assert!(
                 html.contains(&format!(
-                    r#"<span class="value mig-peak-val">{words}</span>"#
+                    r#"<span class="value mig-peak-val">{when}</span><span class="bnb-meta mono">week {week} · 1 species</span>"#
                 )),
                 "{date}: {html}"
             );
-            assert!(!html.contains(">w"), "{date}: {html}");
+            // The old label, `w39`, is gone.
+            assert!(!html.contains(&format!(">w{week}<")), "{date}: {html}");
         }
     }
 
