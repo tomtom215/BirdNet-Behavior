@@ -25,7 +25,12 @@ The UI has six homes — the tabs along the top (and the phone bottom bar):
 
 ## First-run wizard
 
-You do not need a terminal, a config file or a command-line flag to get a new station detecting. Open **`/onboarding`** (a fresh station is sent there automatically the first time you open the dashboard) and answer a seven-step wizard — about two minutes:
+You do not need a terminal, a config file or a command-line flag to get a new station detecting. Open **`/onboarding`** and answer a seven-step wizard — about two minutes. Whether the dashboard takes you there by itself depends on how the station was set up:
+
+- **No location yet** — a Docker run without `BIRDNET_LATITUDE`/`BIRDNET_LONGITUDE`, or an install where the location question was skipped or never asked (a non-interactive install). While the station has no detection, no location and no finished wizard, opening the dashboard sends you to `/onboarding`.
+- **The installer recorded a location** (you answered its latitude/longitude question). The station counts as set up: the dashboard opens on **Today**, which shows a setup checklist (location, model, microphone, admin password) until the first detection. The wizard is still at `/onboarding` if you want to walk through the rest of it.
+
+The seven steps:
 
 1. **Welcome** — on a station with no admin password (a Docker run without `CADDY_PWD`, say) this step asks you to choose one, and the browser that finishes setup is signed in with it. If the installer generated a password for you, you are asked to sign in first and then land on the wizard.
 2. **Model** — the bird-identifying model is a download of about 54 MB that the program does not ship. This step says whether it is installed; if not, one button downloads and checks it, with a progress bar. A download that fails says why and can be retried.
