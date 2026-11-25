@@ -715,7 +715,7 @@
    "phase": 2,
    "source": "03-precision-accuracy.md:154",
    "status": "done",
-   "evidence": "a4904f7, 81a2806, and the integration commit that removed birdnet-db's second Wilson function: the panel shows the confirmed share of reviewed detections with a 95% Wilson interval, ranks only species with 20 or more verdicts (by the top of the interval), and no longer compares mean confidence with a confirmation rate. Gate the_review_share_panel_ranks_no_noise.rs red on the old panel."
+   "evidence": "a4904f7, 81a2806 and 295cf5a, which removed birdnet-db's second Wilson function: the panel shows the confirmed share of reviewed detections with a 95% Wilson interval, ranks only species with 20 or more verdicts (by the top of the interval), and no longer compares mean confidence with a confirmation rate. Gate the_review_share_panel_ranks_no_noise.rs red on the old panel."
   },
   {
    "id": "ACC-08",
