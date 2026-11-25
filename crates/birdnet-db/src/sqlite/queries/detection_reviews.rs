@@ -227,12 +227,17 @@ pub struct ReviewEvent {
     /// history existed, whose reviewer was never stored).
     pub reviewer_name: Option<String>,
     /// The path that wrote it (see [`Reviewer::via`]); `before-history` for a
-    /// verdict copied in by migration 64.
+    /// verdict copied in by migration 64, `relabel` for the event a relabel
+    /// appends (migration 66).
     pub via: String,
     /// The note given with the verdict, if any.
     pub notes: Option<String>,
     /// When, as `datetime('now')` (UTC, whole seconds).
     pub at: String,
+    /// On a `relabel` event, the scientific name the detection had before:
+    /// the events before this one are under that name. `None` on every
+    /// other event.
+    pub relabelled_from: Option<String>,
 }
 
 /// Append one event to the history, inside the caller's transaction.
@@ -694,7 +699,12 @@ pub fn unreviewed_recent_detections(
 /// The history is append-only and is not pruned with the audit log. Its last
 /// event is the detection's current verdict ("the latest wins"): a verdict,
 /// or `None` for a withdrawal, which leaves it unreviewed. Events written
-/// while the detection had another name stay under that name.
+/// while the detection had another name stay under that name, and are listed
+/// here too: a relabel appends an event under the new name naming the old
+/// one (`relabelled_from`, migration 66), and the history follows that link
+/// back to the events written before it. A relabel event carries no verdict,
+/// as a relabel leaves the detection unreviewed (migration 59), so the last
+/// event and the current verdict agree across a relabel as well.
 ///
 /// # Errors
 ///
@@ -703,11 +713,28 @@ pub fn review_history(
     conn: &Connection,
     key: &DetectionKey<'_>,
 ) -> Result<Vec<ReviewEvent>, DbError> {
+    // `names` walks the relabels back: each name the detection had, with the
+    // id of the relabel event that left it (`before`, NULL for the name it
+    // has now). An event belongs to the detection when it is under one of
+    // those names and was written before that name was left. `UNION` and the
+    // id bound end the walk on a detection relabelled back and forth.
     let mut stmt = conn.prepare(
-        "SELECT id, date, time, sci_name, file_name, verdict, reviewer_user_id,
-                reviewer_name, via, notes, at
-           FROM review_events
-          WHERE date = ?1 AND time = ?2 AND sci_name = ?3 AND file_name = COALESCE(?4, '')
+        "WITH RECURSIVE names(sci_name, before) AS (
+             SELECT ?3, NULL
+             UNION
+             SELECT e.relabelled_from, e.id
+               FROM review_events e JOIN names n ON e.sci_name = n.sci_name
+              WHERE e.date = ?1 AND e.time = ?2 AND e.file_name = COALESCE(?4, '')
+                AND e.via = 'relabel' AND e.relabelled_from IS NOT NULL
+                AND (n.before IS NULL OR e.id < n.before)
+         )
+         SELECT id, date, time, sci_name, file_name, verdict, reviewer_user_id,
+                reviewer_name, via, notes, at, relabelled_from
+           FROM review_events e
+          WHERE e.date = ?1 AND e.time = ?2 AND e.file_name = COALESCE(?4, '')
+            AND EXISTS (SELECT 1 FROM names n
+                         WHERE n.sci_name = e.sci_name
+                           AND (n.before IS NULL OR e.id < n.before))
           ORDER BY id",
     )?;
     let rows = stmt
@@ -726,6 +753,7 @@ pub fn review_history(
                     via: row.get(8)?,
                     notes: row.get(9)?,
                     at: row.get(10)?,
+                    relabelled_from: row.get(11)?,
                 })
             },
         )?
