@@ -150,32 +150,64 @@ impl AnalyticsDb {
         let rows = stmt.query_map([], |row| {
             let species: String = row.get(0)?;
             let rates_value: Value = row.get(1)?;
-            let rates_raw: Vec<f64> = match rates_value {
-                Value::List(list) => list
-                    .into_iter()
-                    .map(|v| match v {
-                        Value::Double(f) => f,
-                        _ => 0.0,
-                    })
-                    .collect(),
-                _ => Vec::new(),
-            };
-            let weeks_present: i64 = row.get(2)?;
-            let station_weeks: i64 = row.get(3)?;
-            let span_days: i64 = row.get(4)?;
-            Ok((species, rates_raw, weeks_present, station_weeks, span_days))
+            let eligible_value: Value = row.get(5)?;
+            Ok((
+                species,
+                rates_value,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                eligible_value,
+            ))
         })?;
 
         let count = |n: i64| u32::try_from(n.max(0)).unwrap_or(u32::MAX);
+        // One entry per interval, or the row is malformed. A NULL rate is an
+        // interval with no eligible anchor and stays `None`: it was read as
+        // 0.0 here once, which is the defect this column exists to prevent.
+        let list = |v: Value, what: &str| match v {
+            Value::List(items) if items.len() == params.intervals.len() => Ok(items),
+            other => Err(AnalyticsError::InvalidData(format!(
+                "retention {what}: expected {} values, got {other:?}",
+                params.intervals.len()
+            ))),
+        };
         let mut results = Vec::new();
         for row in rows {
-            let (species, rates_raw, weeks_present, station_weeks, span_days) = row?;
-            let retention_rates: Vec<types::RetentionRate> = params
+            let (species, rates_value, weeks_present, station_weeks, span_days, eligible_value) =
+                row?;
+            let rates = list(rates_value, "rates")?;
+            let eligible = list(eligible_value, "eligible anchors")?;
+            let retention_rates = params
                 .intervals
                 .iter()
-                .zip(rates_raw.iter())
-                .map(|(&days, &rate)| types::RetentionRate { days, rate })
-                .collect();
+                .zip(rates)
+                .zip(eligible)
+                .map(|((&days, rate), eligible)| {
+                    let rate = match rate {
+                        Value::Double(f) => Some(f),
+                        Value::Null => None,
+                        other => {
+                            return Err(AnalyticsError::InvalidData(format!(
+                                "retention rate at {days} d: {other:?}"
+                            )));
+                        }
+                    };
+                    let eligible = match eligible {
+                        Value::BigInt(n) => count(n),
+                        other => {
+                            return Err(AnalyticsError::InvalidData(format!(
+                                "eligible anchors at {days} d: {other:?}"
+                            )));
+                        }
+                    };
+                    Ok(types::RetentionRate {
+                        days,
+                        rate,
+                        eligible,
+                    })
+                })
+                .collect::<Result<Vec<_>, AnalyticsError>>()?;
             let (weeks_present, station_weeks) = (count(weeks_present), count(station_weeks));
             results.push(types::SpeciesRetention {
                 species,

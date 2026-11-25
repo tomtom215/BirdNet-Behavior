@@ -30,7 +30,7 @@
 use std::fmt::Write as _;
 
 use super::cograph::{CoGraph, chord_order, share_step};
-use super::kit::{slot_class, text_width, tip};
+use super::kit::{text_width, tip};
 use super::radial::{chord_diagram, pct};
 use super::{EMPTY, svg_a11y};
 use crate::routes::pages::escape_html;
@@ -88,7 +88,7 @@ pub fn cooccurrence_matrix(g: &CoGraph) -> String {
     svg.push_str(&svg_a11y(
         "Species co-occurrence matrix",
         &format!(
-            "A staircase of {} species pairs; a darker cell means those two species were detected in the same five-minute block more of the time. Each name stands at the foot of its own step: read across a row to its name and up a column to the other.",
+            "A staircase of {} species pairs; a stronger colour means those two species were detected in the same five-minute block more of the time. Each name stands at the foot of its own step: read across a row to its name and up a column to the other.",
             links.len()
         ),
     ));
@@ -142,7 +142,7 @@ pub fn cooccurrence_matrix(g: &CoGraph) -> String {
         let _ = write!(
             svg,
             r#"<circle class="{slot} ck-fill" cx="{cxd:.1}" cy="{y:.1}" r="3.5"/><text class="ladder-name" x="{x2:.1}" y="{y:.1}" dominant-baseline="central">{name}</text>"#,
-            slot = slot_class(i),
+            slot = g.class(i),
             cxd = p as f64 * CELL + 2.0,
             x2 = x + 6.0,
             name = escape_html(&names[i]),
@@ -197,7 +197,7 @@ pub fn legend(g: &CoGraph, shown: usize, available: usize) -> String {
         let _ = write!(steps, r#"<i class="ck-sw ck-q{k}"></i>"#);
     }
     format!(
-        r#"<div class="co-legend"><div class="ck-scale"><span class="ck-steps" aria-hidden="true">{steps}</span><span class="bnb-meta">A ribbon joins two species heard in the same five-minute block. Wider and darker means they share more of their time: {lo} to {hi} of the blocks either was heard in.</span></div><p class="bnb-meta ck-scale-note">An arc is as long as the ribbons that end on it. Showing the {shown} strongest of {available} links.</p></div>"#,
+        r#"<div class="co-legend"><div class="ck-scale"><span class="ck-steps" aria-hidden="true">{steps}</span><span class="bnb-meta">A ribbon joins two species heard in the same five-minute block. Wider, and in a stronger colour, means they share more of their time: {lo} to {hi} of the blocks either was heard in.</span></div><p class="bnb-meta ck-scale-note">An arc is as long as the ribbons that end on it. Showing the {shown} strongest of {available} links.</p></div>"#,
         lo = pct(weakest),
         hi = pct(strongest),
         shown = links.len().min(shown),
@@ -277,6 +277,7 @@ mod tests {
             s[b][a] = v;
         }
         CoGraph {
+            slots: crate::routes::pages::viz::kit::SpeciesSlots::default(),
             names: (0..n).map(|i| format!("Species {i}")).collect(),
             share: s
                 .iter()

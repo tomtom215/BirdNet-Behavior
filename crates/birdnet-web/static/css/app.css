@@ -848,13 +848,16 @@ a.bnb-pill:hover { text-decoration: none; background: var(--bg-2); }
 .bnb-dotgrid { background-image: radial-gradient(circle at center, var(--border) 0.7px, transparent 0.8px); background-size: 18px 18px; }
 
 /* Sparkline. The rules, not the SVG's presentation attributes, set the colour
-   (a stylesheet rule always beats an attribute), so this is where it is the
-   chart palette's first slot. The dot at the end sits on the box's edge. */
+   (a stylesheet rule always beats an attribute): --c, which the sparkline sets to
+   its species' colour on the station (viz::kit::SpeciesSlots), the neutral for a
+   species that owns none, and the palette's first slot when it names none. It was
+   --chart-1 on every row, which made every species' sparkline the colour of the
+   station's most heard bird. The dot at the end sits on the box's edge. */
 .bnb-spark { overflow: visible; }
-.bnb-spark .line  { stroke: var(--chart-1); stroke-width: var(--chart-stroke); stroke-linecap: round; stroke-linejoin: round; fill: none; }
-.bnb-spark .area  { fill: var(--chart-1); opacity: 0.12; }
-.bnb-spark .pt    { fill: var(--chart-1); }
-.bnb-spark .end   { fill: var(--chart-1); stroke: var(--chart-gap); stroke-width: 1.5px; }
+.bnb-spark .line  { stroke: var(--c, var(--chart-1)); stroke-width: var(--chart-stroke); stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.bnb-spark .area  { fill: var(--c, var(--chart-1)); opacity: 0.12; }
+.bnb-spark .pt    { fill: var(--c, var(--chart-1)); }
+.bnb-spark .end   { fill: var(--c, var(--chart-1)); stroke: var(--chart-gap); stroke-width: 1.5px; }
 .bnb-spark .floor { stroke: var(--hairline); stroke-width: 1; fill: none; }
 
 /* Time-of-day heat ramp (dawn hue) */
@@ -7036,3 +7039,27 @@ input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
 @media (prefers-reduced-motion: reduce) { .ss-chip, .ss-sw { transition: none; } }
 :root[data-motion="reduced"] .ss-chip, :root[data-motion="reduced"] .ss-sw { transition: none; }
 /* /skysong */
+
+/* ── Lane G (batch 2): uncertainty marks and the reporting-frequency figure ─────────
+   The marks of `viz/uncertainty.rs` (CHT-23), the retention table's "of n" line
+   (CHT-11) and the species page's reporting-frequency figure (`species_reporting.rs`,
+   CHT-16). One block, appended; nothing above it is changed. Colours are chart tokens
+   only, so the theme chooses every value. */
+/* The interval: a quiet bar behind its estimate (a pale moss in light, a deep one in dark). */
+.ck-ci  { fill: var(--seq-moss-2); }
+/* The estimate: the moss dot, ringed in the card's colour so it stands off its interval. */
+.ck-est { fill: var(--moss); stroke: var(--chart-gap); stroke-width: 1px; vector-effect: non-scaling-stroke; }
+/* Too few to say: a hollow ring in axis ink, no fill, so it cannot be read as a value. */
+.ck-few { fill: none; stroke: var(--chart-axis); stroke-width: 1.25px; vector-effect: non-scaling-stroke; }
+.ck-unc-key { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-12); margin-top: var(--space-8); }
+.ck-unc-key + .ck-unc-key { margin-top: var(--space-4); }
+.ck-unc-item { display: inline-flex; align-items: center; }
+.ck-unc-sw { display: inline-block; width: 10px; height: 10px; margin-right: var(--space-6); vertical-align: -1px; flex: none; }
+.ck-unc-sw-est { border-radius: 50%; background: var(--moss); }
+.ck-unc-sw-ci  { width: 6px; height: 14px; border-radius: var(--r-2xs); background: var(--seq-moss-2); vertical-align: -3px; }
+.ck-unc-sw-few { border-radius: 50%; border: 1.25px solid var(--chart-axis); }
+.ck-unc-sw-off { background: repeating-linear-gradient(45deg, var(--chart-grid-strong) 0 2px, transparent 2px 5px); border: 1px solid var(--chart-grid-strong); }
+/* The retention table: the number of days a share is of, on its own line in the cell. */
+.rt-table td.rt-cell .rt-n { display: block; font-size: var(--fs-2xs); line-height: 1.2; }
+.rt-table td.rt-cell { white-space: nowrap; }
+/* /Lane G */

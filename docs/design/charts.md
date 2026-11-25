@@ -32,7 +32,9 @@ These are the reason the charts are not simply "prettier". Each one is held by a
    A day that has not happened yet is "Not yet", which is a third thing.
 4. **Thickness is the real total.** A streamgraph shows the eight busiest species as
    bands and **every other species as one more band**, so a day's total thickness is
-   that day's detections and not "the top eight's".
+   that day's detections and not "the top eight's". (A band's colour is its species' on
+   the station, so two neutral bands can sit side by side; the seam between them and the
+   legend keep them two.)
 5. **A second measure gets its own axis.** Temperature is a labelled strip beneath
    Today's hour bars, never a second scale on the same plot (a dual axis invents a
    correlation).
@@ -47,6 +49,24 @@ These are the reason the charts are not simply "prettier". Each one is held by a
 9. **Text never wears a series colour.** The mark carries the identity; the label stays
    in `--chart-label` or `--chart-annot`. (A label set on a band uses `--fg` with a
    `--chart-gap` halo.)
+10. **A share or a rate is drawn with its n and its interval, or not drawn.** The interval
+   is the Wilson score interval for a share and the exact Poisson interval for a rate
+   (`viz::uncertainty::Interval`); below `uncertainty::TOO_FEW_BELOW` (three) trials the
+   value is not drawn at all and the figure says "too few to say" with the count. Where the
+   trials are not independent (the retention table's anchor days are consecutive days of one
+   bird's stay), the n is printed and no interval is drawn, and the Method panel says why.
+   The reporting-frequency figure sits between the two: its listened days are neighbours in
+   the calendar and so alike, but one day's result does not decide the next as an anchor's
+   does, and pooling years adds trials that are a year apart. Its interval is drawn, and its
+   Method panel says the bar is a lower limit on the uncertainty. An interval that allows
+   for the likeness (by year, or by an effective n) is not written yet.
+   Held for the reporting-frequency figure and the retention table by their tests; the
+   other figures that print a share do not follow it yet (CHT-23).
+11. **Words do not name a lightness.** Every sequential ramp runs dark-to-light on paper
+   and light-to-dark in the dark theme, so "darker squares were busier" tells half the
+   readers to read the chart backwards. Chart copy says "a stronger colour"
+   (`chart_copy_does_not_say_darker_means_more.rs`, with a named list of the uses that are
+   true in both themes).
 
 ## The vocabulary beyond the bar
 
@@ -65,7 +85,8 @@ a promise a test holds.
   column's height is the true value; the seams only mark the steps. A day chart draws them only on bars at
   least 8 units wide: across ninety thin bars they would be a texture, not a tally.
 * **Who a column is made of** (`bars::Stack`). Today's hour columns are stacked by species: the day's eight
-  most heard each in their own chart colour from the baseline up in a fixed order, and everyone else as one
+  most heard, each in the colour it owns on the station (the neutral if it owns none), from the baseline up in
+  a fixed order, and everyone else as one
   "Other species" band whose height is the hour's total minus the named species. A column is exactly as tall
   as the hour's count (honesty rule 4); the bands add up to it. The key names each colour and says what a
   notch is.
@@ -85,6 +106,41 @@ a promise a test holds.
   units for a card and 360 for a phone (the same pair the daily chart uses), and the phone's rail carries bare
   times.
 
+## Uncertainty and "too few to say"
+
+`viz/uncertainty.rs` holds the one rule and the three marks every figure that draws a share or
+a rate uses, so they look and read the same everywhere.
+
+* **The interval** (`uncertainty::whisker`, `.ck-ci`): a quiet bar from the lower to the upper
+  bound, behind the estimate, in `--seq-moss-2`; a zero-width interval is still a visible cap.
+  The **estimate** (`uncertainty::estimate`, `.ck-est`) is a `--moss` dot ringed in the card's
+  colour. Both carry the mark's `data-ck-i`, and what they say is in the mark's `data-tip`
+  and the table, in the words `uncertainty::interval_words` writes ("95% interval 16% to 75%").
+* **Too few to say** (`uncertainty::too_few`, `few_mark`, `.ck-few`): fewer than three trials.
+  A hollow ring in axis ink, set in a strip under the plot's baseline, on no scale, so it is
+  never read as a zero; the tooltip and the table say "2 listened days: too few to say". Three
+  because the Wilson interval of 0 of 2 reaches 66 % and that of 2 of 2 falls to 34 %: one or
+  two trials are consistent with anything.
+* **The key** (`uncertainty::key`) names the three states under every figure that draws them.
+
+The arithmetic is `birdnet_behavioral::interval::wilson` (shares) and the existing
+`phenology::abundance::poisson_interval_exact` (rates), each tested against values worked by
+hand.
+
+## Reporting frequency (species page)
+
+"In which weeks can I expect this bird?" (`routes/pages/species_reporting.rs`, CHT-16). For each
+of 48 parts of the year (four a month: days 1–7, 8–14, 15–21, 22 to the end), the share of the
+station's *listened* days on which the species was heard at least once, pooled over years. A
+listened day is a date the `recording_effort` ledger credits with at least half the typical day
+(the trend queries' `EFFORT_FLOOR_SHARE` and typical day); a date the ledger does not cover is
+left out of both sides, and the days heard on such dates are counted in the Method panel. Four
+states, four marks: a share (dot and interval), too few to say (ring), not listening (the hatch
+of honesty rule 3), and, for the whole figure, "never heard" or "no ledger" as a sentence with
+no picture. Drawn at 700 units for a card and 360 for a phone. The reading above it names the
+part whose interval's lower bound is highest, not the highest dot. It lives on the species page
+because the question is about one bird; a figure comparing many species belongs on Patterns.
+
 ## Choosing the form
 
 * *Totals by hour of the day* are a comparison of magnitudes: columns on a common
@@ -98,8 +154,18 @@ a promise a test holds.
 * *Who is singing, over time* is a centred stream; *how busy, over time* is a line or
   column chart; *how many kinds, so far* is a rising curve.
 
-Colour follows the job: identity is `--chart-1` .. `--chart-8` in fixed order (a ninth
-series is `--chart-other`, never a generated hue); magnitude is `--seq-*` (or
+Colour follows the job: identity is the **station's**, not the chart's. The eight species
+heard most over the 90 days that end yesterday own `--chart-1` .. `--chart-8` in that order
+(most heard first, ties by name), on every chart; a station with fewer than eight fills its
+free colours from today, after the ones it has. Every other species is `--chart-other`, the
+neutral that already meant "everything else", never a generated hue and never a colour another
+species owns: lending an unused slot to a chart's ninth bird would make "the green one is the
+Robin" false on the next page. The assignment is made in one place (`kit::station_slots`,
+cached, the same all day because its window ends yesterday) and every species chart takes its
+colour from it (`kit::SpeciesSlots`); a figure whose assignment cannot be read says so, or, for
+decoration such as a list's sparklines, draws the neutral. A category that is not a species
+(a season, the dawn and dusk hours, one series) keeps a fixed slot, and
+`tests/a_species_keeps_its_colour_on_every_chart.rs` names each such site. Magnitude is `--seq-*` (or
 `--seq-moss-*`), stepped by the **square root** of the count and spaced so one detection
 and ten are told apart; a state is hatched. The colour key is printed under every heat
 map with the counts its steps start at.

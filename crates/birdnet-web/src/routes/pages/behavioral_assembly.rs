@@ -43,6 +43,9 @@ pub(super) struct Card<'a> {
     pub since: &'a str,
     /// The extension's version, when it reported one.
     pub version: Option<&'a str>,
+    /// The station's species colours: each voice is drawn, and keyed, in the colour its species
+    /// owns on the station, as on every other chart.
+    pub slots: &'a super::viz::kit::SpeciesSlots,
 }
 
 /// The sentence that says what the picture found, or `None` when no second voice ever joined on
@@ -150,7 +153,7 @@ fn table(c: &Chorus) -> String {
 }
 
 /// The voices in the order they join, as a numbered key whose swatches are the riser colours.
-fn legend(shown: &[String]) -> String {
+fn legend(shown: &[String], slots: &super::viz::kit::SpeciesSlots) -> String {
     let mut s =
         String::from(r#"<ol class="as-order" aria-label="The voices, in the order they join">"#);
     for (k, name) in shown.iter().enumerate() {
@@ -158,7 +161,7 @@ fn legend(shown: &[String]) -> String {
             s,
             r#"<li><span class="as-n mono">{n}</span><span class="as-chip {slot}" aria-hidden="true"></span>{name}</li>"#,
             n = k + 1,
-            slot = super::viz::kit::slot_class(k),
+            slot = slots.class(name),
             name = escape_html(name),
         );
     }
@@ -195,8 +198,8 @@ pub(super) fn render(card: &Card<'_>) -> String {
         r#"<p class="bh-after">Your dawn builds in this order: <strong>{order}</strong>.</p>"#
     );
     html.push_str(&frame::takeaway(&headline(&chorus)));
-    html.push_str(&chorus_figure(&chorus, card.shown));
-    html.push_str(&legend(card.shown));
+    html.push_str(&chorus_figure(&chorus, card.shown, card.slots));
+    html.push_str(&legend(card.shown, card.slots));
     let _ = write!(
         html,
         r#"<p class="bnb-meta fig-note">A disc's area is the share of the {n} mornings that had that many voices together, in the order above, within the time allowed. The figures at the right are the share that ever got that far within {last}; the bold line is the typical morning and the shaded band the middle half of mornings.</p>"#,
@@ -270,6 +273,14 @@ mod tests {
         (v.clone(), v)
     }
 
+    /// The station's colours as if its most heard species were these voices, in this order: the
+    /// order the key's test was written for, when a voice's colour was its place in the chorus.
+    fn owners(names: &[String]) -> crate::routes::pages::viz::kit::SpeciesSlots {
+        crate::routes::pages::viz::kit::SpeciesSlots::new(
+            names.iter().map(|n| (n.as_str(), "", n.as_str())),
+        )
+    }
+
     fn chorus(depths: &[&[u32]]) -> Chorus {
         let r: Vec<Vec<u32>> = depths.iter().map(|d| d.to_vec()).collect();
         Chorus::from_depths(&windows(), 3, &r).expect("rows")
@@ -286,6 +297,7 @@ mod tests {
             hours: (4, 8),
             since: "2026-08-02",
             version: Some("0.10.1"),
+            slots: &owners(&shown),
         })
     }
 
@@ -513,6 +525,7 @@ mod tests {
             hours: (4, 8),
             since: "2026-08-02",
             version: None,
+            slots: &owners(&stored),
         });
         assert!(!html.contains("<i>A"), "{html}");
         assert!(html.contains("&lt;i&gt;A&lt;/i&gt;"));

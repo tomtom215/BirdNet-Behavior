@@ -29,16 +29,27 @@ pub struct SpeciesPair {
     pub overlap: f64,
 }
 
-/// Species frequently seen *after* a given species on the same day.
+/// A species heard on the same days as another (the trigger), and how much of their days that is.
+///
+/// "The same day" is the same calendar day, in either order: not *after* the trigger, which an
+/// earlier version of this comment said. The strength is [`overlap`](Self::overlap), the shared
+/// days as a share of the days either was heard, so a resident heard every day is not every
+/// species' first companion merely for being common (UIC-04).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FollowOn {
     /// The trigger species.
     pub trigger: String,
-    /// Species commonly seen on the same day.
+    /// A species heard on at least one of the trigger's days.
     pub companion: String,
-    /// Days on which both appeared.
+    /// Days on which both were heard.
     pub shared_days: i64,
-    /// Average confidence of companion detections.
+    /// Days on which the trigger was heard, in the window.
+    pub trigger_days: i64,
+    /// Days on which the companion was heard, in the window.
+    pub companion_days: i64,
+    /// `shared / (trigger_days + companion_days − shared)`, from 0 to 1 (Jaccard).
+    pub overlap: f64,
+    /// Average confidence of the companion's detections on the shared days.
     pub avg_confidence: f64,
 }
 
@@ -140,7 +151,13 @@ pub fn top_cooccurrence_pairs(
     Ok(pairs)
 }
 
-/// Query species that commonly appear on the same day as `trigger_species`.
+/// The `limit` species heard on the same days as `trigger_species` over the last `days` days,
+/// strongest [`overlap`](FollowOn::overlap) first (then most shared days, then surest, then by
+/// name).
+///
+/// It used to rank by shared days alone, the measure the pair view left for the same reason:
+/// the commonest residents share most of anyone's days, so they were every species' first
+/// "companions" and the answer barely depended on the species asked about.
 ///
 /// # Errors
 ///
@@ -152,37 +169,64 @@ pub fn companion_species(
     limit: usize,
 ) -> Result<Vec<FollowOn>, DbError> {
     let mut stmt = conn.prepare(
-        "WITH trigger_dates AS (
-            SELECT DISTINCT Date FROM detections_analytic
-            WHERE Com_Name = ?1
-              AND Date >= DATE('now', 'localtime', '-' || ?2 || ' days')
+        "WITH win AS (
+            SELECT Date, Com_Name, Confidence FROM detections_analytic
+            WHERE Date >= DATE('now', 'localtime', '-' || ?2 || ' days')
+         ),
+         trigger_dates AS (
+            SELECT DISTINCT Date FROM win WHERE Com_Name = ?1
+         ),
+         days_heard AS (
+            SELECT Com_Name, COUNT(DISTINCT Date) AS n FROM win
+            WHERE Com_Name != ?1
+            GROUP BY Com_Name
+         ),
+         shared AS (
+            SELECT w.Com_Name,
+                   COUNT(DISTINCT w.Date) AS shared_days,
+                   AVG(w.Confidence) AS avg_confidence
+            FROM win w
+            JOIN trigger_dates td ON w.Date = td.Date
+            WHERE w.Com_Name != ?1
+            GROUP BY w.Com_Name
          )
-         SELECT
-            ?1 AS trigger,
-            d.Com_Name AS companion,
-            COUNT(DISTINCT d.Date) AS shared_days,
-            AVG(d.Confidence) AS avg_confidence
-         FROM detections_analytic d
-         JOIN trigger_dates td ON d.Date = td.Date
-         WHERE d.Com_Name != ?1
-         GROUP BY d.Com_Name
-         ORDER BY shared_days DESC, avg_confidence DESC
-         LIMIT ?3",
+         SELECT ?1, s.Com_Name, s.shared_days, (SELECT COUNT(*) FROM trigger_dates), h.n,
+                s.avg_confidence
+         FROM shared s
+         JOIN days_heard h ON h.Com_Name = s.Com_Name",
     )?;
 
-    let limit_i64 = i64::try_from(limit).unwrap_or(i64::MAX);
-
-    let rows = stmt
-        .query_map(params![trigger_species, days, limit_i64], |row| {
+    let mut rows = stmt
+        .query_map(params![trigger_species, days], |row| {
+            let shared_days: i64 = row.get(2)?;
+            let trigger_days: i64 = row.get(3)?;
+            let companion_days: i64 = row.get(4)?;
+            let either = trigger_days + companion_days - shared_days;
+            #[allow(clippy::cast_precision_loss)]
+            let overlap = if either > 0 {
+                shared_days as f64 / either as f64
+            } else {
+                0.0
+            };
             Ok(FollowOn {
                 trigger: row.get(0)?,
                 companion: row.get(1)?,
-                shared_days: row.get(2)?,
-                avg_confidence: row.get(3)?,
+                shared_days,
+                trigger_days,
+                companion_days,
+                overlap,
+                avg_confidence: row.get(5)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
-
+    rows.sort_by(|x, y| {
+        y.overlap
+            .total_cmp(&x.overlap)
+            .then(y.shared_days.cmp(&x.shared_days))
+            .then(y.avg_confidence.total_cmp(&x.avg_confidence))
+            .then_with(|| x.companion.cmp(&y.companion))
+    });
+    rows.truncate(limit);
     Ok(rows)
 }
 
@@ -283,5 +327,87 @@ mod tests {
         assert!(!companions.is_empty());
         assert_eq!(companions[0].companion, "Wren");
         assert_eq!(companions[0].shared_days, 2);
+    }
+
+    /// UIC-04. A companion is ranked by how much of their days the two share, not by how
+    /// many: a resident heard every day shares every one of the trigger's days and is no
+    /// companion for it. Nutcracker heard on ten days; Pine Grosbeak on eight, each one a
+    /// Nutcracker day; House Sparrow on every day of the window.
+    fn nutcracker_fixture() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migration::migrate(&conn).unwrap();
+        let mut rows = Vec::new();
+        for back in 1..=29 {
+            let d = format!("DATE('now', 'localtime', '-{back} days')");
+            rows.push(format!(
+                "({d},'09:00:00','Passer domesticus','House Sparrow',0.9)"
+            ));
+            if back <= 10 {
+                rows.push(format!(
+                    "({d},'07:00:00','Nucifraga caryocatactes','Nutcracker',0.9)"
+                ));
+            }
+            if back <= 8 {
+                rows.push(format!(
+                    "({d},'07:30:00','Pinicola enucleator','Pine Grosbeak',0.9)"
+                ));
+            }
+        }
+        conn.execute_batch(&format!(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) VALUES {};",
+            rows.join(",")
+        ))
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn a_resident_heard_every_day_is_not_the_first_companion() {
+        let conn = nutcracker_fixture();
+        let names: Vec<String> = companion_species(&conn, "Nutcracker", 30, 10)
+            .unwrap()
+            .into_iter()
+            .map(|c| c.companion)
+            .collect();
+        // Counterpart: the resident is still listed, below the true companion.
+        assert_eq!(names, ["Pine Grosbeak", "House Sparrow"]);
+    }
+
+    /// The numbers a page prints beside a companion: "8 of the trigger's 10 days", and the share.
+    #[test]
+    fn a_companion_carries_the_days_behind_its_rank() {
+        let conn = nutcracker_fixture();
+        let c = companion_species(&conn, "Nutcracker", 30, 10).unwrap();
+        let (grosbeak, sparrow) = (&c[0], &c[1]);
+        assert_eq!(
+            (
+                grosbeak.shared_days,
+                grosbeak.trigger_days,
+                grosbeak.companion_days
+            ),
+            (8, 10, 8)
+        );
+        assert!(
+            (grosbeak.overlap - 0.8).abs() < 1e-9,
+            "{}",
+            grosbeak.overlap
+        );
+        assert_eq!(
+            (
+                sparrow.shared_days,
+                sparrow.trigger_days,
+                sparrow.companion_days
+            ),
+            (10, 10, 29)
+        );
+        assert!(
+            (sparrow.overlap - 10.0 / 29.0).abs() < 1e-9,
+            "{}",
+            sparrow.overlap
+        );
+        // The limit still cuts after the ranking, not before it.
+        let one = companion_species(&conn, "Nutcracker", 30, 1).unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].companion, "Pine Grosbeak");
     }
 }

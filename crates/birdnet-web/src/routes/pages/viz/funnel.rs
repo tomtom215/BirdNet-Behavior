@@ -28,7 +28,7 @@
 
 use std::fmt::Write as _;
 
-use super::kit::{slot_class, tip};
+use super::kit::{SpeciesSlots, tip};
 use super::{EMPTY, svg_a11y};
 use crate::routes::pages::escape_html;
 
@@ -256,8 +256,16 @@ pub fn median(v: &mut [u32]) -> Option<u32> {
 /// The running order as a picture. `mornings` are drawn newest first; the first one that
 /// completed every step is the highlighted one. `hours` is the window the run was looked for
 /// in, first and last hour inclusive (`(4, 8)` is 04:00 to 08:59).
+///
+/// Each voice is drawn in the colour its species owns on the station (`slots`), the neutral if
+/// it owns none, so a bird is the same colour here as on every other chart.
 #[must_use]
-pub fn morning_order(voices: &[Voice], mornings: &[Morning], hours: (u32, u32)) -> String {
+pub fn morning_order(
+    voices: &[Voice],
+    mornings: &[Morning],
+    hours: (u32, u32),
+    slots: &SpeciesSlots,
+) -> String {
     let first = voices.first().map_or(0, |v| v.reached);
     if voices.len() < 2 || first == 0 {
         return EMPTY.to_string();
@@ -321,7 +329,7 @@ pub fn morning_order(voices: &[Voice], mornings: &[Morning], hours: (u32, u32)) 
         let _ = write!(
             s,
             r#"<rect class="ck-fill {slot}" x="{PAD_X}" y="{ky:.1}" width="9" height="9" rx="2"/><line class="ck-axis" x1="{PAD_X}" y1="{my:.1}" x2="{xr:.1}" y2="{my:.1}"/>"#,
-            slot = slot_class(k),
+            slot = slots.class(&v.name),
             ky = top + 6.0,
             my = band_mid(k),
             xr = W - PAD_X,
@@ -428,7 +436,7 @@ pub fn morning_order(voices: &[Voice], mornings: &[Morning], hours: (u32, u32)) 
                     (
                         "First heard",
                         &clock(t),
-                        Some(&format!("var(--chart-{})", k.min(7) + 1)),
+                        Some(&slots.colour(&voices[k].name)),
                     ),
                     (
                         "Typical",
@@ -441,7 +449,7 @@ pub fn morning_order(voices: &[Voice], mornings: &[Morning], hours: (u32, u32)) 
             let _ = write!(
                 s,
                 r#"<circle class="mo-dot {slot}{now}" cx="{cx:.1}" cy="{cy:.1}" r="{r}" data-ck-s="m{mi}"/><circle class="ck-hit" cx="{cx:.1}" cy="{cy:.1}" r="9" data-tip="{data_tip}" data-ck-i="{index}" data-ck-f="m{mi}"/>"#,
-                slot = slot_class(k),
+                slot = slots.class(&voices[k].name),
                 now = if is_now { " is-now" } else { "" },
                 r = if is_now { LARGE_DOT } else { SMALL_DOT },
             );
@@ -513,16 +521,25 @@ mod tests {
 
     #[test]
     fn too_few_voices_or_an_empty_first_step_is_the_placeholder() {
-        assert_eq!(morning_order(&[], &[], (4, 8)), EMPTY);
-        assert_eq!(morning_order(&voices()[..1], &[], (4, 8)), EMPTY);
+        assert_eq!(
+            morning_order(&[], &[], (4, 8), &SpeciesSlots::default()),
+            EMPTY
+        );
+        assert_eq!(
+            morning_order(&voices()[..1], &[], (4, 8), &SpeciesSlots::default()),
+            EMPTY
+        );
         let mut v = voices();
         v[0].reached = 0;
-        assert_eq!(morning_order(&v, &[], (4, 8)), EMPTY);
+        assert_eq!(
+            morning_order(&v, &[], (4, 8), &SpeciesSlots::default()),
+            EMPTY
+        );
     }
 
     #[test]
     fn every_lane_says_how_many_mornings_got_that_far() {
-        let svg = morning_order(&voices(), &[], (4, 8));
+        let svg = morning_order(&voices(), &[], (4, 8), &SpeciesSlots::default());
         assert!(
             svg.contains("American Robin")
                 && svg.contains("Song Sparrow")
@@ -544,7 +561,7 @@ mod tests {
             "2026-10-21",
             &[6 * 3600, 7 * 3600 + 1800, 8 * 3600],
         )];
-        let svg = morning_order(&voices(), &m, (4, 8));
+        let svg = morning_order(&voices(), &m, (4, 8), &SpeciesSlots::default());
         let cxs: Vec<f64> = svg
             .split("<circle class=\"mo-dot ")
             .skip(1)
@@ -574,7 +591,7 @@ mod tests {
             morning("2026-10-20", &[6 * 3600, 7 * 3600]),
             morning("2026-10-19", &[6 * 3600]),
         ];
-        let svg = morning_order(&voices(), &m, (4, 8));
+        let svg = morning_order(&voices(), &m, (4, 8), &SpeciesSlots::default());
         assert_eq!(svg.matches("<path class=\"mo-line").count(), 2);
         assert_eq!(svg.matches("<circle class=\"mo-dot").count(), 6);
         assert_eq!(svg.matches("class=\"ck-hit\"").count(), 6);
@@ -598,7 +615,7 @@ mod tests {
                 )
             })
             .collect();
-        let svg = morning_order(&voices(), &many, (4, 8));
+        let svg = morning_order(&voices(), &many, (4, 8), &SpeciesSlots::default());
         assert_eq!(svg.matches("<path class=\"mo-line").count(), LINES);
         assert_eq!(svg.matches("<circle class=\"mo-dot").count(), 150);
     }
@@ -748,7 +765,7 @@ mod tests {
             ms
         };
         let usual = {
-            let svg = morning_order(&v, &build(false), (4, 8));
+            let svg = morning_order(&v, &build(false), (4, 8), &SpeciesSlots::default());
             let now: Vec<_> = drawn_words(&svg)
                 .into_iter()
                 .filter(|(k, _)| k == "mo-now-t")
@@ -756,7 +773,7 @@ mod tests {
             assert_eq!(now.len(), 3);
             now[0].1
         };
-        let svg = morning_order(&v, &build(true), (4, 8));
+        let svg = morning_order(&v, &build(true), (4, 8), &SpeciesSlots::default());
         // The radius the times keep clear of is the radius drawn (3 for a morning, 5 for the
         // highlighted one), not only a number the test and the placement agree on.
         assert!(svg.contains(r#"cx="139.3" cy="#) && svg.contains(r#"r="3" data-ck-s"#));
@@ -791,7 +808,7 @@ mod tests {
             "2026-10-26",
             &[8 * 3600 + 3540, 6 * 3600, 7 * 3600],
         )];
-        let svg = morning_order(&v, &m, (4, 8));
+        let svg = morning_order(&v, &m, (4, 8), &SpeciesSlots::default());
         let heavy: Vec<Seg> = drawn_lines(&svg)
             .into_iter()
             .filter(|(now, _)| *now)
@@ -859,7 +876,7 @@ mod tests {
     #[test]
     fn a_line_still_runs_from_its_first_dot_to_its_last() {
         let (v, m) = a_late_newest_morning();
-        let svg = morning_order(&v, &m, (4, 8));
+        let svg = morning_order(&v, &m, (4, 8), &SpeciesSlots::default());
         let heavy: Vec<Seg> = drawn_lines(&svg)
             .into_iter()
             .filter(|(now, _)| *now)
@@ -1051,7 +1068,7 @@ mod tests {
     #[test]
     fn no_line_runs_through_a_name_a_count_or_a_typical_time() {
         let (v, m) = a_late_newest_morning();
-        let svg = morning_order(&v, &m, (4, 8));
+        let svg = morning_order(&v, &m, (4, 8), &SpeciesSlots::default());
         let lines = drawn_lines(&svg);
         assert!(lines.len() >= 2, "the fixture draws lines: {}", lines.len());
         assert!(
@@ -1110,7 +1127,7 @@ mod tests {
             ),
         ];
         for (what, m) in cases {
-            let svg = morning_order(&v, &m, (4, 8));
+            let svg = morning_order(&v, &m, (4, 8), &SpeciesSlots::default());
             let heavy: Vec<Seg> = drawn_lines(&svg)
                 .into_iter()
                 .filter(|(now, _)| *now)
@@ -1141,7 +1158,7 @@ mod tests {
     /// not a made-up time.
     #[test]
     fn a_voice_without_a_typical_time_has_no_tick() {
-        let svg = morning_order(&voices(), &[], (4, 8));
+        let svg = morning_order(&voices(), &[], (4, 8), &SpeciesSlots::default());
         assert_eq!(svg.matches("class=\"mo-typical\"").count(), 2);
         assert!(svg.contains("06:23") && svg.contains("07:26"));
     }
@@ -1170,7 +1187,7 @@ mod tests {
     fn species_names_are_escaped() {
         let mut v = voices();
         v[0].name = "<script>alert(1)</script>".into();
-        let svg = morning_order(&v, &[], (4, 8));
+        let svg = morning_order(&v, &[], (4, 8), &SpeciesSlots::default());
         assert!(!svg.contains("<script>"));
         assert!(svg.contains("&lt;script&gt;"));
     }

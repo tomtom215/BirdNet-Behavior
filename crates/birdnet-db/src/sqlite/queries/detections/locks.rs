@@ -125,6 +125,61 @@ pub fn locked_file_names(conn: &Connection) -> Result<Vec<String>, DbError> {
     Ok(rows)
 }
 
+/// Whether a detection's clip is kept back from automatic deletion, as an SQL
+/// condition over `detections AS d`.
+///
+/// The clip retention, the per-species cap and the disk-full purge all read
+/// it, so the three agree.
+///
+/// A locked clip is always kept back. With `retain_reviewed` (the
+/// `RETAIN_REVIEWED_AUDIO` setting, on unless turned off) so is the clip of a
+/// detection somebody judged by listening: one with a review verdict, either
+/// way, or a comment (RES-10). That clip is the evidence a second reviewer
+/// needs to check the judgement; without it a confirmed record cannot be
+/// verified again by anyone. A comment whose clip could not be told
+/// (`file_name` NULL, written before comments named a clip) counts for every
+/// detection of its second, as it is listed on each of them.
+///
+/// The text is a constant chosen by the flag and binds no parameter, so a
+/// caller can place it in a query whatever that query's own parameters are.
+#[must_use]
+pub const fn clip_kept_back_sql(retain_reviewed: bool) -> &'static str {
+    if retain_reviewed {
+        "(COALESCE(d.is_locked, 0) = 1
+          OR d.review_verdict IS NOT NULL
+          OR EXISTS (SELECT 1 FROM detection_comments c
+                      WHERE c.date = d.Date AND c.time = d.Time
+                        AND c.sci_name = d.Sci_Name
+                        AND (c.file_name IS NULL
+                             OR c.file_name = COALESCE(d.File_Name, ''))))"
+    } else {
+        "(COALESCE(d.is_locked, 0) = 1)"
+    }
+}
+
+/// The clips the disk-full purge must not delete: every clip
+/// [`clip_kept_back_sql`] keeps back. With `retain_reviewed` off this is
+/// exactly [`locked_file_names`].
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn kept_back_file_names(
+    conn: &Connection,
+    retain_reviewed: bool,
+) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn.prepare(&format!(
+        "SELECT DISTINCT d.File_Name FROM detections d
+          WHERE d.File_Name IS NOT NULL AND TRIM(d.File_Name) <> ''
+            AND {}",
+        clip_kept_back_sql(retain_reviewed)
+    ))?;
+    let rows = stmt
+        .query_map([], |row| row.get(0))?
+        .collect::<Result<Vec<String>, _>>()?;
+    Ok(rows)
+}
+
 /// Check if a detection is locked.
 ///
 /// # Errors
@@ -189,6 +244,57 @@ mod tests {
         // Counterpart: a key that names no row changes nothing and says so.
         assert!(!lock_detection_at(&conn, &key("nope.wav")).unwrap());
         assert!(!unlock_detection_at(&conn, &key("nope.wav")).unwrap());
+    }
+
+    /// Which clips are kept back, by kind (RES-10): locked always; a verdict
+    /// either way, a comment on the clip and a comment written before
+    /// comments named a clip only with `retain_reviewed`; nothing else.
+    #[test]
+    fn kept_back_clips_are_the_locked_and_the_judged() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        for (time, file) in [
+            ("06:00:00", "locked.wav"),
+            ("06:00:01", "confirmed.wav"),
+            ("06:00:02", "rejected.wav"),
+            ("06:00:03", "commented.wav"),
+            ("06:00:04", "legacy-comment.wav"),
+            ("06:00:05", "nothing.wav"),
+        ] {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES ('2026-05-01', ?1, 'Turdus merula', 'Blackbird', 0.9, ?2)",
+                params![time, file],
+            )
+            .unwrap();
+        }
+        conn.execute_batch(
+            "UPDATE detections SET is_locked = 1 WHERE File_Name = 'locked.wav';
+             UPDATE detections SET review_verdict = 'confirmed' WHERE File_Name = 'confirmed.wav';
+             UPDATE detections SET review_verdict = 'rejected' WHERE File_Name = 'rejected.wav';
+             INSERT INTO detection_comments (date, time, sci_name, file_name, author, body)
+                  VALUES ('2026-05-01', '06:00:03', 'Turdus merula', 'commented.wav', 'ada', 'x');
+             INSERT INTO detection_comments (date, time, sci_name, file_name, author, body)
+                  VALUES ('2026-05-01', '06:00:04', 'Turdus merula', NULL, 'ada', 'y');",
+        )
+        .unwrap();
+        let sorted = |retain| {
+            let mut v = kept_back_file_names(&conn, retain).unwrap();
+            v.sort();
+            v
+        };
+        assert_eq!(
+            sorted(true),
+            [
+                "commented.wav",
+                "confirmed.wav",
+                "legacy-comment.wav",
+                "locked.wav",
+                "rejected.wav"
+            ]
+        );
+        assert_eq!(sorted(false), ["locked.wav"]);
+        assert_eq!(sorted(false), locked_file_names(&conn).unwrap());
     }
 
     #[test]

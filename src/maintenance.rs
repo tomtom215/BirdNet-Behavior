@@ -109,6 +109,10 @@ pub struct MaintenancePlan {
     pub species_cap: u32,
     /// Days a clip is kept before the date-based retention removes it.
     pub clip_retention_days: u32,
+    /// Whether the clip retention and the species cap spare the audio of a
+    /// detection that has a review verdict or a comment
+    /// (`RETAIN_REVIEWED_AUDIO`, on unless turned off).
+    pub retain_reviewed_audio: bool,
     /// Where backups are sent, if anywhere.
     pub offsite: Option<Arc<OffsiteConfig>>,
     /// How often a backup is taken (`G-30`).
@@ -126,6 +130,7 @@ async fn run_loop(
         recordings_dir,
         species_cap,
         clip_retention_days,
+        retain_reviewed_audio,
         offsite,
         backup_schedule,
     } = plan;
@@ -138,6 +143,7 @@ async fn run_loop(
         recordings_dir = %recordings_dir.display(),
         species_cap,
         clip_retention_days,
+        retain_reviewed_audio,
         integrity_check_every_hours = INTEGRITY_CHECK_INTERVAL.as_secs() / 3600,
         backup_every_hours = backup_interval.as_secs() / 3600,
         reclaim_every_days = VACUUM_INTERVAL.as_secs() / 86400,
@@ -196,9 +202,21 @@ async fn run_loop(
         {
             // The species cap is a *count*, not a date, so it is safe with any
             // clock. Clip retention is a date cutoff and is not.
-            run_recording_species_cap(&db_path, &recordings_dir, species_cap).await;
+            run_recording_species_cap(
+                &db_path,
+                &recordings_dir,
+                species_cap,
+                retain_reviewed_audio,
+            )
+            .await;
             if clock_is_safe_for_retention() {
-                run_clip_retention(&db_path, &recordings_dir, clip_retention_days).await;
+                run_clip_retention(
+                    &db_path,
+                    &recordings_dir,
+                    clip_retention_days,
+                    retain_reviewed_audio,
+                )
+                .await;
             }
             // After the passes that delete on purpose: whatever else deleted a
             // clip — the disk-full purge, a hand on the card — is found here.
@@ -1034,9 +1052,16 @@ async fn run_clip_reconciliation(db_path: &Path, recordings_dir: &Path) -> Recon
 /// retention is off until an operator turns it on, deliberately, after this
 /// change.
 ///
-/// Locked clips are exempt and the detection rows survive, exactly as for the
-/// per-species cap.
-async fn run_clip_retention(db_path: &Path, recordings_dir: &Path, days: u32) {
+/// Locked clips are exempt, and so, while `retain_reviewed` is on, is the clip
+/// of a detection somebody reviewed or commented on
+/// ([`birdnet_db::sqlite::clip_kept_back_sql`], RES-10); the detection rows
+/// survive, exactly as for the per-species cap.
+async fn run_clip_retention(
+    db_path: &Path,
+    recordings_dir: &Path,
+    days: u32,
+    retain_reviewed: bool,
+) {
     if days == 0 || !present(db_path).await {
         return;
     }
@@ -1054,21 +1079,22 @@ async fn run_clip_retention(db_path: &Path, recordings_dir: &Path, days: u32) {
         // cutoff and unlocked.
         let cutoff = format!("-{days} days");
         let mut stmt = conn
-            .prepare(
+            .prepare(&format!(
                 "WITH clips AS (
-                     SELECT File_Name,
-                            COALESCE(is_locked, 0) AS locked,
-                            Date < date('now', 'localtime', ?1) AS expired
-                     FROM detections
-                     WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> ''
-                       AND Clip_Pruned_At IS NULL
+                     SELECT d.File_Name AS File_Name,
+                            {kept} AS locked,
+                            d.Date < date('now', 'localtime', ?1) AS expired
+                     FROM detections d
+                     WHERE d.File_Name IS NOT NULL AND TRIM(d.File_Name) <> ''
+                       AND d.Clip_Pruned_At IS NULL
                  )
                  SELECT DISTINCT File_Name FROM clips
                  WHERE expired = 1 AND locked = 0
                    AND File_Name NOT IN (
                        SELECT File_Name FROM clips WHERE expired = 0 OR locked = 1
                    )",
-            )
+                kept = birdnet_db::sqlite::clip_kept_back_sql(retain_reviewed),
+            ))
             .map_err(|e| e.to_string())?;
         let expired: Vec<String> = stmt
             .query_map([&cutoff], |row| row.get::<_, String>(0))
@@ -1110,7 +1136,8 @@ async fn run_clip_retention(db_path: &Path, recordings_dir: &Path, days: u32) {
 ///
 /// Two invariants this enforces, both of which the first cut got wrong:
 ///
-///   * **Locked clips are never pruned.** `/admin/recordings` → "lock" is the
+///   * **Locked clips are never pruned**, nor, unless `retain_reviewed` is
+///     off, are reviewed or commented ones (RES-10). `/admin/recordings` → "lock" is the
 ///     operator's one guarantee that a clip survives automatic cleanup, and
 ///     `docs/book/field/deployment.md` documents it as such. The disk purge honoured
 ///     it; this cap did not, so a cap silently deleted the very recordings a
@@ -1123,7 +1150,12 @@ async fn run_clip_retention(db_path: &Path, recordings_dir: &Path, days: u32) {
 ///     exists, and what stops this query re-selecting every already-pruned row
 ///     forever (which would grow without bound, re-attempting thousands of
 ///     deletes a day on a station with a year of history).
-async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u32) {
+async fn run_recording_species_cap(
+    db_path: &Path,
+    recordings_dir: &Path,
+    cap: u32,
+    retain_reviewed: bool,
+) {
     if cap == 0 || !present(db_path).await {
         return;
     }
@@ -1138,25 +1170,32 @@ async fn run_recording_species_cap(db_path: &Path, recordings_dir: &Path, cap: u
         // (legacy rows and BirdNET-Pi imports point several detections at one
         // source segment) from being deleted while any detection still within
         // the cap — or explicitly locked — depends on it.
+        //
+        // "Locked" here is every clip kept back (RES-10): a locked one, and,
+        // with `retain_reviewed`, one somebody reviewed or commented on. A
+        // kept-back clip still takes its place in the ranking: the cap is the
+        // newest N per species, and the evidence a reviewer judged does not
+        // push a newer clip out.
         let mut stmt = conn
-            .prepare(
+            .prepare(&format!(
                 "WITH ranked AS (
-                     SELECT File_Name,
-                            COALESCE(is_locked, 0) AS locked,
+                     SELECT d.File_Name AS File_Name,
+                            {kept} AS locked,
                             ROW_NUMBER() OVER (
-                                PARTITION BY Com_Name
-                                ORDER BY Date DESC, Time DESC, rowid DESC
+                                PARTITION BY d.Com_Name
+                                ORDER BY d.Date DESC, d.Time DESC, d.rowid DESC
                             ) AS rn
-                     FROM detections
-                     WHERE File_Name IS NOT NULL AND TRIM(File_Name) <> ''
-                       AND Clip_Pruned_At IS NULL
+                     FROM detections d
+                     WHERE d.File_Name IS NOT NULL AND TRIM(d.File_Name) <> ''
+                       AND d.Clip_Pruned_At IS NULL
                  )
                  SELECT DISTINCT File_Name FROM ranked
                  WHERE rn > ?1 AND locked = 0
                    AND File_Name NOT IN (
                        SELECT File_Name FROM ranked WHERE rn <= ?1 OR locked = 1
                    )",
-            )
+                kept = birdnet_db::sqlite::clip_kept_back_sql(retain_reviewed),
+            ))
             .map_err(|e| e.to_string())?;
         let over: Vec<String> = stmt
             .query_map([cap], |row| row.get::<_, String>(0))
@@ -1704,7 +1743,7 @@ mod tests {
         }
 
         // Cap at 2 → keep the 2 newest robins, prune the 2 oldest; tit untouched.
-        run_recording_species_cap(&db, &recs, 2).await;
+        run_recording_species_cap(&db, &recs, 2, true).await;
 
         assert!(!recs.join("robin-1.wav").exists(), "oldest robin pruned");
         assert!(
@@ -2189,7 +2228,7 @@ mod tests {
             .unwrap();
         }
 
-        run_recording_species_cap(&db, &recs, 1).await;
+        run_recording_species_cap(&db, &recs, 1, true).await;
 
         assert!(
             recs.join("robin-old.wav").exists(),
@@ -2200,6 +2239,122 @@ mod tests {
             !recs.join("robin-mid.wav").exists(),
             "the unlocked over-cap clip is still pruned"
         );
+    }
+
+    // ── Reviewed and commented audio is evidence (RES-10) ──────────────────
+
+    /// Robin clips, oldest first: `confirmed.wav` (a reviewer confirmed it),
+    /// `commented.wav` (someone wrote a comment on it), `unreviewed.wav`, then
+    /// `newest.wav`. With a cap of one, or a retention that covers the first
+    /// three, every one but the newest is over the line.
+    fn seed_evidence(conn: &rusqlite::Connection, dir: &Path, dates: [&str; 4]) {
+        for (date, file) in dates.iter().zip([
+            "confirmed.wav",
+            "commented.wav",
+            "unreviewed.wav",
+            "newest.wav",
+        ]) {
+            seed_clip(conn, dir, "European Robin", date, file);
+        }
+        conn.execute(
+            "UPDATE detections SET review_verdict = 'confirmed' WHERE File_Name = 'confirmed.wav'",
+            [],
+        )
+        .unwrap();
+        let commented = conn
+            .execute(
+                "INSERT INTO detection_comments (date, time, sci_name, file_name, author, body)
+                 SELECT Date, Time, Sci_Name, File_Name, 'ada', 'two notes, a Robin'
+                   FROM detections WHERE File_Name = 'commented.wav'",
+                [],
+            )
+            .unwrap();
+        assert_eq!(commented, 1, "precondition: the comment was written");
+    }
+
+    fn evidence_station(dates: [&str; 4]) -> (tempfile::TempDir, PathBuf, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        seed_evidence(&conn, &recs, dates);
+        (tmp, db, recs)
+    }
+
+    /// Whether each seeded clip is still on disk, in seed order.
+    fn on_disk(recs: &Path) -> Vec<(&'static str, bool)> {
+        [
+            "confirmed.wav",
+            "commented.wav",
+            "unreviewed.wav",
+            "newest.wav",
+        ]
+        .into_iter()
+        .map(|f| (f, recs.join(f).exists()))
+        .collect()
+    }
+
+    const CAP_DATES: [&str; 4] = ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04"];
+
+    /// The defect, for the cap: a confirmed and a commented detection older
+    /// than the cap keep their audio, and the unreviewed sibling is pruned
+    /// (the counterpart: a cap that had stopped would keep it too).
+    #[tokio::test]
+    async fn species_cap_keeps_the_audio_of_a_reviewed_or_commented_detection() {
+        let (_tmp, db, recs) = evidence_station(CAP_DATES);
+        run_recording_species_cap(&db, &recs, 1, true).await;
+        assert_eq!(
+            on_disk(&recs),
+            [
+                ("confirmed.wav", true),
+                ("commented.wav", true),
+                ("unreviewed.wav", false),
+                ("newest.wav", true),
+            ],
+            "the audio behind a verdict or a comment is evidence and is kept"
+        );
+    }
+
+    /// With `RETAIN_REVIEWED_AUDIO` off, the cap treats them as any other clip.
+    #[tokio::test]
+    async fn species_cap_prunes_reviewed_audio_when_the_setting_is_off() {
+        let (_tmp, db, recs) = evidence_station(CAP_DATES);
+        run_recording_species_cap(&db, &recs, 1, false).await;
+        assert_eq!(
+            on_disk(&recs),
+            [
+                ("confirmed.wav", false),
+                ("commented.wav", false),
+                ("unreviewed.wav", false),
+                ("newest.wav", true),
+            ],
+        );
+    }
+
+    /// The same for the age-based retention, on and off.
+    #[tokio::test]
+    async fn clip_retention_keeps_reviewed_audio_unless_told_not_to() {
+        let probe = rusqlite::Connection::open_in_memory().unwrap();
+        let d: [String; 4] = [40_i64, 39, 38, 1].map(|days| {
+            probe
+                .query_row(
+                    "SELECT date('now', 'localtime', ?1)",
+                    [format!("-{days} days")],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        });
+        for (retain, expected) in [
+            (true, [true, true, false, true]),
+            (false, [false, false, false, true]),
+        ] {
+            let (_tmp, db, recs) = evidence_station([&d[0], &d[1], &d[2], &d[3]]);
+            run_clip_retention(&db, &recs, 30, retain).await;
+            let kept: Vec<bool> = on_disk(&recs).into_iter().map(|(_, k)| k).collect();
+            assert_eq!(kept, expected, "RETAIN_REVIEWED_AUDIO={retain}");
+        }
     }
 
     #[tokio::test]
@@ -2220,7 +2375,7 @@ mod tests {
             seed_clip(&conn, &recs, "European Robin", "2026-01-02", "kept.wav");
         }
 
-        run_recording_species_cap(&db, &recs, 1).await;
+        run_recording_species_cap(&db, &recs, 1, true).await;
 
         let conn = rusqlite::Connection::open(&db).unwrap();
         let (name_kept, stamped): (String, Option<i64>) = conn
@@ -2271,7 +2426,7 @@ mod tests {
             seed_clip(&conn, &recs, "European Robin", "2026-01-02", "kept.wav");
         }
 
-        run_recording_species_cap(&db, &recs, 1).await;
+        run_recording_species_cap(&db, &recs, 1, true).await;
 
         let conn = rusqlite::Connection::open(&db).unwrap();
         let clips = birdnet_db::sqlite::recent_clips(
@@ -2315,7 +2470,7 @@ mod tests {
             }
         }
 
-        run_recording_species_cap(&db, &recs, 2).await;
+        run_recording_species_cap(&db, &recs, 2, true).await;
         let after_first: i64 = rusqlite::Connection::open(&db)
             .unwrap()
             .query_row(
@@ -2327,7 +2482,7 @@ mod tests {
         assert_eq!(after_first, 2);
 
         // Re-running changes nothing and finds nothing to delete.
-        run_recording_species_cap(&db, &recs, 2).await;
+        run_recording_species_cap(&db, &recs, 2, true).await;
         let after_second: i64 = rusqlite::Connection::open(&db)
             .unwrap()
             .query_row(
@@ -2365,7 +2520,7 @@ mod tests {
             .unwrap();
         }
 
-        run_recording_species_cap(&db, &recs, 2).await;
+        run_recording_species_cap(&db, &recs, 2, true).await;
 
         assert!(
             recs.join("shared.wav").exists(),
@@ -2580,7 +2735,7 @@ mod tests {
             seed_clip_days_ago(&conn, &recs, "European Robin", 3650, "ancient.wav");
         }
 
-        run_clip_retention(&db, &recs, 0).await;
+        run_clip_retention(&db, &recs, 0, true).await;
 
         assert!(
             recs.join("ancient.wav").exists(),
@@ -2603,7 +2758,7 @@ mod tests {
             seed_clip_days_ago(&conn, &recs, "Great Tit", 0, "today.wav");
         }
 
-        run_clip_retention(&db, &recs, 30).await;
+        run_clip_retention(&db, &recs, 30, true).await;
 
         assert!(!recs.join("old.wav").exists(), "40 days old is reclaimed");
         assert!(
@@ -2632,7 +2787,7 @@ mod tests {
             .unwrap();
         }
 
-        run_clip_retention(&db, &recs, 30).await;
+        run_clip_retention(&db, &recs, 30, true).await;
 
         assert!(
             recs.join("keep.wav").exists(),
@@ -2654,7 +2809,7 @@ mod tests {
             seed_clip_days_ago(&conn, &recs, "European Robin", 400, "gone.wav");
         }
 
-        run_clip_retention(&db, &recs, 30).await;
+        run_clip_retention(&db, &recs, 30, true).await;
 
         let conn = rusqlite::Connection::open(&db).unwrap();
         let (name, stamped): (String, Option<i64>) = conn
@@ -2686,8 +2841,8 @@ mod tests {
             seed_clip_days_ago(&conn, &recs, "European Robin", 2, "b.wav");
         }
 
-        run_clip_retention(&db, &recs, 30).await;
-        run_clip_retention(&db, &recs, 30).await;
+        run_clip_retention(&db, &recs, 30, true).await;
+        run_clip_retention(&db, &recs, 30, true).await;
 
         let conn = rusqlite::Connection::open(&db).unwrap();
         let live: i64 = conn
@@ -2713,7 +2868,7 @@ mod tests {
             seed_clip(&conn, &recs, "European Robin", "2026-01-01", "keep-1.wav");
             seed_clip(&conn, &recs, "European Robin", "2026-01-02", "keep-2.wav");
         }
-        run_recording_species_cap(&db, &recs, 0).await; // unlimited
+        run_recording_species_cap(&db, &recs, 0, true).await; // unlimited
         assert!(recs.join("keep-1.wav").exists());
         assert!(recs.join("keep-2.wav").exists());
     }

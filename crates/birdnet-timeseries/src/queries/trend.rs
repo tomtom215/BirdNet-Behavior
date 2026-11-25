@@ -40,8 +40,8 @@ pub const FULL_DAY_SHARE: f64 = 0.95;
 ///
 /// `effort` is the recorded seconds per local date, summed over sources;
 /// `ledger` is the first date the ledger holds anything for. With
-/// `has_ledger` false (the analytics store has no `recording_effort` table —
-/// it is created by the first effort sync) both are empty, so the queries
+/// `has_ledger` false (the connection has no `recording_effort` table; a
+/// store opened through `AnalyticsDb::open` always has one) both are empty, so the queries
 /// still bind and every day is judged as it was before the ledger existed.
 pub(super) const fn effort_ctes(has_ledger: bool) -> &'static str {
     if has_ledger {

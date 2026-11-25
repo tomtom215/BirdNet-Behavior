@@ -6,6 +6,11 @@
 //! all four as NULL, so the analytics copy of an approved detection said it
 //! was heard by no source, under no settings, while `SQLite` said otherwise;
 //! and the incremental sync never revisits a back-dated row to repair it.
+//!
+//! N24-02: the same for the verdict. `SQLite` admits the row as `confirmed`
+//! (approving it is a reviewer's judgement), and the mirror left
+//! `review_verdict` unset, so the analytics copy counted it as a detection
+//! nobody had looked at.
 
 #![cfg(feature = "analytics")]
 
@@ -13,8 +18,8 @@ use birdnet_web::state::AppState;
 
 type Provenance = (Option<String>, Option<f64>, Option<f64>, Option<f64>);
 
-#[test]
-fn an_approved_detection_keeps_its_source_and_settings_in_both_stores() {
+/// A station with analytics and one quarantined detection, approved.
+fn approved() -> (tempfile::TempDir, AppState) {
     let dir = tempfile::tempdir().unwrap();
     let db_path = dir.path().join("birds.db");
     let conn = rusqlite::Connection::open(&db_path).unwrap();
@@ -53,7 +58,12 @@ fn an_approved_detection_keeps_its_source_and_settings_in_both_stores() {
         .unwrap();
 
     assert!(state.approve_quarantine(id).expect("approve"));
+    (dir, state)
+}
 
+#[test]
+fn an_approved_detection_keeps_its_source_and_settings_in_both_stores() {
+    let (_dir, state) = approved();
     let sqlite: Provenance = state
         .with_db(|conn| {
             conn.query_row(
@@ -79,4 +89,29 @@ fn an_approved_detection_keeps_its_source_and_settings_in_both_stores() {
         .expect("analytics is configured")
         .expect("read the mirror");
     assert_eq!(duckdb, sqlite, "the analytics copy must hold the same row");
+}
+
+/// N24-02: approval is a verdict, and both stores carry it.
+#[test]
+fn an_approved_detection_is_confirmed_in_both_stores() {
+    let (_dir, state) = approved();
+    let sqlite: Option<String> = state
+        .with_db(|conn| conn.query_row("SELECT review_verdict FROM detections", [], |r| r.get(0)))
+        .unwrap();
+    assert_eq!(
+        sqlite.as_deref(),
+        Some("confirmed"),
+        "precondition: SQLite admits the approved detection as confirmed"
+    );
+    let duckdb: Option<String> = state
+        .with_analytics(|adb| {
+            adb.conn()
+                .query_row("SELECT review_verdict FROM detections", [], |r| r.get(0))
+        })
+        .expect("analytics is configured")
+        .expect("read the mirror");
+    assert_eq!(
+        duckdb, sqlite,
+        "the analytics copy must carry the same verdict"
+    );
 }

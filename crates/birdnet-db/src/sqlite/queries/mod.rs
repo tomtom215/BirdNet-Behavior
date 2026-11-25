@@ -23,11 +23,11 @@ pub use analysis_runs::{
     insert_analysis_run, latest_analysis_run, list_analysis_runs, run_models,
 };
 pub use analytics::{
-    ModelVsReviewRow, QualitySummary, ReviewVerdictDay, confidence_distribution, confidence_trend,
-    daily_counts, detection_quality_by_hour, distinct_detection_dates, hourly_activity,
-    last_hour_count, latest_detection, latest_detection_full, low_confidence_species,
-    model_vs_review_by_species, monthly_species_counts, quality_summary, range_daily_counts,
-    review_verdict_trend, reviewed_detections_by_species, species_shapes,
+    QualitySummary, ReviewVerdictDay, SpeciesReviewShare, confidence_distribution,
+    confidence_trend, daily_counts, detection_quality_by_hour, distinct_detection_dates,
+    hourly_activity, last_hour_count, latest_detection, latest_detection_full,
+    low_confidence_species, monthly_species_counts, quality_summary, range_daily_counts,
+    review_share_by_species, review_verdict_trend, reviewed_detections_by_species, species_shapes,
     today_species_hour_heatmap, weekly_detection_count, weekly_new_species, weekly_top_species,
 };
 pub use charts::{
@@ -48,17 +48,17 @@ pub use detections::{
     RecordingsFilter, SearchTerm, SortOrder, SpeciesHeard, TodayFilter, VerdictFilter,
     analytic_detection_count, analytic_detection_count_for_date, analytic_detections,
     analytic_detections_above, analytic_species_count_for_date, best_detections_for_date,
-    com_name_for, concurrent_detections_from_other_sources, delete_detection, delete_detection_at,
-    detected_at_utc_for, detection_at, detection_count, detection_count_for_date,
-    detection_count_for_species_date, detection_dates, detection_with_clip, detections_by_date,
-    detections_by_species, detections_for_clip, detections_per_day, insert_detection,
-    is_detection_locked, is_detection_locked_at, known_sources, like_contains, lock_detection,
-    lock_detection_at, locked_file_names, parse_search_term, recent_clips, recent_clips_count,
-    recent_detections, relabel_detection, relabel_detection_at, search_detection_count,
-    search_detections, seconds_since_last_detection, set_birdweather_soundscape,
-    species_detection_count_between, species_for_date, species_heard_on, todays_detection_count,
-    todays_detections, todays_source_activity, unlock_detection, unlock_detection_at,
-    unstamped_detection_count,
+    clip_kept_back_sql, com_name_for, concurrent_detections_from_other_sources, delete_detection,
+    delete_detection_at, detected_at_utc_for, detection_at, detection_count,
+    detection_count_for_date, detection_count_for_species_date, detection_dates,
+    detection_with_clip, detections_by_date, detections_by_species, detections_for_clip,
+    detections_per_day, insert_detection, is_detection_locked, is_detection_locked_at,
+    kept_back_file_names, known_sources, like_contains, lock_detection, lock_detection_at,
+    locked_file_names, parse_search_term, recent_clips, recent_clips_count, recent_detections,
+    relabel_detection, relabel_detection_at, search_detection_count, search_detections,
+    seconds_since_last_detection, set_birdweather_soundscape, species_detection_count_between,
+    species_for_date, species_heard_on, todays_detection_count, todays_detections,
+    todays_source_activity, unlock_detection, unlock_detection_at, unstamped_detection_count,
 };
 pub use discards::{DiscardRow, add_discards, discards_on};
 pub use effort::{EffortHour, Occasion, detection_history, effort_hours, total_recording_seconds};
@@ -83,9 +83,9 @@ pub use maintenance::{
 pub use overview::{EngineDetails, TableSize, detection_rate_24h, engine_details, table_sizes};
 pub use quarantine::{
     ALL_QUARANTINE_REASONS, QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow,
-    QuarantineStats, approve_quarantine, count_quarantine, delete_quarantine, get_quarantine,
-    insert_quarantine, list_quarantine, prune_quarantine, quarantine_pending_count,
-    quarantine_stats, reject_quarantine,
+    QuarantineStats, approve_quarantine, approve_quarantine_by, count_quarantine,
+    delete_quarantine, get_quarantine, insert_quarantine, list_quarantine, prune_quarantine,
+    quarantine_pending_count, quarantine_stats, reject_quarantine,
 };
 pub use species::{
     BulkOutcome, SpeciesInterval, SpeciesThreshold, SpeciesUsage, delete_species_detections,

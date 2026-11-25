@@ -173,6 +173,14 @@ jobs:
       - name: Figures gate (numbers are set in tabular figures)
         working-directory: tools/visual-qa
         run: node figures.mjs --fail
+      - name: Species-colour gate (one species, one colour, on every page)
+        working-directory: tools/visual-qa
+        # A species' colour was its rank within each chart, so one bird was
+        # painted in five colours across eight pages and every sparkline was
+        # the top bird's green. Reads the painted colour of every named swatch
+        # in both themes; two species sharing a colour that is not the neutral
+        # fails too, so a page of grey does not pass.
+        run: node species-colours.mjs
       - name: DOM-sink gate (a URL read back from the page is refused unless it is this station's)
         working-directory: tools/visual-qa
         # Plants a javascript: URL, a foreign origin and a quote-bearing path in

@@ -39,7 +39,7 @@ The **How** group of [Patterns](./patterns.md) draws what the analytics engine c
 ### Visits
 
 - **Bursts of singing** — a lane per day with the hours along it and a bar for each burst, from the moment it began to the moment it ended; bursts of different species that overlap are stacked, never drawn over each other. The legend brings one species forward.
-- **Who keeps coming back** — species grouped as resident, regular, migrant and rarity (how much of the station's time they were present), with the weeks each was heard and how often it was heard again a day, two, three, a week, a fortnight and a month later, each a cell that also prints its number.
+- **Who keeps coming back** — species grouped as resident, regular, migrant and rarity (how much of the station's time they were present), with the weeks each was heard and how often it was heard again a day, two, three, a week, a fortnight and a month later, each a cell that also prints its number and, under it, how many days that share is of. A day counts towards a longer interval only when the record runs that long after it (the record ends on the last day the station heard any bird): a bird first heard three days ago cannot yet be seen to come back within a month, and is not counted as one that did not. A cell with no such day says *too soon*, and one with fewer than three says *too few*, instead of a share.
 
 ### Sequences
 

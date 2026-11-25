@@ -1684,6 +1684,58 @@ async fn a_review_of_a_clip_that_names_no_detection_is_not_found() {
     assert_eq!(clip_verdicts(&state), (vec![("x.wav".into(), None)], 0));
 }
 
+/// N24-03: withdrawing the verdict of a clip that names no detection is a
+/// `404` too, and a batch item says it was not applied. The station discarded
+/// the database's "no such detection" and answered 200, and the batch counted
+/// the item as applied.
+#[tokio::test]
+async fn clearing_the_verdict_of_a_clip_that_names_no_detection_is_not_found() {
+    let (_dir, state) = station(true);
+    let missing =
+        r#""date":"2026-09-03","time":"09:00:00","sci_name":"Pica pica","file_name":"nope.wav""#;
+
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/review",
+        Some(TOKEN),
+        None,
+        &format!("{{{missing}}}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/batch",
+        Some(TOKEN),
+        None,
+        &format!(r#"{{"op":"review","detections":[{{{missing}}}]}}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body.contains("\"applied\":0") && body.contains("\"failed\":1"),
+        "{body}"
+    );
+}
+
+/// The counterpart: withdrawing the verdict of a detection that exists and
+/// has none is still done. Undo is idempotent; only a detection that is not
+/// there is refused.
+#[tokio::test]
+async fn clearing_a_detection_with_no_verdict_is_still_done() {
+    let (_dir, state) = station(true);
+    let (status, body) = call(
+        &state,
+        "/api/v2/detections/review",
+        Some(TOKEN),
+        None,
+        r#"{"date":"2026-09-03","time":"09:00:00","sci_name":"Pica pica","file_name":"x.wav"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
 /// A batch item that cannot be applied says why, and does not stop the rest.
 #[tokio::test]
 async fn a_batch_review_says_which_item_was_ambiguous_and_applies_the_rest() {

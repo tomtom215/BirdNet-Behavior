@@ -471,7 +471,11 @@ pub fn cols_attrs(
 /// `ck-q1`..`ck-q7`); the gradient for class `ck-c3` has the id `{prefix}-ck-c3`.
 pub fn gradient_defs(prefix: &str, classes: &[String]) -> String {
     let mut s = String::from("<defs>");
-    for c in classes {
+    // Once per class: several species can share the neutral, and an id is written once.
+    for (i, c) in classes.iter().enumerate() {
+        if classes[..i].contains(c) {
+            continue;
+        }
         let _ = write!(
             s,
             r#"<linearGradient id="{prefix}-{c}" class="ck-gr {c}" x1="0" y1="0" x2="0" y2="1"><stop class="a" offset="0"/><stop class="b" offset="1"/></linearGradient>"#
@@ -561,7 +565,11 @@ pub fn notch_pattern(id: &str, plot_h: f64, unit_px: f64) -> String {
 /// fading to nothing, so a heat grid glows where it is busy.
 pub fn halo_gradients(prefix: &str, classes: &[String]) -> String {
     let mut s = String::new();
-    for c in classes {
+    // Once per class, as in `gradient_defs`.
+    for (i, c) in classes.iter().enumerate() {
+        if classes[..i].contains(c) {
+            continue;
+        }
         let _ = write!(
             s,
             r#"<radialGradient id="{prefix}-{c}" class="ck-hg {c}"><stop class="a" offset=".5"/><stop class="b" offset="1"/></radialGradient>"#
@@ -585,12 +593,219 @@ pub fn id_safe(s: &str) -> String {
 }
 
 /// The class for categorical slot `i` (0-based): `ck-c1` … `ck-c8`, then `ck-cother`.
+///
+/// For a category that is **not a species**: a single series (`Fill::Slot(0)`, a day chart's
+/// one colour). A species takes its colour from the station's [`SpeciesSlots`], never from its
+/// position in a chart; `tests/a_species_keeps_its_colour_on_every_chart.rs` lists the callers
+/// this is allowed in.
 pub fn slot_class(i: usize) -> String {
     if i < 8 {
         format!("ck-c{}", i + 1)
     } else {
         "ck-cother".to_string()
     }
+}
+
+// ── one colour per species, station-wide ────────────────────────────────────────
+
+/// How many species own a colour: one each for `--chart-1` … `--chart-8`.
+pub const SPECIES_SLOTS: usize = 8;
+
+/// The days of history the station's colours are ranked over, ending yesterday.
+pub const SLOT_WINDOW_DAYS: u32 = 90;
+
+/// Which species owns which chart colour, for the whole station (UIR-01).
+///
+/// A species' colour used to be its rank within each chart, so a bird was green on one chart
+/// and orange on the next. Now the eight species heard most over the [`SLOT_WINDOW_DAYS`] days
+/// that end yesterday own `--chart-1` … `--chart-8` in that order (most heard first, ties by
+/// name), on every chart. Ending the window yesterday keeps the assignment the same all day,
+/// so two figures rendered minutes apart agree: it changes at midnight, or when the history
+/// itself changes (an import, a deletion, a relabel). A station with
+/// fewer than eight such species fills its free colours from today, most heard first, after
+/// the ones it already has, so a new station is not grey on its first day and no species gives
+/// up a colour during the day.
+///
+/// Every other species is `--chart-other`, the neutral that already meant "everything else". A
+/// colour is never lent to a species that does not own it: that is what makes "the green one is
+/// the Robin" true on every page. The legend, the tooltip and the table name every species, so
+/// the neutral is never the only thing that tells two of them apart.
+///
+/// A chart may hold any of a species' names: the one stored with the detection, the scientific
+/// name, or the name the station shows. All three find it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SpeciesSlots {
+    /// The owners' stored names, in slot order.
+    owners: Vec<String>,
+    /// Every name an owner goes by, to its slot (0-based).
+    by_name: std::collections::HashMap<String, usize>,
+}
+
+impl SpeciesSlots {
+    /// The assignment for owners given as `(stored name, scientific name, shown name)`, most
+    /// heard first. Past the eighth they are ignored.
+    #[must_use]
+    pub fn new<I, S>(owners: I) -> Self
+    where
+        I: IntoIterator<Item = (S, S, S)>,
+        S: Into<String>,
+    {
+        let mut slots = Self::default();
+        for (stored, sci, shown) in owners {
+            let k = slots.owners.len();
+            if k >= SPECIES_SLOTS {
+                break;
+            }
+            let stored: String = stored.into();
+            if slots.by_name.contains_key(&stored) {
+                continue;
+            }
+            for name in [sci.into(), shown.into()] {
+                if !name.is_empty() {
+                    slots.by_name.entry(name).or_insert(k);
+                }
+            }
+            slots.by_name.insert(stored.clone(), k);
+            slots.owners.push(stored);
+        }
+        slots
+    }
+
+    /// The owners' stored names, in slot order.
+    #[cfg(test)]
+    #[must_use]
+    pub fn owners(&self) -> &[String] {
+        &self.owners
+    }
+
+    /// The slot `name` owns (0-based), if it owns one.
+    #[must_use]
+    pub fn slot(&self, name: &str) -> Option<usize> {
+        self.by_name.get(name).copied()
+    }
+
+    /// The colour class for `name`: `ck-c1` … `ck-c8`, or `ck-cother`.
+    #[must_use]
+    pub fn class(&self, name: &str) -> String {
+        self.slot(name)
+            .map_or_else(|| "ck-cother".to_owned(), |k| format!("ck-c{}", k + 1))
+    }
+
+    /// The colour itself, for a tooltip's key: `var(--chart-1)` … or `var(--chart-other)`.
+    #[must_use]
+    pub fn colour(&self, name: &str) -> String {
+        self.slot(name).map_or_else(
+            || "var(--chart-other)".to_owned(),
+            |k| format!("var(--chart-{})", k + 1),
+        )
+    }
+
+    /// The slot as the scripts number it: 1 … 8, or 0 for the neutral.
+    #[must_use]
+    pub fn number(&self, name: &str) -> usize {
+        self.slot(name).map_or(0, |k| k + 1)
+    }
+}
+
+/// The station's [`SpeciesSlots`], read from its history and kept in the analytics cache.
+///
+/// Computed in one place for every chart; the cache keeps it for the cache's time to live
+/// (`analytics_cache::DEFAULT_TTL`) under a key that names the day, and since the ranking ends
+/// yesterday every recomputation during a day gives the same answer. A failed read is the
+/// caller's to report, as it reports its own: it is not defaulted here, and a colour is never
+/// guessed.
+///
+/// # Errors
+///
+/// The database error, when the history cannot be read.
+pub fn station_slots(
+    state: &crate::state::AppState,
+) -> Result<SpeciesSlots, birdnet_db::sqlite::DbError> {
+    let names = state.names();
+    let decode = |stored: &str| -> SpeciesSlots {
+        SpeciesSlots::new(stored.lines().filter_map(|l| {
+            let (com, sci) = l.split_once('\t')?;
+            Some((com, sci, names.name(sci, com)))
+        }))
+    };
+    let today = crate::routes::pages::today_date_string();
+    let key = format!("species-slots:{today}");
+    if let Some(hit) = state.analytics_cache().get(&key) {
+        return Ok(decode(&hit));
+    }
+    let owners = state.with_read_db(|conn| read_owners(conn, SLOT_WINDOW_DAYS))?;
+    let stored = owners
+        .iter()
+        .map(|(com, sci)| format!("{com}\t{sci}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let slots = decode(&stored);
+    state.analytics_cache().put(key, stored);
+    Ok(slots)
+}
+
+/// [`station_slots`] for a figure that is not drawn without them: the error is logged, naming
+/// `figure`, and the caller gets `None` to report as it reports its own failed read.
+pub fn station_slots_for(state: &crate::state::AppState, figure: &str) -> Option<SpeciesSlots> {
+    station_slots(state)
+        .map_err(|e| tracing::warn!(error = %e, figure, "the station's species colours could not be read"))
+        .ok()
+}
+
+/// [`station_slots`] for decoration, where a missing colour costs a picture and not a fact (a
+/// list's sparklines): unread, every species is the documented neutral, `--chart-other`, and
+/// the error is logged naming `what`. Never a guessed colour presented as a species'.
+pub fn station_slots_or_neutral(state: &crate::state::AppState, what: &str) -> SpeciesSlots {
+    station_slots(state).unwrap_or_else(|e| {
+        tracing::warn!(error = %e, what, "the station's species colours could not be read; drawn neutral");
+        SpeciesSlots::default()
+    })
+}
+
+/// The owners as `(stored name, scientific name)`, slot order: the eight most heard over the
+/// `window` days that end yesterday, then, while a colour is free, today's most heard.
+///
+/// # Errors
+///
+/// The database error.
+pub fn read_owners(
+    conn: &rusqlite::Connection,
+    window: u32,
+) -> Result<Vec<(String, String)>, birdnet_db::sqlite::DbError> {
+    let mut owners: Vec<(String, String)> = Vec::with_capacity(SPECIES_SLOTS);
+    let mut history = conn.prepare(
+        "SELECT Com_Name, MIN(Sci_Name), COUNT(*) AS n FROM detections_analytic
+         WHERE Date >= DATE('now', 'localtime', '-' || ?1 || ' days')
+           AND Date < DATE('now', 'localtime')
+         GROUP BY Com_Name
+         ORDER BY n DESC, Com_Name
+         LIMIT ?2",
+    )?;
+    let rows = history.query_map(rusqlite::params![window, SPECIES_SLOTS as i64], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
+    for row in rows {
+        owners.push(row?);
+    }
+    if owners.len() < SPECIES_SLOTS {
+        let mut today = conn.prepare(
+            "SELECT Com_Name, MIN(Sci_Name), COUNT(*) AS n FROM detections_analytic
+             WHERE Date = DATE('now', 'localtime')
+             GROUP BY Com_Name
+             ORDER BY n DESC, Com_Name",
+        )?;
+        let rows = today.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        for row in rows {
+            let (com, sci) = row?;
+            if owners.len() >= SPECIES_SLOTS {
+                break;
+            }
+            if !owners.iter().any(|(c, _)| *c == com) {
+                owners.push((com, sci));
+            }
+        }
+    }
+    Ok(owners)
 }
 
 /// The sequential step, 1 to 7, for `t` in `0..=1` (0 is the lowest drawn step; a
@@ -859,6 +1074,96 @@ mod tests {
             seq_step(0.01),
             seq_step(0.1),
             "1 vs 10 detections of 100 must differ"
+        );
+    }
+
+    /// One colour a species, the eight in order, the ninth and every unknown name the neutral,
+    /// and each owner found by every name it goes by.
+    #[test]
+    fn the_owners_take_the_eight_colours_in_order_and_no_one_else_does() {
+        let owners: Vec<(String, String, String)> = (0..10)
+            .map(|i| {
+                (
+                    format!("Bird {i}"),
+                    format!("Avis {i}"),
+                    format!("Vogel {i}"),
+                )
+            })
+            .collect();
+        let slots = SpeciesSlots::new(
+            owners
+                .iter()
+                .map(|(a, b, c)| (a.as_str(), b.as_str(), c.as_str())),
+        );
+        assert_eq!(slots.owners().len(), SPECIES_SLOTS);
+        for i in 0..SPECIES_SLOTS {
+            let want = format!("ck-c{}", i + 1);
+            for name in [
+                format!("Bird {i}"),
+                format!("Avis {i}"),
+                format!("Vogel {i}"),
+            ] {
+                assert_eq!(slots.class(&name), want, "{name}");
+            }
+            assert_eq!(
+                slots.colour(&format!("Bird {i}")),
+                format!("var(--chart-{})", i + 1)
+            );
+            assert_eq!(slots.number(&format!("Bird {i}")), i + 1);
+        }
+        for name in ["Bird 8", "Bird 9", "Nobody", ""] {
+            assert_eq!(slots.class(name), "ck-cother", "{name}");
+            assert_eq!(slots.colour(name), "var(--chart-other)");
+            assert_eq!(slots.number(name), 0);
+        }
+        // A name listed twice keeps its first colour and does not take a second.
+        let twice = SpeciesSlots::new([("A", "", "A"), ("A", "", "A"), ("B", "", "B")]);
+        assert_eq!(
+            (twice.class("A"), twice.class("B")),
+            ("ck-c1".into(), "ck-c2".into())
+        );
+        assert!(SpeciesSlots::default().owners().is_empty());
+    }
+
+    /// The owners are the history's most heard to yesterday, not today's: today cannot move a
+    /// colour. While a colour is free, today's birds fill it after the history's.
+    #[test]
+    fn the_owners_come_from_the_history_and_today_only_fills_free_colours() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let add = |back: i64, com: &str, n: usize| {
+            for k in 0..n {
+                conn.execute(
+                    "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+                     VALUES (DATE('now', 'localtime', ?1), ?2, ?3, ?4, 0.9)",
+                    rusqlite::params![
+                        format!("-{back} days"),
+                        format!("06:{k:02}:00"),
+                        format!("{com} sci"),
+                        com
+                    ],
+                )
+                .unwrap();
+            }
+        };
+        add(3, "Robin", 5);
+        add(2, "Wren", 3);
+        add(0, "Wren", 40); // today: the busiest by far, and it moves nothing
+        add(0, "Newcomer", 20);
+        add(0, "Rarity", 1);
+        let owners: Vec<String> = read_owners(&conn, SLOT_WINDOW_DAYS)
+            .unwrap()
+            .into_iter()
+            .map(|(c, _)| c)
+            .collect();
+        assert_eq!(owners, ["Robin", "Wren", "Newcomer", "Rarity"]);
+        // Outside the window, history does not count.
+        add(200, "Ancient", 99);
+        assert!(
+            !read_owners(&conn, SLOT_WINDOW_DAYS)
+                .unwrap()
+                .iter()
+                .any(|(c, _)| c == "Ancient")
         );
     }
 }

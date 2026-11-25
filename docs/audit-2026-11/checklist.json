@@ -714,8 +714,8 @@
    "work_package": "WP-09",
    "phase": 2,
    "source": "03-precision-accuracy.md:154",
-   "status": "in_progress",
-   "evidence": "Not started in the batch of 2026-11-24 (the gate was written and never run, so it was reverted). For the Wilson unit test, computed with the formula in Python by that session: 2 of 3 gives 0.2077 to 0.9385, and 16 of 24 gives 0.4671 to 0.8203."
+   "status": "done",
+   "evidence": "a4904f7, 81a2806 and 295cf5a, which removed birdnet-db's second Wilson function: the panel shows the confirmed share of reviewed detections with a 95% Wilson interval, ranks only species with 20 or more verdicts (by the top of the interval), and no longer compares mean confidence with a confirmation rate. Gate the_review_share_panel_ranks_no_noise.rs red on the old panel."
   },
   {
    "id": "ACC-08",
@@ -1146,8 +1146,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:133",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "b0c4a03, 9217644: kit::SpeciesSlots gives the station's eight most-heard species over the 90 days to yesterday one colour each on every chart; all others are --chart-other. Rust gate one_species_one_colour_across_the_charts red across eight species; source sweep every_colour_made_by_position_is_named_and_is_not_a_species found 17 unclassified sites in the old tree; browser gate tools/visual-qa/species-colours.mjs reported 82 findings on the old build, and is now a step in a11y.yml. Also fixed: app.css painted every sparkline --chart-1. Remains: N25-06."
   },
   {
    "id": "UIR-02",
@@ -1182,8 +1182,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:184",
-   "status": "open",
-   "evidence": "Not fixed in the batch of 2026-11-24 (a source test was written and never run, so it was reverted). Strings found then: history.rs:133, correlation.rs:74, viz/radial.rs:277, viz/matrix.rs:200, and a fifth the audit did not list, viz/matrix.rs:91."
+   "status": "done",
+   "evidence": "f57a724: gate tests/chart_copy_does_not_say_darker_means_more.rs red on five strings (correlation, history, matrix twice, radial); two named exemptions, each required to still match. charts.md honesty rule 11."
   },
   {
    "id": "UIR-05",
@@ -1626,8 +1626,8 @@
    "work_package": "WP-13",
    "phase": 2,
    "source": "06-ui-code-charts-ia.md:225",
-   "status": "open",
-   "evidence": "Not fixed in the batch of 2026-11-24. The birdnet-db gate was seen red on the shared-days ordering (\"left: [House Sparrow, Pine Grosbeak] right: [Pine Grosbeak, House Sparrow]\") and green with a Jaccard ordering, but the web side was unfinished and the work was reverted. Whoever takes it: the compute_companion row of tests/data/read_default_sweep.tsv must not change."
+   "status": "done",
+   "evidence": "5e59554: companions are ranked by the share of days in common (Jaccard) and print 'x of the trigger's y days'. Database gate red (left: [House Sparrow, Pine Grosbeak], right: [Pine Grosbeak, House Sparrow]); page gate a_companion_is_ranked_by_the_share_of_its_days.rs red with the fix stashed."
   },
   {
    "id": "UIC-05",
@@ -1722,8 +1722,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:337",
-   "status": "open",
-   "evidence": "Not fixed in the batch of 2026-11-24 (tests written and never run, reverted). Sites then: today.rs:1446, dashboard/partials.rs:153 and :255."
+   "status": "done",
+   "evidence": "382da06, 20cf674, 3a96c86: each play button on Today is named 'Play {species}, {HH:MM}' and the player keeps the label ('Pause ...' while playing). Gate every_play_button_on_today_names_its_clip red ('two play buttons share an accessible name'), then red again on markup inside the label. Remains: the label is always 24-hour."
   },
   {
    "id": "UIC-13",
@@ -1914,8 +1914,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:525",
-   "status": "open",
-   "evidence": "Not fixed in the batch of 2026-11-24 (a handler test was written and never run, reverted)."
+   "status": "done",
+   "evidence": "c1c6179, 5a06db8: history day cells are links to /reports/day with their own text as the accessible name. Gate every_day_cell_is_a_link_to_its_day_and_names_what_it_holds on fixed May 2026 dates, red on href='#'. Remains: the month arrows are still href='#' (there is no page for a month)."
   },
   {
    "id": "UIC-29",
@@ -2106,8 +2106,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:325",
-   "status": "in_progress",
-   "evidence": "Not committed in the batch of 2026-11-24. An exemption for rows with a review verdict or a comment, a RETAIN_REVIEWED_AUDIO setting and its tests were written, but the gate was never seen red before the session's deadline, so the work was reverted. Found while doing it: the disk-full purge has the same hole and is not in src/maintenance.rs but in birdnet-core's DiskManager, fed by locked_clips() in src/helpers/system.rs; the setting also needs a line in src/app.rs and a row in docs/book/reference/where-to-change-it.md."
+   "status": "done",
+   "evidence": "0f55e79: the age limit, the per-species cap and the disk-full purge keep the clip of any detection with a verdict or a comment, from one SQL condition (clip_kept_back_sql), behind RETAIN_REVIEWED_AUDIO (on by default). Gates species_cap_keeps_the_audio_of_a_reviewed_or_commented_detection, clip_retention_keeps_reviewed_audio_unless_told_not_to, the_disk_full_purge_keeps_the_audio_of_reviewed_and_commented_detections, each red with the new parameter ignored; counterparts with the setting off. The failure text on the unfixed code is in the commit message. Follow-on: N25-01."
   },
   {
    "id": "RES-11",
@@ -2550,8 +2550,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-05.md",
-   "status": "in_progress",
-   "evidence": "Confirmed by reading on 2026-11-24, no gate run: weekday_sentence leaves out weekdays with fewer than 3 listened days (MIN_WEEKDAY_OCCURRENCES, routes/pages/insight.rs:35) while hour_by_weekday in viz/heat.rs draws a margin bar for every weekday with any detection. A fixture for the gate: listened days [4,4,4,4,4,2,4] with 40 detections on each weekday and 30 on the two-day one, which gets the longest bar while the sentence says no weekday stands out."
+   "status": "done",
+   "evidence": "9146240: a weekday the sentence leaves out for too few listened days has no margin bar. Gate viz::heat::tests::a_weekday_the_sentence_leaves_out_has_no_margin_bar red (left: \"15/day\", right: \"too few days\")."
   },
   {
    "id": "N24-01",
@@ -2562,8 +2562,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
-   "status": "open",
-   "evidence": "Read in migration 64 (0f4bf36): the append-only trigger is BEFORE UPDATE only, so a DELETE is not refused; and because every UPDATE is refused, review_events rows cannot follow a relabel the way detection_reviews and, since migration 65, comments do. A reading; no probe run."
+   "status": "done",
+   "evidence": "36019f0: migration 66 refuses DELETE on review_events and appends a linked event (via='relabel', relabelled_from) when a detection with history is relabelled; old events are never rewritten. Gates a_review_event_cannot_be_deleted ('a DELETE removed Ok(1) event(s)'), a_relabelled_detection_keeps_its_review_history, a_detection_relabelled_there_and_back_lists_each_event_once; counterpart relabelling_an_unreviewed_detection_writes_no_event."
   },
   {
    "id": "N24-02",
@@ -2574,8 +2574,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
-   "status": "open",
-   "evidence": "Noticed by the lane A session of 2026-11-24 while fixing N06-01; not probed."
+   "status": "done",
+   "evidence": "9c6a3c7: the analytics copy of an approved quarantined detection carries 'confirmed'. Gate an_approved_detection_is_confirmed_in_both_stores red (left: None, right: Some(\"confirmed\"))."
   },
   {
    "id": "N24-03",
@@ -2586,8 +2586,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
-   "status": "open",
-   "evidence": "Noticed by the lane A session of 2026-11-24; only the history write was guarded. Not probed."
+   "status": "done",
+   "evidence": "94fc5d9: the claimed half was harmless (the return value was discarded); the visible defect was that withdrawing the verdict of a clip that names no detection answered 200 and was audited as done. Now NoSuchDetection, 404. Gate clearing_the_verdict_of_a_clip_that_names_no_detection_is_not_found red (left: 200, right: 404); counterpart clearing_a_detection_with_no_verdict_is_still_done."
   },
   {
    "id": "N24-04",
@@ -2598,8 +2598,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
-   "status": "open",
-   "evidence": "Follows RES-06 (0f4bf36): api_write.rs, pages/search.rs and pages/quarantine.rs still call the unattributed functions; each needs the _by call with the signed-in user. Reported by the lane A session, whose lane did not own those files."
+   "status": "done",
+   "evidence": "49ddd01: bulk review on Search (via='bulk') and quarantine approval (via='quarantine') record the signed-in user; API verdicts are via='api' with no name, because a bearer token is not a person. Gates the_bulk_verdicts_on_search_record_who_gave_them, a_quarantine_approval_records_who_approved_it, an_api_verdict_is_recorded_as_one, each red on the unfixed handlers."
   },
   {
    "id": "N24-05",
@@ -2790,8 +2790,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "09-chart-review.md:244",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "8066096: an anchor day counts towards an N-day interval only when the record runs N days past it; each rate carries its eligible count; no eligible anchor is NULL, not 0. Gate retention_does_not_read_the_end_of_the_record_as_absence.rs on fixed dates, red on the old query and on the fix with its FILTER mutated to OR true. The review's own example was wrong: a bird heard daily read 121 of 122, not far below 100%. Remains: days the station was not listening are not told apart from absence; the record's last day may be today; the barcode and step-curve rebuild was not done."
   },
   {
    "id": "CHT-12",
@@ -2850,8 +2850,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "09-chart-review.md:434",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "d337d76: birdnet_behavioral::interval::wilson, viz::uncertainty (whisker, dot, 'too few' ring below 3 trials), honesty rule 10. Tests red with Z95 at 1.96 and with the floor at 2. Used by retention, the reporting-frequency figure and the reviewer-verdict panel only. Remains: the other figures that print a share; a source scan for 'every % has an n'; a band mark."
   },
   {
    "id": "CHT-24",
@@ -2863,7 +2863,7 @@
    "phase": 4,
    "source": "09-chart-review.md:448",
    "status": "open",
-   "evidence": ""
+   "evidence": "Probe, not committed (2026-11-25): six independent species on /pages/correlation-pairs and /pages/acoustic-network. All 15 pairs are drawn; the strongest reads '37% of their time' on the darkest step, which is exactly chance (0.30 / 0.80). With a planted identical pair the chance pairs drop to steps 2 and 3, so how dark a chance pair looks depends on whether a real pair exists. Remains: an independence fixture as a gate, and a chance level in the figure."
   },
   {
    "id": "CHT-16",
@@ -2874,8 +2874,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "09-chart-review.md:347",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "9ee9561: species page card 'How often it is heard', the share of listened days per quarter-month with a 95% Wilson interval, 'too few to say' under 3 listened days, hatched where not listened. Query gate reporting_frequency_divides_by_listened_days.rs red with the floor mutated; page gate reporting_frequency_reads_days_heard_of_days_listened.rs red with an unlistened part mutated into 0 of 7. Not seen rendered: the ring and hatch states (the fixture has none). Remains: N25-02; no multi-species overview on Patterns."
   },
   {
    "id": "CHT-17",
@@ -2948,6 +2948,138 @@
    "source": "09-chart-review.md:419",
    "status": "open",
    "evidence": ""
+  },
+  {
+   "id": "N25-02",
+   "title": "The reporting-frequency interval treats neighbouring days as independent trials",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
+   "status": "open",
+   "evidence": "Read, 2026-11-25. The Wilson interval over the listened days of a quarter-month assumes separate trials; a bird here today is likely here tomorrow, so the bar is narrower than the truth. The Method panel, reporting.rs and charts.md rule 10 now say so. Not written: an interval that allows for it (clustered by year, or an effective n)."
+  },
+  {
+   "id": "N25-03",
+   "title": "abundance.rs says the analytics copy of the detections has no source column; it has",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
+   "status": "open",
+   "evidence": "Read, 2026-11-25: crates/birdnet-behavioral/src/phenology/abundance.rs:337 against connection/mod.rs ('ALTER TABLE detections ADD COLUMN Source'). Whether the rate should then be formed per source is the open question behind the sentence."
+  },
+  {
+   "id": "N25-04",
+   "title": "The dawn chorus partials turn a failed chorus read into 'no chorus yet'",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
+   "status": "open",
+   "evidence": "Reported by the UI lane from reading, 2026-11-25; not probed."
+  },
+  {
+   "id": "N25-05",
+   "title": "backups.md says the disk-full purge deletes the 'oldest' recordings; the default policy keeps every species",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
+   "status": "open",
+   "evidence": "Read, 2026-11-25: docs/book/admin/backups.md:45, docs/book/admin/recording.md:52 and docs/book/getting-started/configuration.md:171 say the disk manager purges 'the oldest recordings'. The default policy takes the most-recorded species first, lowest confidence then oldest, never below PURGE_SPECIES_FLOOR; configuration.md:85 and migration.md:163 say so correctly."
+  },
+  {
+   "id": "N25-06",
+   "title": "Colours a species owns are reused by marks that are not species, and neighbouring unowned species have no seam",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
+   "status": "open",
+   "evidence": "After UIR-01: the temperature line (ck-c5), the dawn and dusk hour bars and the spring season (ck-c1) and the autumn season (ck-c5) reuse owned colours; in Today's songs and Seasons two unowned species can sit as adjacent grey bands with nothing between them. Also untested: whether a cached fragment and the colour assignment can disagree for up to ten minutes after midnight."
+  },
+  {
+   "id": "N25-07",
+   "title": "Maintenance queries drop rows that fail to read (.filter_map(Result::ok))",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
+   "status": "open",
+   "evidence": "Reported by the evidence lane from reading src/maintenance.rs, 2026-11-25; predates this batch. A row that fails to read is a clip neither kept nor deleted on purpose."
+  },
+  {
+   "id": "N25-08",
+   "title": "Unused CSS left by the verdict panel's rewrite: .q-mvr-link, .bnb-mvr-bar.model",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
+   "status": "open",
+   "evidence": "Reported by the evidence lane, 2026-11-25; app.css was another lane's file in that batch."
+  },
+  {
+   "id": "N25-09",
+   "title": "first-steps.md describes a setup wizard the code skips when the installer set the location",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
+   "status": "open",
+   "evidence": "Noticed while rewriting the README (pull request 308), from reading; not probed."
+  },
+  {
+   "id": "N25-01",
+   "title": "A full disk where every remaining clip is protected deleted nothing and raised no condition",
+   "severity": "high",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
+   "status": "done",
+   "evidence": "c2d0619: found while checking RES-10's default. PurgeGovernor flagged a pass only when it removed files, so a pass over the threshold that removed none (every clip locked, reviewed, at its species floor or excluded) left only warnings in the log. New non-latching flag, health condition purge-nothing-deletable and gauge birdnet_purge_nothing_deletable. Gates a_full_disk_with_nothing_the_purge_may_delete_is_said ('over the threshold with nothing deletable, and nothing said'), a_full_disk_held_entirely_by_the_species_floor_is_said, a_purge_that_deletes_or_a_disk_below_the_threshold_does_not_say_it, each red on the unfixed code; counterpart the_ineffective_latch_still_stops_the_purge. Not covered by a test: the wiring in system.rs and check_purge, and the once-per-episode log. Not signalled: a station whose watch directory is its recordings directory (see N25-11)."
+  },
+  {
+   "id": "N25-10",
+   "title": "The stream and recordings disk managers write the same purge-ineffective flag",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
+   "status": "open",
+   "evidence": "Read, 2026-11-25 (src/helpers/system.rs, both DiskManager configs take purge_ineffective_flag()): with the stream directory on another filesystem below the threshold, the stream manager writes false every cycle while a latched recordings manager writes true, so the purge condition and gauge depend on which thread wrote last. Not probed."
+  },
+  {
+   "id": "N25-11",
+   "title": "With the watch directory equal to the recordings directory, locked and reviewed clips are not protected from the disk-full purge",
+   "severity": "high",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
+   "status": "open",
+   "evidence": "Read, 2026-11-25, not probed: in that configuration the only disk manager is the stream one, which runs OldestFirst with a provider listing only in-flight segments. backups.md:47 says locked recordings are never purged. Needs a probe before anything is built on it."
   }
  ]
 }

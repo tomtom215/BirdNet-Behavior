@@ -2865,6 +2865,55 @@ pub const MIGRATIONS: &[Migration] = &[
                AND file_name = COALESCE(OLD.File_Name, '');
         END;",
     },
+    Migration {
+        version: 66,
+        description: "Review history cannot be deleted from, and follows a relabelled detection",
+        // N24-01. Migration 64's trigger refused every UPDATE of `review_events`
+        // and nothing refused a DELETE, so one statement could remove who had
+        // verified a record. The history is a record of what people decided,
+        // kept for as long as the station's data is; nothing in the program
+        // deletes from it, and now nothing can.
+        //
+        // And because no row may change, a relabelled detection's events stayed
+        // under its old `sci_name`, where nothing reading the detection as it
+        // now is would look. They are not moved: an event says what the
+        // detection was called when the verdict was given, and rewriting it
+        // would make the history say a reviewer confirmed a species they never
+        // heard named. Instead a relabel appends one event under the new name,
+        // `via = 'relabel'`, with `relabelled_from` naming the old one, which is
+        // the link `review_history` follows back.
+        //
+        // That event carries no verdict, because migration 59's
+        // `detections_relabel_detaches_review` leaves none: a verdict judged the
+        // old species, so the detection is unreviewed under its new one. The
+        // history's latest event and the current verdict therefore agree. It is
+        // written only when the old name has history; a relabel of a detection
+        // nobody reviewed is not a review event. Like the comment move
+        // (migration 65) it is a trigger on `detections`, so every path that
+        // renames a detection is covered.
+        //
+        // Purely additive: one nullable column and two triggers; no row changes.
+        up_sql: "ALTER TABLE review_events ADD COLUMN relabelled_from TEXT;
+        CREATE TRIGGER review_events_are_never_deleted
+            BEFORE DELETE ON review_events
+        BEGIN
+            SELECT RAISE(ABORT, 'review_events is append-only: a verdict on record is never deleted');
+        END;
+        CREATE TRIGGER detections_relabel_records_review_event
+        AFTER UPDATE OF Sci_Name ON detections
+        WHEN OLD.Sci_Name IS NOT NEW.Sci_Name
+         AND EXISTS (SELECT 1 FROM review_events
+                      WHERE date = OLD.Date AND time = OLD.Time AND sci_name = OLD.Sci_Name
+                        AND file_name = COALESCE(OLD.File_Name, ''))
+        BEGIN
+            INSERT INTO review_events
+                (date, time, sci_name, file_name, verdict, via, notes, relabelled_from)
+            VALUES (NEW.Date, NEW.Time, NEW.Sci_Name, COALESCE(NEW.File_Name, ''), NULL,
+                    'relabel', 'Relabelled from ' || OLD.Sci_Name
+                        || '; a verdict on the old species does not carry over',
+                    OLD.Sci_Name);
+        END;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -5364,5 +5413,73 @@ mod tests {
             conn.execute("UPDATE review_events SET verdict = 'confirmed'", [])
                 .is_err()
         );
+    }
+
+    /// Migration 66 on a station that already has review history: every event
+    /// survives unchanged, a DELETE is refused from then on, and a relabel of
+    /// a reviewed detection appends one event under the new name that links
+    /// back and carries no verdict, as the current verdict then has none.
+    #[test]
+    fn migration_66_keeps_the_history_and_follows_a_relabel_without_rewriting_it() {
+        let conn = memory_db_at_version(65);
+        conn.execute_batch(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name,
+                                     review_verdict)
+                  VALUES ('2026-05-01', '06:00:00', 'Strix aluco', 'Tawny Owl', 0.9, 'a.wav',
+                          'confirmed');
+             INSERT INTO detection_reviews (date, time, sci_name, file_name, com_name, status)
+                  VALUES ('2026-05-01', '06:00:00', 'Strix aluco', 'a.wav', 'Tawny Owl',
+                          'confirmed');
+             INSERT INTO review_events (date, time, sci_name, file_name, verdict,
+                                        reviewer_name, via, at)
+                  VALUES ('2026-05-01', '06:00:00', 'Strix aluco', 'a.wav', 'confirmed',
+                          'ada', 'review', '2026-05-02 08:00:00');",
+        )
+        .unwrap();
+        // Before: the history could be deleted from.
+        let before = |c: &Connection| -> Vec<(String, Option<String>, Option<String>, String)> {
+            c.prepare("SELECT sci_name, verdict, reviewer_name, at FROM review_events ORDER BY id")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        let kept = before(&conn);
+
+        let m66 = MIGRATIONS.iter().find(|m| m.version == 66).unwrap();
+        conn.execute_batch(m66.up_sql).unwrap();
+
+        assert_eq!(before(&conn), kept, "no event changed");
+        assert!(conn.execute("DELETE FROM review_events", []).is_err());
+        assert_eq!(before(&conn).len(), 1);
+
+        conn.execute(
+            "UPDATE detections SET Sci_Name = 'Asio otus', Com_Name = 'Long-eared Owl'",
+            [],
+        )
+        .unwrap();
+        let appended: (String, Option<String>, String, Option<String>) = conn
+            .query_row(
+                "SELECT sci_name, verdict, via, relabelled_from FROM review_events
+                  WHERE id = (SELECT MAX(id) FROM review_events)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            appended,
+            (
+                "Asio otus".to_owned(),
+                None,
+                "relabel".to_owned(),
+                Some("Strix aluco".to_owned())
+            )
+        );
+        let current: Option<String> = conn
+            .query_row("SELECT review_verdict FROM detections", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(current, None, "migration 59 clears it; the event agrees");
+        assert_eq!(before(&conn)[0], kept[0], "the old event is not rewritten");
     }
 }

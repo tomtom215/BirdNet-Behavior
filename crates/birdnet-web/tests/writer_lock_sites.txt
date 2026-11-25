@@ -68,7 +68,7 @@ state.rs :: with_read_db  1  the fallback inside with_read_db itself: an in-memo
 state.rs :: delete_detection  1  POST /api/v2/detections/delete
 state.rs :: relabel_detection  1  POST /pages/today-relabel
 state.rs :: set_detection_lock  1  POST /api/v2/detections/lock|unlock
-state.rs :: approve_quarantine  1  POST /pages/quarantine-approve
+state.rs :: approve_quarantine_by  1  POST /pages/quarantine-approve
 state.rs :: clear_detections  1  POST /admin/system/clear-detections
 state.rs :: set_detection_review_by  1  POST /pages/search-bulk
 state.rs :: clear_detection_review_by  1  POST /pages/detection-review-clear

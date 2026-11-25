@@ -126,7 +126,7 @@ pub(super) fn content(terrain: &str) -> String {
             topic: "Hour × weekday",
             title: "Activity grid",
             action: None,
-            note: "A stronger colour means more birds heard in that hour (the key under the grid runs from none to most). The bars at the right are each weekday's detections per day the station listened, the unit the sentence above compares; the bars along the bottom are the totals for each hour.",
+            note: "A stronger colour means more birds heard in that hour (the key under the grid runs from none to most). The bars at the right are each weekday's detections per day the station listened, the unit the sentence above compares; a weekday listened on fewer than three times has no bar (\"too few days\"), as the sentence leaves it out. The bars along the bottom are the totals for each hour.",
             body: "",
         },
         "heatmap-grid",
@@ -345,9 +345,12 @@ fn compute_streamgraph(state: &AppState, days: u32) -> Option<String> {
     });
     let take = super::insight::leader_sentence(&named, total)
         .map_or_default(|s| super::frame::takeaway(&s));
+    // Each species in the colour it owns on the station. Unread, the figure is not drawn: the
+    // fragment's error says so, rather than a colour being guessed.
+    let slots = super::viz::kit::station_slots_for(state, "streamgraph")?;
     Some(format!(
         "{take}{}",
-        super::viz::streamgraph(&series, today.as_deref(), listened.as_deref())
+        super::viz::streamgraph(&series, today.as_deref(), listened.as_deref(), &slots)
     ))
 }
 

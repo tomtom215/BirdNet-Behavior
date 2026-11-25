@@ -950,6 +950,7 @@ async fn serve(
             recordings_dir: recordings_dir_for_maintenance,
             species_cap,
             clip_retention_days,
+            retain_reviewed_audio: cli.retain_reviewed_audio,
             offsite,
             backup_schedule,
         },

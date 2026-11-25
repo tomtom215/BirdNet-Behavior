@@ -283,6 +283,12 @@ pub struct MetricsRegistry {
     /// usage by nothing (PR-7): the card is full of something the purge
     /// cannot reach, and it has stopped deleting. Shared with the manager.
     purge_ineffective: Arc<AtomicBool>,
+    /// Set by the recordings disk manager while the disk is over the purge
+    /// threshold and its last pass found nothing it was allowed to delete
+    /// (N25-01): every clip left is protected, or there are none. Not a latch;
+    /// cleared by the first pass that deletes something or a reading below the
+    /// threshold. Shared with the manager.
+    nothing_purgeable: Arc<AtomicBool>,
     /// Set by the recordings disk manager when the disk is full and the station
     /// is set to keep everything (`FULL_DISK=keep`): recording is on hold and
     /// no clip is deleted. Shared with the manager, read by the capture
@@ -338,6 +344,7 @@ impl MetricsRegistry {
             analytics_mirror_last_failure: AtomicU64::new(0),
             analytics_mirror_last_error: RwLock::new(None),
             purge_ineffective: Arc::new(AtomicBool::new(false)),
+            nothing_purgeable: Arc::new(AtomicBool::new(false)),
             recording_held: Arc::new(AtomicBool::new(false)),
             http_responses: RwLock::new(HashMap::new()),
             http_duration: Histogram::new(),
@@ -561,6 +568,21 @@ impl MetricsRegistry {
     #[must_use]
     pub fn purge_ineffective(&self) -> bool {
         self.purge_ineffective.load(Ordering::Relaxed)
+    }
+
+    /// The flag a disk manager sets while the disk is over the purge threshold
+    /// and its purge finds nothing it may delete (N25-01), for the manager to
+    /// hold.
+    #[must_use]
+    pub fn nothing_purgeable_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.nothing_purgeable)
+    }
+
+    /// Whether the disk is over the purge threshold and the last purge found
+    /// nothing it was allowed to delete.
+    #[must_use]
+    pub fn nothing_purgeable(&self) -> bool {
+        self.nothing_purgeable.load(Ordering::Relaxed)
     }
 
     /// The flag the recordings disk manager raises when the disk is full and
@@ -907,8 +929,11 @@ impl MetricsRegistry {
             occurrence_candidates: self.occurrence_filter().candidates,
             orphaned_clips: self.orphaned_clips(),
             analytics_mirror_failures: self.analytics_mirror_failures(),
-            purge_ineffective: self.purge_ineffective(),
-            recording_held: self.recording_held(),
+            disk_full: DiskFullSnapshot {
+                purge_ineffective: self.purge_ineffective(),
+                nothing_purgeable: self.nothing_purgeable(),
+                recording_held: self.recording_held(),
+            },
             http_responses: Self::read_map(&self.http_responses),
             http_duration: self.http_duration.snapshot(),
             watchdog_pings: self.watchdog_pings_total.load(Ordering::Relaxed),
@@ -939,6 +964,22 @@ impl OccurrenceFilterState {
     pub const fn admits_nothing(self) -> bool {
         self.active && matches!(self.candidates, Some(0))
     }
+}
+
+/// What the disk managers last reported about a full disk, for the renderer.
+///
+/// Three signals, kept together because each answers "what is a full disk
+/// doing to this station?" and none implies another.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DiskFullSnapshot {
+    /// Whether the last disk purge removed recordings without lowering usage.
+    pub purge_ineffective: bool,
+    /// Whether the disk is over the purge threshold and the last purge found
+    /// nothing it was allowed to delete.
+    pub nothing_purgeable: bool,
+    /// Whether recording is on hold because the disk is full and the station
+    /// keeps everything.
+    pub recording_held: bool,
 }
 
 /// Plain snapshot of every metric, returned to the renderer.
@@ -1000,11 +1041,8 @@ pub struct MetricsSnapshot {
     pub orphaned_clips: Option<u64>,
     /// Detections the DuckDB copy refused since process start.
     pub analytics_mirror_failures: u64,
-    /// Whether the last disk purge removed recordings without lowering usage.
-    pub purge_ineffective: bool,
-    /// Whether recording is on hold because the disk is full and the station
-    /// keeps everything.
-    pub recording_held: bool,
+    /// What the disk managers last reported about a full disk.
+    pub disk_full: DiskFullSnapshot,
     /// HTTP responses by status class.
     pub http_responses: Vec<(String, u64)>,
     /// Web request latency.
@@ -1340,7 +1378,15 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
     let _ = writeln!(
         out,
         "birdnet_purge_ineffective {}",
-        u8::from(snap.purge_ineffective)
+        u8::from(snap.disk_full.purge_ineffective)
+    );
+
+    out.push_str("# HELP birdnet_purge_nothing_deletable 1 when the disk is over the purge threshold and the last disk-full purge found no recording it could delete: every one left is protected (locked, reviewed, at its species floor, excluded) or failed to delete, or there are none. The disk goes on filling.\n");
+    out.push_str("# TYPE birdnet_purge_nothing_deletable gauge\n");
+    let _ = writeln!(
+        out,
+        "birdnet_purge_nothing_deletable {}",
+        u8::from(snap.disk_full.nothing_purgeable)
     );
 
     out.push_str("# HELP birdnet_recording_held 1 when the disk is full and the station is set to keep everything (FULL_DISK=keep): recording is on hold and no clip is being deleted.\n");
@@ -1348,7 +1394,7 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
     let _ = writeln!(
         out,
         "birdnet_recording_held {}",
-        u8::from(snap.recording_held)
+        u8::from(snap.disk_full.recording_held)
     );
 
     out.push_str("# HELP birdnet_analytics_mirror_failures_total Detections the database accepted and the DuckDB analytics copy refused since process start.\n");
@@ -2006,5 +2052,24 @@ mod operational_metrics_tests {
             out.contains("birdnet_analytics_mirror_failures_total 2"),
             "{out}"
         );
+    }
+
+    /// N25-01: the flag the disk manager holds reaches the exposition, as `0`
+    /// until it is raised (a missing series reads like a healthy one), and it
+    /// is its own series, not the PR-7 latch.
+    #[test]
+    fn a_purge_that_finds_nothing_deletable_is_exported() {
+        // Whole sample lines: the HELP text itself begins "1 when", so a
+        // substring match on "… 1" is satisfied by the HELP line alone.
+        let sample = |out: &str, line: &str| out.lines().any(|l| l == line);
+        let out = rendered(|_| {});
+        assert!(sample(&out, "birdnet_purge_nothing_deletable 0"), "{out}");
+        let out = rendered(|r| {
+            r.nothing_purgeable_flag()
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+            assert!(r.nothing_purgeable());
+        });
+        assert!(sample(&out, "birdnet_purge_nothing_deletable 1"), "{out}");
+        assert!(sample(&out, "birdnet_purge_ineffective 0"), "{out}");
     }
 }

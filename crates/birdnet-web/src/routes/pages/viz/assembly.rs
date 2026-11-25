@@ -30,7 +30,7 @@
 use std::fmt::Write as _;
 
 use super::heat::disc;
-use super::kit::{self, slot_class, tip};
+use super::kit::{self, SpeciesSlots, tip};
 use super::{EMPTY, svg_a11y};
 
 /// What the figure is made of: how many mornings had at least `k` voices within each window.
@@ -273,16 +273,26 @@ fn line(pts: &[(f64, f64)]) -> String {
 
 /// The figure, drawn for a card and for a phone: a field of discs, the typical morning in bold,
 /// the middle half as a band, the share of mornings that ever got to each level at the right.
-/// `names` are the voices in the order they join, for the readings and the description.
+/// `names` are the voices in the order they join, for the readings and the description; the
+/// row of the `k`th voice is drawn in the colour that species owns on the station (`slots`), the
+/// neutral if it owns none, as on every other chart.
 #[must_use]
-pub fn chorus_figure(c: &Chorus, names: &[String]) -> String {
+pub fn chorus_figure(c: &Chorus, names: &[String], slots: &SpeciesSlots) -> String {
     if !drawable(c) {
         return EMPTY.to_string();
     }
-    let wide = draw(c, names, WIDE, "chorus-assembling", " viz-chart--wide");
+    let wide = draw(
+        c,
+        names,
+        slots,
+        WIDE,
+        "chorus-assembling",
+        " viz-chart--wide",
+    );
     let narrow = draw(
         c,
         names,
+        slots,
         NARROW,
         "chorus-assembling-narrow",
         " viz-chart--narrow",
@@ -296,7 +306,14 @@ const fn drawable(c: &Chorus) -> bool {
 
 /// One drawing of the figure at `lay`'s proportions; `id` names it for the chart kit and prefixes
 /// its gradient ids (two drawings on one page must not share an id), `class` is what CSS switches on.
-fn draw(c: &Chorus, names: &[String], lay: Layout, id: &str, class: &str) -> String {
+fn draw(
+    c: &Chorus,
+    names: &[String],
+    slots: &SpeciesSlots,
+    lay: Layout,
+    id: &str,
+    class: &str,
+) -> String {
     let n = c.windows.len();
     let frame = Frame::new(n, c.voices, lay);
     let (h, base, right) = (frame.height(), frame.base(), lay.w - lay.pad_r);
@@ -321,7 +338,10 @@ fn draw(c: &Chorus, names: &[String], lay: Layout, id: &str, class: &str) -> Str
             c.mornings,
         ),
     ));
-    let classes: Vec<String> = (0..c.voices).map(slot_class).collect();
+    // The colour of each level is the colour of the voice whose arrival makes it.
+    let classes: Vec<String> = (0..c.voices)
+        .map(|k| slots.class(names.get(k).map_or("", String::as_str)))
+        .collect();
     let _ = write!(
         s,
         "<defs>{}</defs>",
@@ -394,7 +414,7 @@ fn draw(c: &Chorus, names: &[String], lay: Layout, id: &str, class: &str) -> Str
     for k in (1..=c.voices).rev() {
         for i in 0..n {
             let idx = (c.voices - k) * n + i;
-            let class = slot_class(k - 1);
+            let class = classes[k - 1].clone();
             let share = c.reached[k - 1][i] as f64 / c.mornings as f64;
             let (cx, cy) = (frame.x(i), frame.y(k));
             if let Some(r) = radius(frame, share) {
@@ -510,9 +530,22 @@ fn draw(c: &Chorus, names: &[String], lay: Layout, id: &str, class: &str) -> Str
 mod tests {
     use super::*;
 
+    /// The station's colours as if its most heard species were these voices, in this order: the
+    /// order the tests below were written for, when a voice's colour was its place in the chorus.
+    fn owners(names: &[String]) -> SpeciesSlots {
+        SpeciesSlots::new(names.iter().map(|n| (n.as_str(), "", n.as_str())))
+    }
+
     /// The drawing for a card, as the figure draws it.
     fn wide(c: &Chorus, names: &[String]) -> String {
-        draw(c, names, WIDE, "chorus-assembling", " viz-chart--wide")
+        draw(
+            c,
+            names,
+            &owners(names),
+            WIDE,
+            "chorus-assembling",
+            " viz-chart--wide",
+        )
     }
 
     /// The drawing for a phone.
@@ -520,6 +553,7 @@ mod tests {
         draw(
             c,
             names,
+            &owners(names),
             NARROW,
             "chorus-assembling-narrow",
             " viz-chart--narrow",
@@ -931,7 +965,7 @@ mod tests {
             mornings: 0,
             reached: vec![],
         };
-        assert_eq!(chorus_figure(&empty, &[]), EMPTY);
+        assert_eq!(chorus_figure(&empty, &[], &SpeciesSlots::default()), EMPTY);
         let svg = wide(&four(), &["<b>x</b>".into(), "B".into(), "C".into()]);
         assert!(!svg.contains("<b>x"), "{svg}");
         assert!(svg.contains("&lt;b&gt;x&lt;/b&gt;"));
@@ -968,7 +1002,7 @@ mod tests {
     /// that shared an id would be a defect on the page, and each carries the class CSS switches on.
     #[test]
     fn the_figure_is_drawn_for_a_card_and_for_a_phone() {
-        let both = chorus_figure(&four(), &names());
+        let both = chorus_figure(&four(), &names(), &owners(&names()));
         assert_eq!(both.matches("<svg").count(), 2, "{both}");
         assert_eq!(
             both.matches(r#"class="ck as-fig viz-chart--wide""#).count(),

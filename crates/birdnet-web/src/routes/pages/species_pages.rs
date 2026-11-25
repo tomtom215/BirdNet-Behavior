@@ -357,6 +357,8 @@ fn list_view(
             return super::error_states::could_not_load("your species list");
         }
     };
+    // A sparkline is in the colour its species owns on the station, as on every chart.
+    let slots = super::viz::kit::station_slots_or_neutral(state, "species list");
     if filter == "week" {
         species.retain(|s| active_this_week(sparks.get(&s.com_name)));
     }
@@ -370,7 +372,7 @@ fn list_view(
     let total: i64 = species.iter().map(|s| s.count).sum();
     let mut rows = String::new();
     for (i, s) in species.iter().enumerate() {
-        let color = species_color(&s.com_name);
+        let color = slots.colour(&s.com_name);
         let spark = sparks
             .get(&s.com_name)
             .map_or_default(|d| sparkline(d, 84.0, 22.0, Some(&color)));
@@ -1339,16 +1341,20 @@ async fn species_companions_partial(
                     r#"<p class="spp-muted">No companion species data yet.</p>"#.to_string(),
                 );
             }
+            // Ranked by the share of their days in common, not by how many (UIC-04).
+            let trigger = names.name_of_stored(&companions[0].trigger);
             let mut html = String::from(
-                r"<table data-fits-phone><thead><tr><th>Companion</th><th>Days heard together</th></tr></thead><tbody>",
+                r"<table data-fits-phone><thead><tr><th>Companion</th><th>Heard on the same day</th><th>Share of their days</th></tr></thead><tbody>",
             );
             for c in &companions {
                 let enc = simple_url_encode(&c.companion);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let share = (c.overlap.clamp(0.0, 1.0) * 100.0).round() as u32;
                 let _ = write!(
                     html,
-                    r#"<tr><td><a href="/species/detail?name={enc}" class="spp-inherit">{name}</a></td><td>{count}</td></tr>"#,
+                    r#"<tr><td><a href="/species/detail?name={enc}" class="spp-inherit">{name}</a></td><td>{days}</td><td>{share}%</td></tr>"#,
                     name = escape_html(names.name_of_stored(&c.companion)),
-                    count = c.shared_days,
+                    days = super::correlation::companion_days_text(c, trigger),
                 );
             }
             html.push_str("</tbody></table>");

@@ -169,7 +169,7 @@ t('mixOklab: endpoints are the colours, the middle is between them in lightness'
 // ── the feed ──
 const feed = (over = {}) => ({
   date: '2026-10-31', nowSec: 50820, sun: SUN, floor: 0.7,
-  species: [{ name: 'Blue Jay', slot: 1 }, { name: 'Northern Cardinal', slot: 2 }, { name: 'Other species', slot: 0 }],
+  species: [{ name: 'Blue Jay', slot: 1 }, { name: 'Northern Cardinal', slot: 2 }, { name: 'Other species', slot: 0, other: true }],
   songs: [
     { t: 23456, c: 0.87, s: 0, href: '/detections/detail?date=2026-10-31&time=06:30:56&name=Blue%20Jay' },
     { t: 30000, c: 0.95, s: 1, href: '/x' },
@@ -237,6 +237,20 @@ t('timeOrder and paintOrder', () => {
   assert.ok(paint.indexOf(2) < paint.indexOf(3), 'within a species the less sure is under the surer');
 });
 
+// UIR-01: a species' slot is the colour it owns on the station, so a named species can be the
+// neutral (slot 0); only the entry marked `other` is the band of everyone else.
+t('a named species that owns no colour is neutral, not "Other species"', () => {
+  const m = S.parseFeed({
+    floor: 0.7,
+    species: [{ name: 'A', slot: 3 }, { name: 'B', slot: 0 }, { name: 'Other species', slot: 0, other: true }],
+    songs: [{ t: 1, c: 0.8, s: 0 }, { t: 2, c: 0.8, s: 1 }, { t: 3, c: 0.8, s: 2 }],
+  });
+  const paint = Array.from(S.paintOrder(m));
+  assert.equal(paint[0], 2, 'only the band of everyone else is painted first');
+  assert.equal(m.species[1].other, false, 'B is named');
+  assert.equal(m.species[2].other, true);
+});
+
 // ── the sentence ──
 t('summarize: the sentence the brief asks for, word for word', () => {
   const songs = [];
@@ -244,7 +258,7 @@ t('summarize: the sentence the brief asks for, word for word', () => {
   songs[48].t = 22 * 3600 + 40 * 60 + 12;
   songs[0].t = 5 * 3600 + 12 * 60 + 5;
   for (let i = 1; i < 48; i++) songs[i].t = 5 * 3600 + 20 * 60 + i * 100;
-  const species = [1, 2, 3, 4, 5, 6, 7, 8].map((k) => ({ name: `Bird ${k}`, slot: k })).concat([{ name: 'Other species', slot: 0 }]);
+  const species = [1, 2, 3, 4, 5, 6, 7, 8].map((k) => ({ name: `Bird ${k}`, slot: k })).concat([{ name: 'Other species', slot: 0, other: true }]);
   const m = S.parseFeed({ floor: 0.7, nowSec: null, sun: null, species, songs, speciesTotal: 9 });
   assert.equal(S.summarize(m), '49 songs from 9 species, the first at 05:12 and the last at 22:40; most were 85 % sure or better.');
 });
