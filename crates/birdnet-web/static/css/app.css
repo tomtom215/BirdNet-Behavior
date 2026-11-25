@@ -7056,4 +7056,7 @@ input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
 .ck-unc-sw-ci  { width: 6px; height: 14px; border-radius: var(--r-2xs); background: var(--seq-moss-2); vertical-align: -3px; }
 .ck-unc-sw-few { border-radius: 50%; border: 1.25px solid var(--chart-axis); }
 .ck-unc-sw-off { background: repeating-linear-gradient(45deg, var(--chart-grid-strong) 0 2px, transparent 2px 5px); border: 1px solid var(--chart-grid-strong); }
+/* The retention table: the number of days a share is of, on its own line in the cell. */
+.rt-table td.rt-cell .rt-n { display: block; font-size: var(--fs-2xs); line-height: 1.2; }
+.rt-table td.rt-cell { white-space: nowrap; }
 /* /Lane G */

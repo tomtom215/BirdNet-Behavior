@@ -504,15 +504,21 @@ fn live_retention() {
         ret.iter()
             .find(|r| r.species == sp)
             .and_then(|r| r.retention_rates.iter().find(|x| x.days == days))
-            .map(|x| x.rate)
+            .map(|x| (x.rate.expect("an eligible anchor"), x.eligible))
             .unwrap()
     };
-    // Robin anchors {01,02,03}: returns within 1 day for 01 & 02, not 03 -> 2/3.
-    assert!((rate("European Robin", 1) - 2.0 / 3.0).abs() < 1e-6);
-    // Wren anchors {01,03}: day1 has no return within 1 day (no Wren on 02),
-    // but does within 2 days (Wren on 03); day3 never returns.
-    assert!((rate("Eurasian Wren", 1) - 0.0).abs() < 1e-6);
-    assert!((rate("Eurasian Wren", 2) - 0.5).abs() < 1e-6);
+    // The record ends on 03, the last day anything was heard, so 03 is no
+    // anchor at any interval: nothing after it could be seen (CHT-11). These
+    // read 2/3 and 0.5 while 03 was counted as a day the bird did not return.
+    // Robin anchors {01,02} at 1 day: both return the next day -> 2/2.
+    assert_eq!(rate("European Robin", 1).1, 2);
+    assert!((rate("European Robin", 1).0 - 1.0).abs() < 1e-6);
+    // Wren anchors {01,03}; at 1 and 2 days only 01 is eligible. It has no
+    // return within 1 day (no Wren on 02), but does within 2 days (03).
+    assert!(rate("Eurasian Wren", 1).0.abs() < 1e-6);
+    assert_eq!(rate("Eurasian Wren", 1).1, 1);
+    assert!((rate("Eurasian Wren", 2).0 - 1.0).abs() < 1e-6);
+    assert_eq!(rate("Eurasian Wren", 2).1, 1);
 }
 
 /// Confirm the raw SQL the builders emit parses and runs (defends against

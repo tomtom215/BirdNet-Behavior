@@ -54,10 +54,16 @@ pub struct SpeciesRetention {
 /// A single retention rate measurement.
 #[derive(Debug, Clone, Serialize)]
 pub struct RetentionRate {
-    /// Days after first detection.
+    /// Days after a day the species was heard.
     pub days: u32,
-    /// Proportion of occurrences that returned (0.0 - 1.0).
-    pub rate: f64,
+    /// Of the eligible anchor days, the share after which the species was
+    /// heard again within [`Self::days`] (0.0 - 1.0); `None` when no anchor
+    /// is eligible, which is "nothing known", not "never returned".
+    pub rate: Option<f64>,
+    /// The anchor days the record extends at least [`Self::days`] beyond:
+    /// the denominator of [`Self::rate`]. An anchor nearer the end of the
+    /// record than that cannot be seen to return or not, and is left out.
+    pub eligible: u32,
 }
 
 /// Species residency classification, from how much of the station's time

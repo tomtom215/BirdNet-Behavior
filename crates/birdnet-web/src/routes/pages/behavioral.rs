@@ -385,7 +385,7 @@ pub(super) async fn analytics_retention_partial(
                     ("Days after a day heard", days),
                     ("Species listed", format!("those with at least {min_detections} detections")),
                 ],
-                "For every day a species was heard, whether it was heard again within each number of days; a cell is the share of its days for which it was. The weeks and the kind of visitor (resident, regular, migrant, rarity) are counted from the weeks the species was heard in, not from these rates.",
+                "For every day a species was heard, whether it was heard again within each number of days; a cell is the share of its days for which it was, and the number under it is how many days that share is of. A day counts towards an interval only when the record runs at least that long after it (the record ends on the last day the station heard any bird): a day near the end could not have been followed, and counting it as a bird that did not return would pull every longer interval down. A cell with no such day says “too soon”, and one with fewer than three says “too few”, rather than showing a share. Days in a row of one bird’s stay are not independent trials, so no binomial interval is drawn. A day the station was not listening is not told apart from a day the bird was absent. The weeks and the kind of visitor (resident, regular, migrant, rarity) are counted from the weeks the species was heard in, not from these rates.",
                 &[("The numbers as JSON", api("retention", &format!("min_detections={min_detections}")))],
                 &[("Download the table as CSV", "rt-data", "who-keeps-coming-back")],
             ));
@@ -400,10 +400,55 @@ pub(super) async fn analytics_retention_partial(
     }
 }
 
-/// The rate of `days` in `rates`, as a number in `0..=1`.
+/// The cell for `days` in `rates`.
 #[cfg(feature = "analytics")]
-fn rate_at(rates: &[birdnet_behavioral::types::RetentionRate], days: u32) -> Option<f64> {
-    rates.iter().find(|r| r.days == days).map(|r| r.rate)
+fn rate_at(
+    rates: &[birdnet_behavioral::types::RetentionRate],
+    days: u32,
+) -> Option<&birdnet_behavioral::types::RetentionRate> {
+    rates.iter().find(|r| r.days == days)
+}
+
+/// One retention cell: the share with the number of days it is a share of, or the reason
+/// there is none. Three states, each in words (CHT-11, CHT-23):
+///
+/// * no day heard is that far from the end of the record: "too soon", never 0 %;
+/// * fewer such days than [`super::viz::uncertainty::TOO_FEW_BELOW`]: "too few", with the
+///   count, and no colour (a colour is a value);
+/// * otherwise the share on the moss ramp, and "of n" under it.
+#[cfg(feature = "analytics")]
+fn retention_cell(cell: Option<&birdnet_behavioral::types::RetentionRate>) -> String {
+    use super::viz::uncertainty;
+    match cell {
+        Some(c) if c.eligible > 0 && uncertainty::too_few(c.eligible) => format!(
+            r#"<td class="rt-cell rt-none rt-few" data-csv="too few to say ({n} days)">too few<span class="rt-n">of {n}</span></td>"#,
+            n = c.eligible,
+        ),
+        Some(birdnet_behavioral::types::RetentionRate {
+            rate: Some(rate),
+            eligible,
+            ..
+        }) if *eligible > 0 => {
+            let rate = *rate;
+            // Seven even steps from 0 to 100%: a rate is a proportion, so (unlike a
+            // count) its ramp is linear.
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let step = ((rate * 7.0).ceil() as usize).clamp(1, 7);
+            let class = if rate <= 0.0 {
+                "rt-zero".to_owned()
+            } else {
+                format!("ck-m{step}")
+            };
+            let pct = uncertainty::percent(rate);
+            format!(
+                r#"<td class="rt-cell {class}" data-csv="{pct} of {eligible}">{pct}<span class="rt-n">of {eligible}</span></td>"#
+            )
+        }
+        Some(_) => {
+            r#"<td class="rt-cell rt-none" data-csv="too soon to say">too soon</td>"#.to_owned()
+        }
+        None => r#"<td class="rt-cell rt-none">—</td>"#.to_owned(),
+    }
 }
 
 /// The day intervals the retention table shows, with how each is said.
@@ -492,25 +537,7 @@ fn render_retention(
                 of = r.station_weeks,
             );
             for (days, _) in RETURN_AFTER {
-                match rate_at(&r.retention_rates, days) {
-                    Some(rate) => {
-                        // Seven even steps from 0 to 100%: a rate is a proportion, so (unlike a
-                        // count) its ramp is linear.
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                        let step = ((rate * 7.0).ceil() as usize).clamp(1, 7);
-                        let class = if rate <= 0.0 {
-                            "rt-zero".to_owned()
-                        } else {
-                            format!("ck-m{step}")
-                        };
-                        let _ = write!(
-                            html,
-                            r#"<td class="rt-cell {class}">{:.0}%</td>"#,
-                            rate * 100.0
-                        );
-                    }
-                    None => html.push_str(r#"<td class="rt-cell rt-none">—</td>"#),
-                }
+                html.push_str(&retention_cell(rate_at(&r.retention_rates, days)));
             }
             html.push_str("</tr>");
         }
@@ -518,7 +545,7 @@ fn render_retention(
     }
     html.push_str("</table></div>");
     html.push_str(
-        r#"<div class="ck-scale rt-key"><span class="ck-steps" aria-hidden="true"><i class="ck-sw ck-m1"></i><i class="ck-sw ck-m2"></i><i class="ck-sw ck-m3"></i><i class="ck-sw ck-m4"></i><i class="ck-sw ck-m5"></i><i class="ck-sw ck-m6"></i><i class="ck-sw ck-m7"></i></span><span class="bnb-meta">0% to 100% of the days a species was heard that it was heard again within that time.</span></div>"#,
+        r#"<div class="ck-scale rt-key"><span class="ck-steps" aria-hidden="true"><i class="ck-sw ck-m1"></i><i class="ck-sw ck-m2"></i><i class="ck-sw ck-m3"></i><i class="ck-sw ck-m4"></i><i class="ck-sw ck-m5"></i><i class="ck-sw ck-m6"></i><i class="ck-sw ck-m7"></i></span><span class="bnb-meta">0% to 100% of the days a species was heard that it was heard again within that time. Under each share, how many days it is a share of: only the days the record runs that long past. “Too soon”: no such day yet. “Too few”: fewer than three.</span></div>"#,
     );
     html
 }
@@ -1465,6 +1492,41 @@ fn format_duration(secs: u64) -> String {
 #[cfg(all(test, feature = "analytics"))]
 mod tests {
     use super::funnel_step_counts;
+
+    /// CHT-11 / CHT-23: a retention cell with no day far enough from the end of the record says
+    /// "too soon", one with fewer than three says "too few" with its count, and neither prints a
+    /// share or wears a colour; a cell with enough prints the share and what it is of.
+    #[test]
+    fn a_retention_cell_says_too_soon_too_few_or_its_share_of_n() {
+        use birdnet_behavioral::types::RetentionRate;
+        let cell = |rate: Option<f64>, eligible: u32| {
+            super::retention_cell(Some(&RetentionRate {
+                days: 7,
+                rate,
+                eligible,
+            }))
+        };
+        let soon = cell(None, 0);
+        assert!(soon.contains(">too soon<") && !soon.contains('%'), "{soon}");
+        let few = cell(Some(0.0), 2);
+        assert!(few.contains(">too few<") && few.contains("of 2"), "{few}");
+        assert!(
+            !few.contains('%') && !few.contains("ck-m") && !few.contains("rt-zero"),
+            "{few}"
+        );
+        // Counterpart: three is enough, and a share of zero over three is a zero, said as one.
+        let zero = cell(Some(0.0), 3);
+        assert!(
+            zero.contains("rt-zero") && zero.contains(">0%<span class=\"rt-n\">of 3</span>"),
+            "{zero}"
+        );
+        let half = cell(Some(0.5), 12);
+        assert!(
+            half.contains("ck-m4") && half.contains(">50%<span class=\"rt-n\">of 12</span>"),
+            "{half}"
+        );
+        assert!(half.contains(r#"data-csv="50% of 12""#), "{half}");
+    }
     use birdnet_behavioral::types::ChorusFunnel;
 
     /// The engine-configuration card waits for the analytics handle off the
