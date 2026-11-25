@@ -1442,9 +1442,10 @@ fn render_detection_card(
                 .map_or_default(|n| n.to_string_lossy().to_string());
             let safe = escape_html(&basename);
             // Named for what it plays (UIC-12): the name and the time the card shows.
+            // The clock as text, not `display::clock`'s markup.
             let label = escape_html(&format!(
                 "Play {shown}, {}",
-                crate::display::clock(&d.time)
+                d.time.get(0..5).unwrap_or(&d.time)
             ));
             format!(
                 "<button type=\"button\" class=\"x-fplay tdl-play\" data-play-src=\"/api/v2/recordings/{safe}\" \

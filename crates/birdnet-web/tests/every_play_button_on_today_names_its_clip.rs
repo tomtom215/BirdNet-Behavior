@@ -117,5 +117,17 @@ async fn todays_play_buttons_each_have_their_own_name() {
             labels.iter().all(|l| !l.contains("<Co>")),
             "{uri}: the name in a label is escaped: {labels:?}"
         );
+        // An attribute is text: the time is the clock as written, not the markup the page uses
+        // to draw a clock in the reader's 12- or 24-hour style (that came out as "&lt;span …").
+        for (label, time) in labels.iter().zip(["06:10", "07:20", "08:30"]) {
+            assert!(
+                !label.contains("span") && !label.contains("clk"),
+                "{uri}: a label carries markup: {label:?}"
+            );
+            assert!(
+                labels.iter().any(|l| l.ends_with(&format!(", {time}"))),
+                "{uri}: a label ends with its clip's time ({time}): {label:?}"
+            );
+        }
     }
 }

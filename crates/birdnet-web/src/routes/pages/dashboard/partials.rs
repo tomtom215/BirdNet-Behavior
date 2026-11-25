@@ -151,7 +151,11 @@ fn render_feed_row(
                 let safe = escape_html(&basename);
                 // Named for what it plays, as on Recordings: thirty buttons called "Play clip"
                 // could not be told apart by a screen reader (UIC-12).
-                let label = escape_html(&format!("Play {shown}, {time_short}"));
+                // The clock as text: `time_short` is the markup that draws it in the reader's style.
+                let label = escape_html(&format!(
+                    "Play {shown}, {}",
+                    d.time.get(0..5).unwrap_or(&d.time)
+                ));
                 format!(
                     r#"<button type="button" class="x-fplay" data-play-src="/api/v2/recordings/{safe}" title="Play clip" aria-label="{label}">▶</button>"#
                 )
@@ -254,7 +258,11 @@ fn render_best_row(
                 .file_name()
                 .map_or_default(|n| n.to_string_lossy().to_string());
             let safe = escape_html(&basename);
-            let label = escape_html(&format!("Play {shown}, {time_short}"));
+            // The clock as text: `time_short` is the markup that draws it in the reader's style.
+            let label = escape_html(&format!(
+                "Play {shown}, {}",
+                d.time.get(0..5).unwrap_or(&d.time)
+            ));
             format!(
                 r#"<button type="button" class="x-play" data-play-src="/api/v2/recordings/{safe}" title="Play clip" aria-label="{label}">▶</button>"#
             )
