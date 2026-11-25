@@ -84,14 +84,27 @@ run_logic() {
         rule() { :; }
 
         MODEL_DIR="${vol}"
+        # What the entrypoint reads before these functions run (OOB-20). The
+        # waits are recorded, not slept.
+        # shellcheck disable=SC2034  # read by the sourced functions
+        {
+            MODEL_RETRY_WAITS="${BIRDNET_MODEL_RETRY_WAITS-30 90}"
+            LOCAL_MODEL="${BIRDNET_LOCAL_MODEL:-}"
+            CLASSIFIER_MISSING=0
+        }
+        sleep() { echo "sleep $1" >>"${WORK}/logic.calls"; }
         # The V3.0 pins and the names, taken from the shipping file.
         # shellcheck disable=SC1090
         source <(grep -E '^(V24_[A-Z0-9_]*|V3_[A-Z0-9_]*|ZENODO_BASE|GEOMODEL_[A-Z0-9_]*)=' "${ENTRYPOINT}")
         # shellcheck disable=SC1090
-        source <(sed -n '/^select_classifier()/,/^}/p;/^acquire_default_models()/,/^}/p;/^acquire_v24_models()/,/^}/p;/^acquire_classifier_models()/,/^}/p;/^setup_geomodel()/,/^}/p;/^setup_range_filter()/,/^}/p;/^setup_occurrence_filter()/,/^}/p' "${ENTRYPOINT}")
+        source <(sed -n '/^retry_with_backoff()/,/^}/p;/^classifier_not_installed()/,/^}/p;/^select_classifier()/,/^}/p;/^acquire_default_models()/,/^}/p;/^acquire_v24_models()/,/^}/p;/^acquire_classifier_models()/,/^}/p;/^setup_geomodel()/,/^}/p;/^setup_range_filter()/,/^}/p;/^setup_occurrence_filter()/,/^}/p' "${ENTRYPOINT}")
 
         # The V3.0 download recorders: note the call, make the file, succeed.
-        ensure_model_file() { echo "v3-model $1 | primary=$2 | fallback=$3 | sha=$4" >>"${WORK}/logic.calls"; echo v3 >"$1"; }
+        ensure_model_file() {
+            echo "v3-model $1 | primary=$2 | fallback=$3 | sha=$4" >>"${WORK}/logic.calls"
+            [ "${FAIL_V3:-0}" = 1 ] && return 1
+            echo v3 >"$1"
+        }
         ensure_geomodel_file() { echo "geomodel $1 | sha=$3" >>"${WORK}/logic.calls"; echo geo >"$1"; }
         # The binary: note the id, write what the real one writes.
         install_with_binary() {
@@ -304,6 +317,19 @@ else
     fail "exit ${rc}; filter '$(envval BIRDNET_METADATA_MODEL)'; $(grep -c 'filtering is OFF' "${WORK}/logic.out") notice(s)"
 fi
 
+echo "=== 10b. the V3.0 model failing is retried, then the container carries on and says so ==="
+BIRDNET_CLASSIFIER=birdnet-v3 FAIL_V3=1 run_logic
+rc=$?
+V="$(envval VOLUME)"
+if [ "${rc}" -eq 0 ] && [ "$(envval BIRDNET_MODEL)" = "${V}/${V3_MODEL}" ] \
+    && [ "$(grep -c '^v3-model ' "${WORK}/logic.calls")" -eq 3 ] \
+    && [ "$(grep '^sleep' "${WORK}/logic.calls" | tr '\n' ' ')" = "sleep 30 sleep 90 " ] \
+    && grep -q 'NOT DETECTING BIRDS' "${WORK}/logic.out"; then
+    pass "three attempts, 30 s and 90 s apart, then on to the daemon with the warning"
+else
+    fail "exit ${rc}; calls: $(tr '\n' ';' <"${WORK}/logic.calls")"
+fi
+
 # ── Part 2: the whole script ────────────────────────────────────────────────
 echo "=== 11. the real entrypoint, end to end ==="
 # BNB_BINARY is a stub that plays both parts the real binary plays: with
@@ -314,15 +340,27 @@ STUB="${WORK}/binary-stub"
 cat >"${STUB}" <<'SH'
 #!/bin/sh
 id=""
+from=""
+next=""
 for a in "$@"; do
-    if [ "${id}" = "?" ]; then id="${a}"; fi
-    [ "${a}" = "--install-model" ] && id="?"
+    case "${next}" in
+        id) id="${a}"; next=""; continue ;;
+        from) from="${a}"; next=""; continue ;;
+    esac
+    [ "${a}" = "--install-model" ] && next=id
+    [ "${a}" = "--from-file" ] && next=from
 done
 if [ -n "${id}" ]; then
     # The daemon would report any BIRDNET_* variable it does not read; so would
     # this install, and it must not be handed BIRDNET_CLASSIFIER.
     [ -n "${BIRDNET_CLASSIFIER:-}" ] && echo "STUB-SAW-BIRDNET_CLASSIFIER" >>"${STUB_LOG}"
-    echo "STUB-INSTALL: ${id} (dir=${BIRDNET_MODEL_DIR})" >>"${STUB_LOG}"
+    if [ -n "${from}" ]; then
+        echo "STUB-INSTALL: ${id} (dir=${BIRDNET_MODEL_DIR}) from=${from}" >>"${STUB_LOG}"
+        # Stands in for the real binary's sha256-and-size check of the file.
+        [ "$(cat "${from}")" = "the pinned model" ] || { echo "Install failed: sha256 mismatch" >&2; exit 1; }
+    else
+        echo "STUB-INSTALL: ${id} (dir=${BIRDNET_MODEL_DIR})" >>"${STUB_LOG}"
+    fi
     [ "${STUB_FAIL:-}" = "${id}" ] && { echo "Install failed: network error" >&2; exit 1; }
     case "${id}" in
         birdnet-v24) echo model >"${BIRDNET_MODEL_DIR}/birdnet-v24.onnx"; echo labels >"${BIRDNET_MODEL_DIR}/birdnet-v24_labels.txt" ;;
@@ -412,13 +450,58 @@ else
     fail "exit ${rc}; the daemon $(grep -q DAEMON-ARGS "${WORK}/e2e.out" && echo started || echo did not start)"
 fi
 
+# OOB-20 (decision 7 of 2026-11-25): this used to stop the container, which
+# Compose restarted into the same failure with no dashboard to say why. Now the
+# install is retried, and then the container starts anyway and says loudly that
+# nothing is being identified.
 vol="${WORK}/e2e-install-fails"
-run_entrypoint "${vol}" STUB_FAIL=birdnet-v24; rc=$?
-if [ "${rc}" -ne 0 ] && ! grep -q 'DAEMON-ARGS' "${WORK}/e2e.out" && grep -q 'BIRDNET_CLASSIFIER=birdnet-v3' "${WORK}/e2e.out"; then
-    pass "a V2.4 that cannot be installed stops the container (the daemon would detect nothing) and offers birdnet-v3"
+run_entrypoint "${vol}" STUB_FAIL=birdnet-v24 BIRDNET_MODEL_RETRY_WAITS="0 0"; rc=$?
+if [ "${rc}" -eq 0 ] && grep -q 'DAEMON-ARGS' "${WORK}/e2e.out"; then
+    pass "a V2.4 that cannot be installed does not stop the container: the daemon (and the dashboard) start"
 else
     fail "exit ${rc}; the daemon $(grep -q DAEMON-ARGS "${WORK}/e2e.out" && echo started || echo did not start)"
     sed 's/^/        /' "${WORK}/e2e.out" | tail -6
+fi
+tries="$(grep -c '^STUB-INSTALL: birdnet-v24 ' "${WORK}/stub.log")"
+[ "${tries}" -eq 3 ] && pass "after three attempts" || fail "${tries} attempts, not 3"
+if grep -q 'NOT DETECTING BIRDS' "${WORK}/e2e.out" && grep -q 'BIRDNET_LOCAL_MODEL' "${WORK}/e2e.out" \
+    && grep -q 'Starting WITHOUT a classifier' "${WORK}/e2e.out" && grep -q 'BIRDNET_CLASSIFIER=birdnet-v3' "${WORK}/e2e.out"; then
+    pass "the log says the station is not detecting, how to install the model, and offers birdnet-v3"
+else
+    fail "the log does not say it: $(tail -8 "${WORK}/e2e.out" | tr '\n' '|')"
+fi
+if [ -z "$(denv BIRDNET_MODEL_RETRY_WAITS)" ] && ! grep -q 'DAEMON-ENV: BIRDNET_MODEL_RETRY_WAITS' "${WORK}/e2e.out"; then
+    pass "the daemon is not handed BIRDNET_MODEL_RETRY_WAITS (it would report it as unknown)"
+else
+    fail "the daemon would see BIRDNET_MODEL_RETRY_WAITS"
+fi
+# Counterpart: a success is quiet.
+vol="${WORK}/e2e-install-works"
+run_entrypoint "${vol}"; rc=$?
+if [ "${rc}" -eq 0 ] && ! grep -q 'NOT DETECTING' "${WORK}/e2e.out" && [ "$(grep -c '^STUB-INSTALL: birdnet-v24 ' "${WORK}/stub.log")" -eq 1 ]; then
+    pass "counterpart: an install that works is one attempt and no warning"
+else
+    fail "counterpart: exit ${rc}; $(grep -c 'NOT DETECTING' "${WORK}/e2e.out") warning(s)"
+fi
+
+# A local model file: handed to the binary's own check, and refused when wrong.
+vol="${WORK}/e2e-local"
+printf 'the pinned model' >"${WORK}/local.onnx"
+run_entrypoint "${vol}" BIRDNET_LOCAL_MODEL="${WORK}/local.onnx"; rc=$?
+if [ "${rc}" -eq 0 ] && grep -qx "STUB-INSTALL: birdnet-v24 (dir=${vol}) from=${WORK}/local.onnx" "${WORK}/stub.log" \
+    && [ -s "${vol}/${V24_MODEL}" ] && ! grep -q 'DAEMON-ENV: BIRDNET_LOCAL_MODEL' "${WORK}/e2e.out"; then
+    pass "BIRDNET_LOCAL_MODEL is installed through the binary's check (--from-file), and not passed to the daemon"
+else
+    fail "BIRDNET_LOCAL_MODEL: exit ${rc}; calls: $(tr '\n' ';' <"${WORK}/stub.log")"
+fi
+vol="${WORK}/e2e-local-wrong"
+printf 'something else' >"${WORK}/wrong.onnx"
+run_entrypoint "${vol}" BIRDNET_LOCAL_MODEL="${WORK}/wrong.onnx"; rc=$?
+if [ "${rc}" -eq 0 ] && [ ! -e "${vol}/${V24_MODEL}" ] && [ "$(grep -c '^STUB-INSTALL: birdnet-v24 ' "${WORK}/stub.log")" -eq 1 ] \
+    && grep -q 'was refused' "${WORK}/e2e.out" && grep -q 'DAEMON-ARGS' "${WORK}/e2e.out"; then
+    pass "a local file that does not match is refused once, nothing is installed, and the container still starts"
+else
+    fail "a wrong BIRDNET_LOCAL_MODEL: exit ${rc}; model $([ -e "${vol}/${V24_MODEL}" ] && echo present || echo absent)"
 fi
 
 vol="${WORK}/e2e-range-fails"

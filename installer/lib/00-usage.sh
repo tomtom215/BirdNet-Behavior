@@ -34,15 +34,24 @@
 #
 # Offline / air-gapped install (no internet on the target):
 #   BIRDNET_BINARY_TARBALL=/path/to/birdnet-behavior-<ver>-<target>.tar.gz \
-#     BIRDNET_SKIP_MODEL=1 sudo -E bash install.sh
+#     BIRDNET_LOCAL_MODEL=/path/to/birdnet-v24.onnx sudo -E bash install.sh
 #   Installs the binary from a tarball you already downloaded (skips the GitHub
-#   fetch + checksum round-trip — you vouch for the local file), and skips the
-#   model pull (~85 MB for BirdNET V2.4, ~555 MB for the V3.0 preview). Place the
-#   model files in <data>/models and restart afterwards.
+#   fetch + checksum round-trip — you vouch for the local file), and the
+#   classifier from a model file you already downloaded, which IS checked: it
+#   must have the sha256 and size this release pins, exactly as a download must.
+#   BIRDNET_SKIP_MODEL=1 instead skips the model altogether (~85 MB for BirdNET
+#   V2.4, ~555 MB for the V3.0 preview): place the files in <data>/models and
+#   restart afterwards.
+#
+# Exit status: 0 installed; 75 installed but the classifier could not be
+# installed, so the station is NOT detecting (the summary says how to fix it);
+# anything else, the install stopped.
 #
 # Environment overrides (all optional):
 #   BIRDNET_BINARY_TARBALL=PATH  install the binary from a local tarball (offline)
 #   BIRDNET_SKIP_MODEL=1         do not download the model (stage it out-of-band)
+#   BIRDNET_LOCAL_MODEL=PATH     install the classifier from this file, as --local-model
+#   BIRDNET_MODEL_RETRY_WAITS="30 90"  seconds between attempts at the model download
 #   BIRDNET_CLASSIFIER=ID        birdnet-v24 (default) or birdnet-v3, as --classifier
 #                                (the flag wins; an existing station keeps its own)
 #   BIRDNET_NONINTERACTIVE=1     never prompt; take env/config/defaults

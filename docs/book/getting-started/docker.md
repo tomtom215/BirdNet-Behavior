@@ -72,7 +72,7 @@ Your recordings, database, and cached model live in the `birdnet-data` named vol
 
 ## 4. Watch the first-run model install
 
-On a new volume the container installs the classifier before it starts the web server, and says which one in a single `Classifier:` log line. By default that is **BirdNET V2.4** and its **range filter v2**, about 85 MB: the container asks the binary (`birdnet-behavior --install-model birdnet-v24`, then `birdnet-v24-range-v2`), which downloads each file, checks it against a SHA-256 compiled into the binary, and renames it into place only when it matches. The model comes from Hugging Face and the range filter from `raw.githubusercontent.com` (see [Installation](./installation.md#which-classifier-a-new-install-runs)); the label file is written by the binary itself. A file that is already on the volume is not fetched again, so a restart installs nothing, and the install happens **once** per named volume.
+On a new volume the container installs the classifier before it starts the web server, and says which one in a single `Classifier:` log line. By default that is **BirdNET V2.4** and its **range filter v2**, about 85 MB: the container asks the binary (`birdnet-behavior --install-model birdnet-v24`, then `birdnet-v24-range-v2`), which downloads each file, checks it against a SHA-256 compiled into the binary, and renames it into place only when it matches. Both come from this project's `models-v2.4` release first, and from Hugging Face and `raw.githubusercontent.com` if that fails (see [Installation](./installation.md#which-classifier-a-new-install-runs)); the label file is written by the binary itself. A file that is already on the volume is not fetched again, so a restart installs nothing, and the install happens **once** per named volume.
 
 ```bash
 docker compose logs -f birdnet
@@ -93,7 +93,7 @@ With `BIRDNET_CLASSIFIER=birdnet-v3` the container instead downloads the BirdNET
 
 Once you see `Starting birdnet-behavior`, open **<http://localhost:8502>**.
 
-> If the download fails, the entrypoint fails loud (not silent) with the exact cause and remediation. See [Troubleshooting → Model not found](../guides/troubleshooting.md#model-not-found).
+> If the download fails, the entrypoint tries twice more (30 s and then 90 s later, or the waits in `BIRDNET_MODEL_RETRY_WAITS`), and then starts the station **without** the model: the dashboard comes up, nothing is identified, and the log says so in a boxed warning with the cause and what to do. Every later start of the container tries the install again. To install from a file instead of the network, mount it and set `BIRDNET_LOCAL_MODEL` to its path; it must have the SHA-256 (and, for V2.4, the size) a download must have, or it is refused. See [Troubleshooting → Model not found](../guides/troubleshooting.md#model-not-found).
 
 ## Single `docker run` (no compose)
 

@@ -44,15 +44,24 @@
 #
 # Offline / air-gapped install (no internet on the target):
 #   BIRDNET_BINARY_TARBALL=/path/to/birdnet-behavior-<ver>-<target>.tar.gz \
-#     BIRDNET_SKIP_MODEL=1 sudo -E bash install.sh
+#     BIRDNET_LOCAL_MODEL=/path/to/birdnet-v24.onnx sudo -E bash install.sh
 #   Installs the binary from a tarball you already downloaded (skips the GitHub
-#   fetch + checksum round-trip — you vouch for the local file), and skips the
-#   model pull (~85 MB for BirdNET V2.4, ~555 MB for the V3.0 preview). Place the
-#   model files in <data>/models and restart afterwards.
+#   fetch + checksum round-trip — you vouch for the local file), and the
+#   classifier from a model file you already downloaded, which IS checked: it
+#   must have the sha256 and size this release pins, exactly as a download must.
+#   BIRDNET_SKIP_MODEL=1 instead skips the model altogether (~85 MB for BirdNET
+#   V2.4, ~555 MB for the V3.0 preview): place the files in <data>/models and
+#   restart afterwards.
+#
+# Exit status: 0 installed; 75 installed but the classifier could not be
+# installed, so the station is NOT detecting (the summary says how to fix it);
+# anything else, the install stopped.
 #
 # Environment overrides (all optional):
 #   BIRDNET_BINARY_TARBALL=PATH  install the binary from a local tarball (offline)
 #   BIRDNET_SKIP_MODEL=1         do not download the model (stage it out-of-band)
+#   BIRDNET_LOCAL_MODEL=PATH     install the classifier from this file, as --local-model
+#   BIRDNET_MODEL_RETRY_WAITS="30 90"  seconds between attempts at the model download
 #   BIRDNET_CLASSIFIER=ID        birdnet-v24 (default) or birdnet-v3, as --classifier
 #                                (the flag wins; an existing station keeps its own)
 #   BIRDNET_NONINTERACTIVE=1     never prompt; take env/config/defaults
@@ -203,6 +212,40 @@ V24_RANGE_ID="birdnet-v24-range-v2"
 V24_MODEL_FILE="birdnet-v24.onnx"
 V24_LABELS_FILE="birdnet-v24_labels.txt"
 V24_RANGE_FILE="birdnet-v24-range-v2.onnx"
+
+# ---------------------------------------------------------------------------
+# When the classifier cannot be installed (OOB-20; decision 7 of 2026-11-25).
+#
+# A failed classifier download used to be `fatal` before the config and the
+# service existed, leaving a binary and nothing else. Now the fetch is retried
+# a bounded number of times, and if it still fails the install FINISHES — the
+# config, the unit, the dashboard — and says loudly, last thing on the screen,
+# that the station is not detecting and how to install the model. The run then
+# exits with EXIT_NO_CLASSIFIER, so a script can tell "installed, not
+# detecting" from success (0) and from a run that stopped (1, or any other
+# status a failing command gives under `set -e`). 75 is sysexits' EX_TEMPFAIL:
+# "a temporary failure; try again later", which is exactly the remedy.
+#
+#   BIRDNET_MODEL_RETRY_WAITS  seconds to wait before each retry, space
+#                              separated: "30 90" is three attempts over two
+#                              minutes. "" is one attempt. Tests set "0 0".
+#   BIRDNET_LOCAL_MODEL        (or --local-model PATH) install the classifier
+#                              from a file already on this machine instead of
+#                              downloading it. It is checked against the same
+#                              pins as a download (V2.4: the sha256 AND size the
+#                              binary carries; V3.0: the sha256 below) and a
+#                              file that does not match is refused, never
+#                              installed. For an offline install.
+# BIRDNET_SKIP_MODEL=1 is not a failure: the operator asked for it, and it
+# still exits 0.
+# ---------------------------------------------------------------------------
+EXIT_NO_CLASSIFIER=75
+MODEL_RETRY_WAITS="${BIRDNET_MODEL_RETRY_WAITS-30 90}"
+LOCAL_MODEL="${BIRDNET_LOCAL_MODEL:-}"
+# Set by classifier_not_installed (55-model.sh); read by the summary and by the
+# exit status of install and repair.
+CLASSIFIER_MISSING=0
+CLASSIFIER_MISSING_WHY=""
 
 # ---------------------------------------------------------------------------
 # BirdNET+ V3.0 model files (opt-in: --classifier birdnet-v3). FP32 ONNX
@@ -1576,6 +1619,69 @@ model_file_is_verified() {
     verify_model_sha256 "${file}" "${expected}"
 }
 
+# Run "$@" until it succeeds, waiting MODEL_RETRY_WAITS (seconds, space
+# separated) between attempts: one more attempt than there are waits. Returns
+# the last attempt's failure. WHAT names the thing for the messages.
+#
+# Bounded on purpose (OOB-20). A field station's uplink drops for a minute and
+# comes back, and a mirror answers 503 for a moment; neither should cost the
+# operator a second trip to the box. An outage that lasts longer is not waited
+# out here: the install finishes without the classifier and says so
+# (classifier_not_installed), which is the better place to be than a terminal
+# that sits retrying for an hour.
+MODEL_ATTEMPTS=1
+retry_with_backoff() {
+    local what="$1" spec="${MODEL_RETRY_WAITS}"
+    shift
+    if ! [[ "${spec}" =~ ^[[:space:]]*([0-9]+([[:space:]]+[0-9]+)*)?[[:space:]]*$ ]]; then
+        warn "BIRDNET_MODEL_RETRY_WAITS='${spec}' is not a list of seconds; using 30 90."
+        spec="30 90"
+    fi
+    local -a waits=()
+    read -r -a waits <<<"${spec}"
+    MODEL_ATTEMPTS=$(( ${#waits[@]} + 1 ))
+    local n=1
+    while :; do
+        "$@" && return 0
+        [ "${n}" -lt "${MODEL_ATTEMPTS}" ] || return 1
+        warn "${what}: attempt ${n} of ${MODEL_ATTEMPTS} failed; trying again in ${waits[n - 1]} s."
+        sleep "${waits[n - 1]}"
+        n=$((n + 1))
+    done
+}
+
+# Record that the classifier is not installed, and say so now. The install
+# carries on; print_summary repeats it last, and the run exits
+# EXIT_NO_CLASSIFIER (10-config.sh). $1 is why, as a clause.
+classifier_not_installed() {
+    CLASSIFIER_MISSING=1
+    CLASSIFIER_MISSING_WHY="$1"
+    loud_warn "THE CLASSIFIER IS NOT INSTALLED: $1." \
+              "The install carries on, so the configuration, the service and the dashboard" \
+              "exist — but the station will detect NOTHING until the model is installed." \
+              "How to install it is at the end of this run."
+}
+
+# Copy the operator's model file SRC to DEST, keeping it only if it has the
+# pinned sha256 EXPECTED (the V3.0 pins; V2.4's are the binary's). Staged
+# beside DEST under a name the station never loads, and renamed into place
+# only once it verifies, so a refused file never lands under the final name.
+install_local_model_file() {
+    local src="$1" dest="$2" expected="$3" stage
+    stage="${dest}.local.$$"
+    rm -f "${stage}"
+    if ! cp -- "${src}" "${stage}"; then
+        rm -f "${stage}"
+        warn "  Could not copy ${src} into ${MODEL_DIR}."
+        return 1
+    fi
+    if ! verify_model_sha256 "${stage}" "${expected}"; then
+        rm -f "${stage}"
+        return 1
+    fi
+    mv -f "${stage}" "${dest}"
+}
+
 download_model() {
     local model_dest="${MODEL_DIR}/${MODEL_FILE}"
     local labels_dest="${MODEL_DIR}/${LABELS_FILE}"
@@ -1613,19 +1719,28 @@ download_model() {
     # Model (~541 MB) — resumable so a dropped connection picks up where it left
     # off on the next run instead of restarting from 0 MB.
     if ! model_file_is_verified "${model_dest}" "${MODEL_SHA256}"; then
-        local model_origins
-        mapfile -t model_origins < <(classifier_origins "${MODEL_FILE}")
-        if ! fetch_verified_model "${model_dest}" "${MODEL_SHA256}" \
-            "BirdNET+ V3.0 model (~541 MB)" 1 "${model_origins[@]}"; then
-            warn "Model download failed or could not be verified from any source."
-            warn "Any partial file is kept at:"
-            warn "  ${model_dest}"
-            warn "Re-run this installer to resume from where it stopped — the"
-            warn "guard above checks the checksum, not merely that a file exists,"
-            warn "so a partial is resumed rather than mistaken for a finished one."
-            warn "Common causes: no internet connection, GitHub/Zenodo temporarily"
-            warn "down, or disk full."
-            fatal "Model download failed. Check the cause above and retry."
+        if [ -n "${LOCAL_MODEL}" ]; then
+            info "  Installing the model from ${LOCAL_MODEL} (checked against the same sha256 as a download)…"
+            if ! install_local_model_file "${LOCAL_MODEL}" "${model_dest}" "${MODEL_SHA256}"; then
+                classifier_not_installed "${LOCAL_MODEL} was refused: it is not the BirdNET+ V3.0 model this release pins (the checksum is above)"
+                return 0
+            fi
+        else
+            local model_origins
+            mapfile -t model_origins < <(classifier_origins "${MODEL_FILE}")
+            if ! retry_with_backoff "BirdNET+ V3.0 model" fetch_verified_model "${model_dest}" "${MODEL_SHA256}" \
+                "BirdNET+ V3.0 model (~541 MB)" 1 "${model_origins[@]}"; then
+                warn "Model download failed or could not be verified from any source."
+                warn "Any partial file is kept at:"
+                warn "  ${model_dest}"
+                warn "Re-running this installer resumes from where it stopped — the"
+                warn "guard above checks the checksum, not merely that a file exists,"
+                warn "so a partial is resumed rather than mistaken for a finished one."
+                warn "Common causes: no internet connection, GitHub/Zenodo temporarily"
+                warn "down, or disk full."
+                classifier_not_installed "the BirdNET+ V3.0 model could not be downloaded and verified (${MODEL_ATTEMPTS} attempts)"
+                return 0
+            fi
         fi
         chown "${SERVICE_USER}:${SERVICE_USER}" "${model_dest}"
         success "Model installed to ${model_dest}"
@@ -1635,9 +1750,10 @@ download_model() {
     if ! model_file_is_verified "${labels_dest}" "${LABELS_SHA256}"; then
         local labels_origins
         mapfile -t labels_origins < <(classifier_origins "${LABELS_FILE}")
-        if ! fetch_verified_model "${labels_dest}" "${LABELS_SHA256}" \
+        if ! retry_with_backoff "BirdNET+ V3.0 labels" fetch_verified_model "${labels_dest}" "${LABELS_SHA256}" \
             "species labels CSV" 0 "${labels_origins[@]}"; then
-            fatal "Labels download failed or could not be verified. Check your internet connection and retry."
+            classifier_not_installed "the BirdNET+ V3.0 labels could not be downloaded and verified (${MODEL_ATTEMPTS} attempts)"
+            return 0
         fi
         chown "${SERVICE_USER}:${SERVICE_USER}" "${labels_dest}"
         success "Labels installed to ${labels_dest}"
@@ -1765,6 +1881,7 @@ download_geomodel() {
 # refuses.
 install_model_with_binary() {
     local id="$1" bin="${INSTALL_DIR}/${BINARY_NAME}"
+    shift
     if [ ! -x "${bin}" ]; then
         warn "${bin} is not installed, so ${id} cannot be installed with it."
         return 127
@@ -1775,9 +1892,11 @@ install_model_with_binary() {
     # "BIRDNET_CLASSIFIER is not a variable this station reads". `--config
     # /dev/null` is an empty config: there is no config yet on a fresh install,
     # and without one the binary warns that it found none.
+    # Any further arguments are the binary's (`--from-file PATH`).
     env -u BIRDNET_CLASSIFIER -u BIRDNET_SKIP_MODEL -u BIRDNET_NONINTERACTIVE \
         -u BIRDNET_BINARY_TARBALL -u BIRDNET_SKIP_GLIBC_CHECK \
-        BIRDNET_MODEL_DIR="${MODEL_DIR}" "${bin}" --config /dev/null --install-model "${id}"
+        -u BIRDNET_LOCAL_MODEL -u BIRDNET_MODEL_RETRY_WAITS \
+        BIRDNET_MODEL_DIR="${MODEL_DIR}" "${bin}" --config /dev/null --install-model "${id}" "$@"
 }
 
 # Is FILE there and not empty? (The binary's installs are atomic: a file at its
@@ -1811,14 +1930,25 @@ download_model_v24() {
 
     install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
 
-    if ! install_model_with_binary "${V24_MODEL_ID}"; then
+    if [ -n "${LOCAL_MODEL}" ]; then
+        # The binary checks the file against the sha256 AND size it pins for
+        # V2.4 — the same check a download passes — and copies it into place
+        # only when both match. One attempt: a file that does not match will
+        # not match on the second try.
+        info "  From ${LOCAL_MODEL}, checked against the same sha256 and size as a download."
+        if ! install_model_with_binary "${V24_MODEL_ID}" --from-file "${LOCAL_MODEL}"; then
+            classifier_not_installed "${LOCAL_MODEL} was refused: it is not the BirdNET V2.4 model this release pins (the reason is above)"
+            return 0
+        fi
+    elif ! retry_with_backoff "BirdNET V2.4" install_model_with_binary "${V24_MODEL_ID}"; then
         warn "BirdNET V2.4 could not be installed (the reason is above)."
-        warn "Common causes: no internet connection, huggingface.co temporarily down,"
-        warn "less than ~600 MB free in ${MODEL_DIR}, or a ${BINARY_NAME} older than BirdNET V2.4"
-        warn "support (it answers that the model is unknown) — install a current release."
-        warn "Re-run this installer to try again, or use the BirdNET+ V3.0 preview instead:"
+        warn "Common causes: no internet connection, github.com and huggingface.co both"
+        warn "unreachable, less than ~600 MB free in ${MODEL_DIR}, or a ${BINARY_NAME} older than"
+        warn "BirdNET V2.4 support (it answers that the model is unknown) — install a current release."
+        warn "The BirdNET+ V3.0 preview is the other classifier, on a NEW install:"
         warn "  sudo bash install.sh --classifier ${CLASSIFIER_V3}"
-        fatal "BirdNET V2.4 install failed. Check the cause above and retry."
+        classifier_not_installed "BirdNET V2.4 could not be downloaded and verified (${MODEL_ATTEMPTS} attempts)"
+        return 0
     fi
     if ! installed_file_present "${model_dest}" || ! installed_file_present "${labels_dest}"; then
         fatal "${BINARY_NAME} --install-model ${V24_MODEL_ID} reported success but ${model_dest} or ${labels_dest} is missing; this installer and the binary disagree about the file names."
@@ -3274,6 +3404,7 @@ do_install() {
     maybe_start_service
     validate_install
     print_summary
+    exit_if_classifier_missing
 }
 
 # Repair: fix a broken or drifted install WITHOUT forcing the big downloads.
@@ -3345,8 +3476,14 @@ do_repair() {
 
     validate_install
     echo
-    success "Repair complete."
+    if [ "${CLASSIFIER_MISSING}" = 1 ]; then
+        warn "Repair finished, but the classifier is still not installed."
+    else
+        success "Repair complete."
+    fi
     echo "  Logs:  sudo journalctl -u birdnet-behavior -f"
+    print_classifier_missing
+    exit_if_classifier_missing
 }
 
 # Remove the software cleanly. Data/config are kept unless the operator opts in
@@ -3576,6 +3713,42 @@ print_admin_login() {
     return 0
 }
 
+# The last thing a run says when the classifier is not installed (OOB-20): the
+# station is not detecting, why, and the commands that fix it. Loud, and last,
+# because "Installation complete!" over a station that hears nothing is the
+# failure this repository warns about most; the exit status says the same to a
+# script (EXIT_NO_CLASSIFIER, 10-config.sh).
+#
+# It does not offer the dashboard's install button. That button installs the
+# default classifier only where the configuration names no model, and this
+# installer's configuration names the classifier's files (that is how a re-run
+# knows which classifier the station runs), so on such a station the dashboard
+# reports the file missing instead of offering to fetch it.
+print_classifier_missing() {
+    [ "${CLASSIFIER_MISSING}" = 1 ] || return 0
+    local local_hint="${MODEL_FILE}"
+    echo
+    loud_warn "THIS STATION IS NOT DETECTING BIRDS: its classifier is not installed." \
+              "  Why: ${CLASSIFIER_MISSING_WHY}." \
+              "  Everything else is installed. To install the classifier, once this machine" \
+              "  can reach the internet, run the installer again:" \
+              "      sudo bash install.sh repair" \
+              "  or, from a copy of ${local_hint} you already have" \
+              "  (it must match the same pinned sha256 as a download, or it is refused):" \
+              "      sudo bash install.sh repair --local-model /path/to/that/file" \
+              "  Then check with:  ${BINARY_NAME} --doctor --config ${CONFIG_FILE}" \
+              "  This run exits with status ${EXIT_NO_CLASSIFIER}: installed, not detecting."
+}
+
+# Exit with EXIT_NO_CLASSIFIER when the classifier could not be installed; a
+# no-op otherwise. The last step of install and repair.
+exit_if_classifier_missing() {
+    if [ "${CLASSIFIER_MISSING}" = 1 ]; then
+        exit "${EXIT_NO_CLASSIFIER}"
+    fi
+    return 0
+}
+
 print_summary() {
     local ip web_host mdns_host
     ip="$(hostname -I 2>/dev/null | awk '{print $1}' || echo 'localhost')"
@@ -3608,7 +3781,11 @@ print_summary() {
     esac
 
     echo
-    echo -e "${BOLD}${GREEN}${headline}${RESET}"
+    if [ "${CLASSIFIER_MISSING}" = 1 ]; then
+        echo -e "${BOLD}${YELLOW}Installed WITHOUT the classifier — this station is not detecting birds yet.${RESET}"
+    else
+        echo -e "${BOLD}${GREEN}${headline}${RESET}"
+    fi
     echo
     echo -e "  ${BOLD}Binary:${RESET}  ${INSTALL_DIR}/${BINARY_NAME}"
     echo -e "  ${BOLD}Config:${RESET}  ${CONFIG_FILE}"
@@ -3665,6 +3842,7 @@ print_summary() {
     echo
     echo "  For troubleshooting, the station's log:  sudo journalctl -u birdnet-behavior -f"
     echo
+    print_classifier_missing
 }
 
 # ===== installer/lib/82-zram.sh =====
@@ -4031,10 +4209,19 @@ Options:
                                        BirdNET-Pi's by design. ~555 MB.
                         An existing station keeps the classifier its config names:
                         install, update, repair and reinstall never change it.
+      --local-model PATH
+                        Install the classifier from a model file already on this
+                        machine (also: BIRDNET_LOCAL_MODEL), for an install without
+                        internet. It must have the sha256 and size this release
+                        pins, like a download, or it is refused.
       --noninteractive  Don't prompt; auto-detect audio and leave location
                         unset (also implied by BIRDNET_NONINTERACTIVE=1 or no TTY).
                         With an existing install this implies 'update'.
   -h, --help            Show this help and exit.
+
+Exit status: 0 installed; 75 installed, but the classifier could not be
+installed, so the station is NOT detecting yet (the summary says how to fix it);
+any other status, the run stopped.
 
 Avoid  sudo bash <(curl ...)  — sudo closes the process-substitution file
 descriptor on the way to root, so the script never loads. Use the pipe above.
@@ -4062,6 +4249,15 @@ parse_args() {
                 CLASSIFIER_REQUEST="${1#*=}"
                 shift
                 ;;
+            --local-model)
+                [ "$#" -ge 2 ] || fatal "--local-model needs a path to the model file."
+                LOCAL_MODEL="$2"
+                shift 2
+                ;;
+            --local-model=*)
+                LOCAL_MODEL="${1#*=}"
+                shift
+                ;;
             --noninteractive | --non-interactive)
                 BIRDNET_NONINTERACTIVE=1
                 shift
@@ -4086,6 +4282,12 @@ parse_args() {
                 ;;
         esac
     done
+    # A local model that is not there is a mistake in the command, not a
+    # network failure: refuse it before anything is installed. Whether it is
+    # the RIGHT file is decided later, against the pins, by what installs it.
+    if [ -n "${LOCAL_MODEL}" ] && { [ ! -f "${LOCAL_MODEL}" ] || [ ! -r "${LOCAL_MODEL}" ]; }; then
+        fatal "--local-model / BIRDNET_LOCAL_MODEL: ${LOCAL_MODEL} is not a readable file."
+    fi
     # Refuse a typo now, before any download, whichever way it arrived (flag or
     # BIRDNET_CLASSIFIER). resolve_classifier checks again for the paths that
     # do not come through here.

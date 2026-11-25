@@ -29,6 +29,12 @@
 #                               daemon, which does not.
 #   BIRDNET_MODEL_DIR           Model directory (default: /data/model)
 #   BIRDNET_SKIP_MODEL_DOWNLOAD Set to "1" to skip auto-download (both models)
+#   BIRDNET_LOCAL_MODEL         Install the classifier from this file (mounted
+#                               into the container) instead of downloading it;
+#                               checked against the same pinned sha256 (and,
+#                               for V2.4, size) as a download, refused if not
+#   BIRDNET_MODEL_RETRY_WAITS   Seconds between attempts at the classifier
+#                               download (default "30 90": three attempts)
 #   BIRDNET_METADATA_MODEL      Geomodel path; set it to opt out of the fetch
 #   BIRDNET_GEOMODEL_BASE       Override the geomodel upstream origin (mirror)
 #   BIRDNET_MODEL               Path to ONNX model file (auto-set if blank)
@@ -256,6 +262,63 @@ select_classifier
 # `--install-model` runs below, which would open the first start's log with
 # "BIRDNET_CLASSIFIER is not a variable this station reads".
 unset BIRDNET_CLASSIFIER
+
+# ---------------------------------------------------------------------------
+# When the classifier cannot be installed (OOB-20; decision 7 of 2026-11-25)
+# ---------------------------------------------------------------------------
+# The same rule as the installer: retry a bounded number of times, then START
+# ANYWAY and say loudly that nothing is being identified. This used to `die`,
+# and a container that exits at its first start is restarted by Compose into
+# the same failure, with no dashboard to say why. Started, the dashboard is up
+# and every later start tries the download again. Integrity is unchanged: a
+# local file passes the same check a download does, and is refused otherwise.
+# Read once and removed, like BIRDNET_CLASSIFIER: the daemon does not read them.
+MODEL_RETRY_WAITS="${BIRDNET_MODEL_RETRY_WAITS-30 90}"
+LOCAL_MODEL="${BIRDNET_LOCAL_MODEL:-}"
+unset BIRDNET_MODEL_RETRY_WAITS BIRDNET_LOCAL_MODEL
+CLASSIFIER_MISSING=0
+MODEL_ATTEMPTS=1
+
+# Run "$@" until it succeeds, waiting MODEL_RETRY_WAITS seconds between
+# attempts (one more attempt than there are waits). $1 names it for the log.
+retry_with_backoff() {
+    rb_what="$1"
+    shift
+    rb_waits="${MODEL_RETRY_WAITS}"
+    for rb_w in ${rb_waits}; do
+        case "${rb_w}" in
+            *[!0-9]*)
+                warn "BIRDNET_MODEL_RETRY_WAITS='${MODEL_RETRY_WAITS}' is not a list of seconds; using 30 90."
+                rb_waits="30 90"
+                break
+                ;;
+        esac
+    done
+    MODEL_ATTEMPTS=1
+    for rb_w in ${rb_waits}; do MODEL_ATTEMPTS=$((MODEL_ATTEMPTS + 1)); done
+    if "$@"; then return 0; fi
+    rb_n=1
+    for rb_w in ${rb_waits}; do
+        warn "${rb_what}: attempt ${rb_n} of ${MODEL_ATTEMPTS} failed; trying again in ${rb_w} s."
+        sleep "${rb_w}"
+        rb_n=$((rb_n + 1))
+        if "$@"; then return 0; fi
+    done
+    return 1
+}
+
+# Say, loudly, that the classifier is missing; the container carries on.
+classifier_not_installed() {
+    CLASSIFIER_MISSING=1
+    warn "================================================================"
+    warn "THIS STATION IS NOT DETECTING BIRDS: $1."
+    warn "The container starts anyway, so the dashboard is up, but nothing is"
+    warn "identified until the classifier is installed. To install it: restart the"
+    warn "container once it can reach the internet (every start tries again), or"
+    warn "mount a copy of the model file and set BIRDNET_LOCAL_MODEL to its path"
+    warn "(it must match the same pinned sha256 as a download, or it is refused)."
+    warn "================================================================"
+}
 
 # ---------------------------------------------------------------------------
 # Geomodel (species occurrence filter) — optional
@@ -497,7 +560,8 @@ ensure_model_file() {
     warn "  • no internet in the container (check the host's DNS/firewall)"
     warn "  • GitHub and Zenodo both temporarily unreachable (retry shortly)"
     warn "  • the volume is out of disk (df -h on the host's docker root)"
-    die "Failed to download a verified ${desc} from GitHub or Zenodo."
+    warn "Failed to download a verified ${desc} from GitHub or Zenodo."
+    return 1
 }
 
 # ---------------------------------------------------------------------------
@@ -526,24 +590,44 @@ acquire_default_models() {
     log "Source: GitHub models release ${MODEL_RELEASE_TAG} (sha256-verified), Zenodo fallback."
 
     if [ "${BIRDNET_MODEL}" = "${MODEL_DEFAULT}" ]; then
-        ensure_model_file \
+        if [ -n "${LOCAL_MODEL}" ] && ! verify_sha256 "${BIRDNET_MODEL}" "${MODEL_SHA256}" 2>/dev/null; then
+            # Staged under a name the daemon never loads; renamed into place
+            # only once it has the sha256 a download must have.
+            log "Installing the BirdNET+ V3.0 model from ${LOCAL_MODEL} (BIRDNET_LOCAL_MODEL)…"
+            rm -f "${BIRDNET_MODEL}.local"
+            if cp "${LOCAL_MODEL}" "${BIRDNET_MODEL}.local" 2>/dev/null \
+                && verify_sha256 "${BIRDNET_MODEL}.local" "${MODEL_SHA256}"; then
+                mv -f "${BIRDNET_MODEL}.local" "${BIRDNET_MODEL}"
+                log "  sha256 verified."
+            else
+                rm -f "${BIRDNET_MODEL}.local"
+                classifier_not_installed "${LOCAL_MODEL} (BIRDNET_LOCAL_MODEL) was refused: it is not the BirdNET+ V3.0 model this image pins"
+                return 0
+            fi
+        elif ! retry_with_backoff "BirdNET+ V3.0 model" ensure_model_file \
             "${BIRDNET_MODEL}" \
             "${GH_BASE}/${MODEL_FILE}" \
             "${ZENODO_BASE}/${MODEL_FILE}/content" \
             "${MODEL_SHA256}" \
-            "BirdNET+ V3.0 model (ONNX)"
+            "BirdNET+ V3.0 model (ONNX)"; then
+            classifier_not_installed "the BirdNET+ V3.0 model could not be downloaded and verified (${MODEL_ATTEMPTS} attempts)"
+            return 0
+        fi
     else
         log "BIRDNET_MODEL=${BIRDNET_MODEL} is not the bundled V3.0 model — using it as supplied (not verified, never replaced)."
         [ -f "${BIRDNET_MODEL}" ] || warn "Model not found at ${BIRDNET_MODEL}"
     fi
 
     if [ "${BIRDNET_LABELS}" = "${LABELS_DEFAULT}" ]; then
-        ensure_model_file \
+        if ! retry_with_backoff "BirdNET+ V3.0 labels" ensure_model_file \
             "${BIRDNET_LABELS}" \
             "${GH_BASE}/${LABELS_FILE}" \
             "${ZENODO_BASE}/${LABELS_FILE}/content" \
             "${LABELS_SHA256}" \
-            "species labels CSV"
+            "species labels CSV"; then
+            classifier_not_installed "the BirdNET+ V3.0 labels could not be downloaded and verified (${MODEL_ATTEMPTS} attempts)"
+            return 0
+        fi
     else
         log "BIRDNET_LABELS=${BIRDNET_LABELS} is not the bundled V3.0 labels — using it as supplied (not verified, never replaced)."
         [ -f "${BIRDNET_LABELS}" ] || warn "Labels not found at ${BIRDNET_LABELS}"
@@ -556,7 +640,8 @@ acquire_default_models() {
 # every file's sha256 and size and renames it into place only when it matches;
 # its output goes to the container log as it comes.
 install_with_binary() {
-    BIRDNET_MODEL_DIR="${MODEL_DIR}" "${BNB_BINARY}" --config /dev/null --install-model "$1"
+    # Any further arguments are the binary's (`--from-file PATH`).
+    BIRDNET_MODEL_DIR="${MODEL_DIR}" "${BNB_BINARY}" --config /dev/null --install-model "$@"
 }
 
 # BirdNET V2.4's model and labels, installed by the binary — the counterpart of
@@ -602,12 +687,23 @@ acquire_v24_models() {
         log "  Every file is sha256-verified before it is kept. This runs only on first start;"
         log "  the files are cached in the Docker volume, so later starts are instant."
         rule
-        if ! install_with_binary "${V24_MODEL_ID}"; then
+        if [ -n "${LOCAL_MODEL}" ]; then
+            # The binary checks the file against the sha256 AND size it pins,
+            # as it checks a download. One attempt: a file that does not match
+            # will not match on the second.
+            log "  From ${LOCAL_MODEL} (BIRDNET_LOCAL_MODEL), checked like a download."
+            if ! install_with_binary "${V24_MODEL_ID}" --from-file "${LOCAL_MODEL}"; then
+                classifier_not_installed "${LOCAL_MODEL} (BIRDNET_LOCAL_MODEL) was refused: it is not the BirdNET V2.4 model this image pins"
+                return 0
+            fi
+        elif ! retry_with_backoff "BirdNET V2.4" install_with_binary "${V24_MODEL_ID}"; then
             warn "Common causes:"
             warn "  • no internet in the container (check the host's DNS/firewall)"
-            warn "  • huggingface.co temporarily unreachable (retry shortly)"
+            warn "  • github.com and huggingface.co both unreachable (retry shortly)"
             warn "  • the volume has less than ~600 MB free (df -h on the host's docker root)"
-            die "Failed to install BirdNET V2.4. To run the BirdNET+ V3.0 preview instead, set BIRDNET_CLASSIFIER=birdnet-v3."
+            warn "  • To run the BirdNET+ V3.0 preview instead, set BIRDNET_CLASSIFIER=birdnet-v3."
+            classifier_not_installed "BirdNET V2.4 could not be downloaded and verified (${MODEL_ATTEMPTS} attempts)"
+            return 0
         fi
         if [ "${BIRDNET_MODEL}" = "${MODEL_DEFAULT}" ] && [ ! -s "${BIRDNET_MODEL}" ]; then
             die "birdnet-behavior --install-model reported success but ${BIRDNET_MODEL} is missing; this image's entrypoint and binary disagree about the file names."
@@ -811,6 +907,9 @@ fi
 # ---------------------------------------------------------------------------
 rule
 log "Starting birdnet-behavior  (listen: ${BIRDNET_LISTEN})"
+if [ "${CLASSIFIER_MISSING}" = 1 ]; then
+    warn "Starting WITHOUT a classifier: the dashboard is up, but no bird will be identified (see above)."
+fi
 rule
 # (BIRDNET_CLASSIFIER was removed from the environment right after it was read,
 # so neither the installs above nor this daemon report it as an unknown variable.)

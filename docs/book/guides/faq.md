@@ -12,7 +12,7 @@ No. It runs on any x86_64 Linux machine too. The Pi 5 is recommended and the Pi 
 
 ## Does it work offline / without internet?
 
-Yes, once set up. The only things that need the network are the **one-time model install**, optional **Wikipedia photo** caching, and any **notification/upload** channels you enable. The UI itself is fully self-contained — all fonts are embedded in the binary and it never calls out to a CDN.
+Yes, once set up. The only things that need the network are the **one-time model install** (which can also be done from a file you carry over: see [Installing without internet](../getting-started/installation.md#installing-without-internet)), optional **Wikipedia photo** caching, and any **notification/upload** channels you enable. The UI itself is fully self-contained — all fonts are embedded in the binary and it never calls out to a CDN.
 
 ## Does it need a camera, or just a microphone?
 
