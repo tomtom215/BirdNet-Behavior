@@ -881,13 +881,7 @@ async fn today_pills_partial(State(state): State<AppState>) -> impl IntoResponse
                 temps.iter().copied().reduce(f32::min),
                 temps.iter().copied().reduce(f32::max),
             ) {
-                let _ = write!(
-                    out,
-                    r#"<span class="bnb-pill x-wx"><span class="mono x-wx-now">{now}</span><span class="mono x-wx-hl">H {hi} · L {lo}</span></span>"#,
-                    now = crate::display::temperature(f64::from(now_t), 0, false),
-                    hi = crate::display::temperature(f64::from(max), 0, false),
-                    lo = crate::display::temperature(f64::from(min), 0, false),
-                );
+                out.push_str(&weather_pill(now_t, max, min));
             }
 
             // Sunrise / sunset from the configured location.
@@ -1685,9 +1679,35 @@ async fn unlock_detection(
     )
 }
 
+/// Today's weather pill: the latest temperature, then the day's high and low, each with its unit
+/// (the display script rewrites value and unit into the scale the station or reader chose).
+fn weather_pill(now: f32, high: f32, low: f32) -> String {
+    format!(
+        r#"<span class="bnb-pill x-wx"><span class="mono x-wx-now">{now}</span><span class="mono x-wx-hl">H {hi} · L {lo}</span></span>"#,
+        now = crate::display::temperature(f64::from(now), 0, true),
+        hi = crate::display::temperature(f64::from(high), 0, true),
+        lo = crate::display::temperature(f64::from(low), 0, true),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// "11° / 2°" said nothing about the scale (UIR-23). Every temperature in the pill carries
+    /// its unit, marked so the display script writes the unit the station (or the reader) chose.
+    #[test]
+    fn todays_temperature_says_its_unit() {
+        let pill = weather_pill(11.2, 13.0, 2.4);
+        assert_eq!(
+            pill.matches(r#"data-tu="1""#).count(),
+            3,
+            "the now, high and low temperatures each carry the unit flag: {pill}"
+        );
+        for shown in [">11°C<", ">13°C<", ">2°C<"] {
+            assert!(pill.contains(shown), "{shown} missing from {pill}");
+        }
+    }
 
     /// A configured source on a process whose detection daemon is not running
     /// is not capturing, whatever the gauges say — and they say nothing, since

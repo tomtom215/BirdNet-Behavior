@@ -172,7 +172,7 @@ fn render_content(
         r#"<div class="rp-stats">
   <div class="rp-stat"><div class="v moss">{det}</div><div class="l">detections</div><div class="d">≈ {per_day} {per_what}</div></div>
   <div class="rp-stat"><div class="v">{species}</div><div class="l">species heard</div><div class="d">this year</div></div>
-  <div class="rp-stat"><div class="v rare">{new_this_year}</div><div class="l">new to your list</div></div>
+  <div class="rp-stat"><div class="v">{new_this_year}</div><div class="l">new to your list</div></div>
   <div class="rp-stat"><div class="v">{busy}</div><div class="l">busiest day</div><div class="d">{busy_date}</div></div>
 </div>"#,
         det = group_thousands(total),
@@ -590,6 +590,37 @@ mod tests {
                 &crate::routes::pages::viz::kit::SpeciesSlots::default()
             ),
             ""
+        );
+    }
+
+    /// "10 new to your list" was painted in `--rare`, the red that elsewhere means a fault or a
+    /// failed check, on the Year and Weekly reports (UIR-23). A count of new species is good news:
+    /// its numeral is in the neutral ink of the counts beside it.
+    #[test]
+    fn good_news_is_not_painted_in_the_fault_red() {
+        let sources = [
+            ("year_in_review.rs", include_str!("year_in_review.rs")),
+            ("weekly_report.rs", include_str!("weekly_report.rs")),
+        ];
+        let mut seen = 0;
+        for (file, src) in sources {
+            for (i, _) in src.match_indices(r#"<div class="l">new to your list</div>"#) {
+                // The stat band's line, not this test's own needle.
+                if !src[..i].ends_with("</div>") {
+                    continue;
+                }
+                seen += 1;
+                let value = src[..i].rsplit("<div class=\"v").next().unwrap_or_default();
+                let class = value.split('"').next().unwrap_or_default();
+                assert!(
+                    !class.split_whitespace().any(|c| c == "rare"),
+                    "{file}: the new-to-your-list count is classed `v{class}`"
+                );
+            }
+        }
+        assert_eq!(
+            seen, 2,
+            "the Year and Weekly stat bands each carry the count"
         );
     }
 

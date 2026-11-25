@@ -622,7 +622,8 @@ const fn source_chip(state: SourceState) -> &'static str {
 }
 
 /// The 48-segment rolling 24 h uptime strip, with a screen-reader / hover
-/// summary of the uptime percentage.
+/// summary of the uptime percentage, and under it in words what it spans: the
+/// title was the only key, and a touch screen never shows a title (UIR-23).
 fn uptime_strip(segments: &[UptimeSegment]) -> String {
     let observed = segments
         .iter()
@@ -649,6 +650,14 @@ fn uptime_strip(segments: &[UptimeSegment]) -> String {
         let _ = write!(strip, "<span class=\"{cls}\"></span>");
     }
     strip.push_str("</div>");
+    // The strip is the last 24 hours, whatever its length: the supervisor's buckets are
+    // half hours (`src/capture/uptime.rs`), 48 of them.
+    if let Some(minutes) = 1440_usize.checked_div(segments.len()) {
+        let _ = write!(
+            strip,
+            "<p class=\"st-uptime-cap\">last 24 h, each bar {minutes} min</p>"
+        );
+    }
     strip
 }
 
@@ -1166,6 +1175,27 @@ mod tests {
     #[test]
     fn empty_source_panel_is_honest_not_blank() {
         assert!(source_panel(&snap(false, true, 1, 0)).contains("No detections yet today"));
+    }
+
+    /// The strip explained itself only in a hover title, which a touch screen never shows and
+    /// which `role="img"` keeps from being read as text (UIR-23). Its span and its bar width are
+    /// printed under it, from the number of segments it was given.
+    #[test]
+    fn the_uptime_strip_says_what_it_spans_in_words() {
+        let mut s = snap(false, true, 1, 0);
+        s.capture = vec![cap_source("local", SourceState::Connected, 0, None)];
+        s.capture[0].uptime_24h =
+            vec![UptimeSegment::Up; birdnet_core::audio::capture::UPTIME_SEGMENTS];
+        let html = source_panel(&s);
+        let after_strip = html
+            .split(r#"<div class="st-uptime""#)
+            .nth(1)
+            .and_then(|s| s.split_once("</div>"))
+            .map_or("", |(_, rest)| rest);
+        assert!(
+            after_strip.contains(">last 24 h, each bar 30 min<"),
+            "no visible caption under the strip: {html}"
+        );
     }
 
     #[test]
