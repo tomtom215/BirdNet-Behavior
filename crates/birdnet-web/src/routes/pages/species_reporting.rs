@@ -14,13 +14,16 @@
 //! for a card and for a phone, and carries a table of every number, a one-sentence reading
 //! above it and a Method panel below.
 
+#[cfg(feature = "analytics")]
 use axum::extract::{Query, State};
 use axum::{Router, routing::get};
+#[cfg(feature = "analytics")]
 use serde::Deserialize;
 
 use crate::state::AppState;
 
 /// The query: the species' stored common name.
+#[cfg(feature = "analytics")]
 #[derive(Deserialize)]
 pub(super) struct ReportingQuery {
     name: Option<String>,
@@ -32,10 +35,7 @@ pub fn router() -> Router<AppState> {
 }
 
 #[cfg(not(feature = "analytics"))]
-async fn species_reporting_partial(
-    State(_): State<AppState>,
-    Query(_): Query<ReportingQuery>,
-) -> axum::response::Html<String> {
+async fn species_reporting_partial() -> axum::response::Html<String> {
     axum::response::Html(UNAVAILABLE.to_owned())
 }
 
