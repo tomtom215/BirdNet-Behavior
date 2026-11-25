@@ -19,6 +19,21 @@ const BOUNDARY: &str = "----bnbtestboundary";
 fn station() -> (tempfile::TempDir, AppState) {
     let dir = tempfile::tempdir().expect("tempdir");
     let state = AppState::new(dir.path().join("birds.db")).expect("state");
+    // These tests copy a few bytes of clips and are not about the disk guard, which refuses a
+    // copy that would take the disk past the purge threshold and has its own tests with a
+    // disk it is handed (`birdnet-migrate`, `clips_follow_their_detections_across.rs`). Left
+    // at the default 95 %, three of them failed on any machine whose disk was that full
+    // ("copying 14 B would take the disk to 96 %"), a test run's own build output included.
+    state
+        .with_db(|conn| {
+            birdnet_db::settings::set(
+                conn,
+                "purge_threshold",
+                "100",
+                birdnet_db::settings::SettingsCategory::System,
+            )
+        })
+        .expect("setting");
     (dir, state)
 }
 

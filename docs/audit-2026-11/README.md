@@ -42,6 +42,7 @@ RTSP streams.
 | `07-research-grade.md` | Provenance, effort, verification, exports | RES |
 | `08-existing-backlog-reconciled.md` | The older backlogs, re-checked | (table rows) |
 | `09-chart-review.md` | Every chart: keep, refine, rebuild, replace or remove; missing figures; rendering technology; methods from ornithology (added 2026-11-24, from reading code, nothing rendered) | CHT |
+| `10-model-delivery.md` | How each model file reaches a station on every install path, and 18 ways a station ends up not detecting, or without its filter, with nothing on the dashboard (added 2026-11-25, a delegated read of the code, three claims re-checked, nothing run) | rows to be written by the batch that verifies them |
 | `work-packages.md` | Every finding, grouped into work packages | generated |
 | `checklist.json` | The same, machine-readable, with a `status` field | generated |
 
