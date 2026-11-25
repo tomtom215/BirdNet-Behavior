@@ -64,16 +64,18 @@ pub(super) fn content() -> String {
     let year = current_year();
     // Skeleton placeholders (O-16) shown until the htmx swap targets load.
     // O-20 help link drops the methodology shortcut into the eyebrow.
-    let pills = format!(
-        r#"<div class="pill-row mig-pills"><span class="bnb-pill">Calendar year {year}</span><span class="bnb-pill">Seasonal birds only</span><span class="bnb-pill">vs. last year</span></div>"#
+    // What the page covers, as a sentence: these were three pills styled like the range
+    // buttons on the pages beside it, and a reader pressed them (UIR-36).
+    let scope = format!(
+        r#"<p class="bnb-meta mig-cover">Calendar year {year}, seasonal birds only, compared with last year.</p>"#
     );
     let head = super::frame::page_head(&super::frame::Head {
         eyebrow: "Patterns",
         help: &super::help::help_link(super::help::Topic::Phenology),
         title: "Arrivals and <em>departures</em>.",
         lead: "Each ridge is one species' year.",
-        lede: "Week by week, scaled to its own busiest week so a small-population migrant stays visible. Colour says when it peaks: green in the spring migration window, amber in the fall one. A steady bird holds a low ribbon; a migrant spikes and vanishes. Under the ridges: how many different species were heard each week.",
-        aside: &pills,
+        lede: "Week by week, scaled to its own busiest week so a small-population migrant stays visible. Its colour says which migration window it peaks in, the spring one or the fall one, and the key under the chart names them. A bird is drawn when its busiest week stands well above its usual one per hour the station listened, so a week the station was off, or listened longer, does not make a resident look like a migrant. Under the ridges: how many different species were heard each week.",
+        aside: &scope,
     });
     PAGE_HTML
         .replace("{{page_head}}", &head)
@@ -88,27 +90,84 @@ pub(super) fn content() -> String {
 /// How many ridges the chart draws: past this the names stand on one another.
 const MAX_RIDGES: usize = 12;
 
+/// Fewer listened days than this in a week column and the week's index is unknown: one or
+/// two days are a sample of anything (`viz::uncertainty::TOO_FEW_BELOW`, the same three).
+const MIN_LISTENED_DAYS: u32 = 3;
+
 /// A species that earned a ridge: its stored name, its detections in each week column and how
 /// sharply seasonal it is.
 struct Seasonal {
     name: String,
     counts: [f64; 52],
-    /// Busiest week over the median week it was heard in.
+    /// Busiest week over the median week it was heard in, per listened time.
     seasonality: f64,
+}
+
+/// One species' year on the chart's week columns.
+struct Weekly {
+    name: String,
+    /// Every detection in each column: what the ridge draws (the kit's tooltip and table
+    /// carry these real counts).
+    counts: [f64; 52],
+    /// The detections on the days the index counts (see [`Listening`]).
+    counted: [f64; 52],
+    /// Detections per seven typical days of listening, or `None` where the column had fewer
+    /// than [`MIN_LISTENED_DAYS`] days to count: unknown, never zero.
+    index: [Option<f64>; 52],
+}
+
+impl Weekly {
+    /// A station that listened to every day of every week, a typical day each: the index is
+    /// the count. What the page assumed before it read the ledger (and the tests of the
+    /// thresholds use).
+    #[cfg(test)]
+    fn fully_listened(name: String, counts: [f64; 52]) -> Self {
+        Self {
+            name,
+            counts,
+            counted: counts,
+            index: counts.map(Some),
+        }
+    }
+}
+
+/// How sharply seasonal a fully listened year of weekly counts is (see [`seasonal_index`]).
+#[cfg(test)]
+fn seasonal_ratio(counts: &[f64; 52]) -> Option<f64> {
+    seasonal_index(&counts.map(Some), counts)
 }
 
 /// How sharply seasonal a species' year is, or `None` if it has not earned a ridge.
 ///
-/// A species earns one when it was heard in at least four different weeks, its busiest week
-/// held at least five detections, and that week was at least three times the usual week it was
-/// heard in (the median of its non-empty weeks). That is a cheap proxy for "migratory": a
-/// resident holds a steady ribbon and is left out, a bird that passes through spikes. It is a
-/// proxy and the chart says "per-species weekly index", not "migrants"; refine it with
-/// `birdnet_behavioral::ResidencyType::Migrant` when that is wanted.
-fn seasonal_ratio(counts: &[f64; 52]) -> Option<f64> {
-    let peak = counts.iter().copied().fold(0.0_f64, f64::max);
-    let mut heard: Vec<f64> = counts.iter().copied().filter(|v| *v > 0.0).collect();
-    if heard.len() < 4 || peak < 5.0 {
+/// `index` is detections per seven typical days of listening in each week column (`None`
+/// where too little was listened to say), and `counted` the detections it was made from.
+/// A species earns a ridge when it was heard in at least four weeks with an index, the
+/// busiest of them (by index) held at least five detections, and that week's index was at
+/// least three times its usual week's (the median of its weeks heard). That is a cheap
+/// proxy for "migratory": a resident holds a steady ribbon and is left out, a bird that
+/// passes through spikes. It is a proxy and the chart says "per-species weekly index", not
+/// "migrants"; refine it with `birdnet_behavioral::ResidencyType::Migrant` when that is
+/// wanted.
+///
+/// Per listened time and not per raw count (N24-08): a station that listened six hours a
+/// day for most of the year and all day for six weeks heard a resident four times as often
+/// in those six weeks, and the raw count drew it as a migrant.
+fn seasonal_index(index: &[Option<f64>; 52], counted: &[f64; 52]) -> Option<f64> {
+    let (peak_week, peak) = index
+        .iter()
+        .enumerate()
+        .filter_map(|(w, v)| v.map(|v| (w, v)))
+        .fold(
+            (0, 0.0_f64),
+            |best, (w, v)| if v > best.1 { (w, v) } else { best },
+        );
+    let mut heard: Vec<f64> = index
+        .iter()
+        .flatten()
+        .copied()
+        .filter(|v| *v > 0.0)
+        .collect();
+    if heard.len() < 4 || counted[peak_week] < 5.0 {
         return None;
     }
     heard.sort_by(f64::total_cmp);
@@ -117,20 +176,30 @@ fn seasonal_ratio(counts: &[f64; 52]) -> Option<f64> {
     (ratio >= 3.0).then_some(ratio)
 }
 
-/// The species to draw, from every species' weeks: those that earned a ridge, the
-/// `max_species` most sharply seasonal of them, in the order of their busiest week so ridges
-/// read left to right.
+/// The species to draw, from every species' weeks (fully listened): see [`pick`].
+#[cfg(test)]
+fn pick_ridges(all: Vec<(String, [f64; 52])>, max_species: usize) -> Vec<Seasonal> {
+    pick(
+        all.into_iter()
+            .map(|(name, counts)| Weekly::fully_listened(name, counts))
+            .collect(),
+        max_species,
+    )
+}
+
+/// The species to draw: those that earned a ridge, the `max_species` most sharply seasonal of
+/// them, in the order of their busiest week so ridges read left to right.
 ///
 /// The cut is by seasonality and not by the order of the year. It used to sort by peak week
 /// and then truncate, which kept the twelve that peak *earliest*: with more than twelve
 /// qualifying species the fall migrants were dropped without a word.
-fn pick_ridges(all: Vec<(String, [f64; 52])>, max_species: usize) -> Vec<Seasonal> {
+fn pick(all: Vec<Weekly>, max_species: usize) -> Vec<Seasonal> {
     let mut earned: Vec<Seasonal> = all
         .into_iter()
-        .filter_map(|(name, counts)| {
-            seasonal_ratio(&counts).map(|seasonality| Seasonal {
-                name,
-                counts,
+        .filter_map(|w| {
+            seasonal_index(&w.index, &w.counted).map(|seasonality| Seasonal {
+                name: w.name,
+                counts: w.counts,
                 seasonality,
             })
         })
@@ -151,34 +220,115 @@ fn pick_ridges(all: Vec<(String, [f64; 52])>, max_species: usize) -> Vec<Seasona
     earned
 }
 
-fn collect_ridges(
-    conn: &rusqlite::Connection,
-    year: i32,
-    max_species: usize,
-) -> rusqlite::Result<Vec<Seasonal>> {
+/// How much listening each week column of a year held, from the effort ledger
+/// (`pages/listening.rs`, the one listened-day rule).
+///
+/// A day counts toward a week's index when it is before `today` (today's ledger is still
+/// being credited) and the station listened to it: by the rule where the ledger covers the
+/// date, and, where it does not (a station older than its ledger, or imported history), as
+/// one typical day listened, which is the trend queries' choice for a date nobody measured,
+/// so a year of imported records still has migrants. A counted day weighs its seconds over
+/// the typical day (an all-day day on a six-hour station is four); a date the ledger does not
+/// cover weighs one.
+struct Listening {
+    /// Counted days per column.
+    days: [u32; 52],
+    /// Typical days of listening per column.
+    exposure: [f64; 52],
+    /// The dates counted.
+    counted: std::collections::BTreeSet<String>,
+}
+
+impl Listening {
+    fn read(conn: &rusqlite::Connection, year: i32, today: &str) -> rusqlite::Result<Self> {
+        let ledger = super::listening::StationLedger::read(conn)?;
+        let mut out = Self {
+            days: [0; 52],
+            exposure: [0.0; 52],
+            counted: std::collections::BTreeSet::new(),
+        };
+        let first = crate::routes::pages::date_to_epoch_days(&format!("{year}-01-01"));
+        let last = crate::routes::pages::date_to_epoch_days(&format!("{year}-12-31"));
+        for e in first..=last {
+            let (y, m, d) = crate::routes::pages::days_to_date(e);
+            let date = format!("{y}-{m:02}-{d:02}");
+            if date.as_str() >= today {
+                break;
+            }
+            let weight = match (ledger.listened(&date), ledger.typical()) {
+                (Some(true), Some(t)) => ledger.seconds(&date) / t,
+                (Some(_), _) => continue,
+                (None, _) => 1.0,
+            };
+            let w = usize::from(week_of_year(&date));
+            out.days[w] += 1;
+            out.exposure[w] += weight;
+            out.counted.insert(date);
+        }
+        Ok(out)
+    }
+
+    /// The index of one week: `counted` detections per seven typical days, or unknown.
+    fn index(&self, week: usize, counted: f64) -> Option<f64> {
+        (self.days[week] >= MIN_LISTENED_DAYS && self.exposure[week] > 0.0)
+            .then(|| counted / self.exposure[week] * 7.0)
+    }
+}
+
+/// Every species' weeks of `year` as of the local date `today`.
+fn weekly(conn: &rusqlite::Connection, year: i32, today: &str) -> rusqlite::Result<Vec<Weekly>> {
+    let listening = Listening::read(conn, year, today)?;
     let mut stmt = conn.prepare(&format!(
-        "SELECT Com_Name, {WEEK_COLUMN} AS wk, COUNT(*) AS n \
+        "SELECT Com_Name, Date, {WEEK_COLUMN} AS wk, COUNT(*) AS n \
          FROM detections_analytic \
          WHERE Date LIKE ?1 \
-         GROUP BY Com_Name, wk"
+         GROUP BY Com_Name, Date"
     ))?;
     let prefix = format!("{year}-%");
     let rows = stmt.query_map([&prefix], |r| {
         Ok((
             r.get::<_, String>(0)?,
-            r.get::<_, i64>(1)?,
+            r.get::<_, String>(1)?,
             r.get::<_, i64>(2)?,
+            r.get::<_, i64>(3)?,
         ))
     })?;
 
     use std::collections::HashMap;
-    let mut by_species: HashMap<String, [f64; 52]> = HashMap::new();
+    let mut by_species: HashMap<String, ([f64; 52], [f64; 52])> = HashMap::new();
     for row in rows {
-        let (name, wk, n) = row?;
+        let (name, date, wk, n) = row?;
         let w = wk.clamp(0, 51) as usize; // WEEK_COLUMN is already 0..=51
-        by_species.entry(name).or_insert([0.0; 52])[w] += n as f64;
+        let e = by_species.entry(name).or_insert(([0.0; 52], [0.0; 52]));
+        e.0[w] += n as f64;
+        if listening.counted.contains(&date) {
+            e.1[w] += n as f64;
+        }
     }
-    Ok(pick_ridges(by_species.into_iter().collect(), max_species))
+    Ok(by_species
+        .into_iter()
+        .map(|(name, (counts, counted))| {
+            let mut index = [None; 52];
+            for (w, slot) in index.iter_mut().enumerate() {
+                *slot = listening.index(w, counted[w]);
+            }
+            Weekly {
+                name,
+                counts,
+                counted,
+                index,
+            }
+        })
+        .collect())
+}
+
+fn collect_ridges(
+    conn: &rusqlite::Connection,
+    year: i32,
+    today: &str,
+    max_species: usize,
+) -> rusqlite::Result<Vec<Seasonal>> {
+    Ok(pick(weekly(conn, year, today)?, max_species))
 }
 
 // ---------------------------------------------------------------------------
@@ -198,7 +348,8 @@ fn compute_ridgeline(state: &AppState) -> Option<String> {
     // Every read propagates: a failed one is a failed fragment, not a quiet year.
     let (ridges, diversity, latitude) = state
         .with_read_db(|conn| {
-            let ridges = collect_ridges(conn, year, MAX_RIDGES)?;
+            let today = crate::routes::pages::today_date_string();
+            let ridges = collect_ridges(conn, year, &today, MAX_RIDGES)?;
             let diversity = weekly_diversity(conn, year)?;
             let latitude = super::station_location(conn).map(|l| l.lat);
             Ok::<_, rusqlite::Error>((ridges, diversity, latitude))
@@ -338,6 +489,40 @@ fn last_year_coverage(first_recorded: Option<&str>, year: i32) -> LastYear {
     }
 }
 
+/// SQL for each species' onset over the dates `from..=to` (two placeholders): the
+/// `(n + 19) / 20`-th of its `n` distinct detection days, which is `ceil(0.05 n)`, the
+/// phenology module's `quantile_disc(detection_date, 0.05)`. Rows: `Com_Name`, `d`.
+fn onset_sql(from: &str, to: &str) -> String {
+    format!(
+        "SELECT Com_Name, d FROM ( \
+           SELECT Com_Name, d, \
+                  ROW_NUMBER() OVER (PARTITION BY Com_Name ORDER BY d) AS rn, \
+                  COUNT(*) OVER (PARTITION BY Com_Name) AS n \
+           FROM (SELECT DISTINCT Com_Name, Date AS d FROM detections_analytic \
+                 WHERE Date >= {from} AND Date <= {to}) \
+         ) WHERE rn = (n + 19) / 20"
+    )
+}
+
+/// The chart column `week` (0-based) of `year` as a reader says it: "late Sep (week 39)"
+/// (UIR-23). A column is named by the day in its middle, the fourth of its seven (the last
+/// column's eight or nine days by the middle one, rounded down): the 1st to the 10th of a
+/// month is early, the 11th to the 20th mid, from the 21st late. The number is the column's
+/// own, as the ridgeline's axis and key count them, so there is never a week 53.
+fn week_words(year: i32, week: usize) -> String {
+    let (first, last) = ridge::week_days(year, week.min(ridge::WEEKS - 1));
+    let middle = u64::from((first + last) / 2);
+    let jan1 = crate::routes::pages::date_to_epoch_days(&format!("{year}-01-01"));
+    let (_, m, d) = crate::routes::pages::days_to_date(jan1 + middle - 1);
+    let part = match d {
+        1..=10 => "early",
+        11..=20 => "mid",
+        _ => "late",
+    };
+    let month = super::viz::kit::MONTHS[(m as usize).clamp(1, 12) - 1];
+    format!("{part} {month} (week {})", week.min(ridge::WEEKS - 1) + 1)
+}
+
 /// The four KPI tiles, as of the local date `today`.
 ///
 /// Every query propagates its error: the tiles are claims about the reader's
@@ -381,31 +566,45 @@ fn stats_fragment(
     // Earliest-vs-last-year: of the species that *arrived* in both years, the one whose
     // arrival came furthest ahead of last year's (negative: this year was earlier).
     //
-    // An arrival is a first date from the end of January on. A bird already singing in the
+    // An arrival is the phenology module's onset (`phenology/timing.rs`, `arrival_q05`): the
+    // 5th percentile of the year's distinct detection days, the `ceil(0.05 n)`-th of `n`
+    // (N05-02). That query is `DuckDB` SQL over the analytics copy and this tile reads the
+    // `SQLite` store (and is drawn in a build without the analytics store), so the rule is
+    // restated here in whole numbers, `(n + 19) / 20`, and held to the engine's by
+    // `tests/the_migration_onset_is_the_phenology_onset.rs`. It was `MIN(Date)`, so one false
+    // positive moved the tile: a stray January detection of a May swallow made it no arrival
+    // at all, and a stray in March an arrival two months early. Like the phenology rows it
+    // trims a stray day only once there are enough days to trim from (more than twenty).
+    //
+    // Last year is read to the same calendar date as today, so both onsets are taken over
+    // the same stretch of their year: a percentile of a season half heard is earlier than
+    // one of the whole season, and comparing the two would make every year look early.
+    //
+    // An arrival is an onset from the end of January on. A bird already singing in the
     // first four weeks of a year is a resident or a winter visitor, and its "first date" is
     // the start of the calendar, not a journey: comparing two of those printed "−1 d" for a
     // cardinal. And the prior year must have been recorded from its start (see
     // [`last_year_coverage`]).
     let earliest: Option<(String, i64)> = if coverage == LastYear::Whole {
         conn.query_row(
-            "WITH first_this AS ( \
-               SELECT Com_Name, MIN(Date) d \
-               FROM detections_analytic WHERE Date LIKE ?1 GROUP BY Com_Name \
-             ), first_prior AS ( \
-               SELECT Com_Name, MIN(Date) d \
-               FROM detections_analytic WHERE Date LIKE ?2 GROUP BY Com_Name \
-             ) \
-             SELECT t.Com_Name, \
-                    CAST(julianday(t.d) - julianday(?3 || substr(p.d, 5)) AS INTEGER) AS delta \
-             FROM first_this t JOIN first_prior p USING (Com_Name) \
-             WHERE p.d >= ?4 AND t.d >= ?5 \
-             ORDER BY delta ASC LIMIT 1",
+            &format!(
+                "WITH first_this AS ({this}), first_prior AS ({prior}) \
+                 SELECT t.Com_Name, \
+                        CAST(julianday(t.d) - julianday(?3 || substr(p.d, 5)) AS INTEGER) AS delta \
+                 FROM first_this t JOIN first_prior p USING (Com_Name) \
+                 WHERE p.d >= ?4 AND t.d >= ?5 \
+                 ORDER BY delta ASC LIMIT 1",
+                this = onset_sql("?1", "?6"),
+                prior = onset_sql("?2", "?7"),
+            ),
             [
-                format!("{year}-%"),
-                format!("{prior}-%"),
+                format!("{year}-01-01"),
+                format!("{prior}-01-01"),
                 format!("{year}"),
                 format!("{prior}-01-29"),
                 format!("{year}-01-29"),
+                today.to_owned(),
+                format!("{prior}{}", today.get(4..).unwrap_or("-12-31")),
             ],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -463,15 +662,15 @@ fn stats_fragment(
             .to_string()
     };
 
-    // The column is 0-based; the ridgeline on this page prints its peak as
-    // `w{pw + 1}`, and the tile printed the raw number, so one week had two
-    // names on one page.
+    // A time of year a reader says, with the column's 1-based number as the ridgeline's axis
+    // counts it (it printed the 0-based column once, so one week had two names on one page,
+    // and then `w39`, which is a name only to whoever wrote it).
     let peak_html = peak.map_or_else(
         || r#"<span class="value mig-peak-val">—</span><span class="bnb-meta mono">no detections yet</span>"#.to_string(),
         |(wk, n)| {
             format!(
-                r#"<span class="value mig-peak-val">w{w}</span><span class="bnb-meta mono">{n} species</span>"#,
-                w = wk + 1
+                r#"<span class="value mig-peak-val">{w}</span><span class="bnb-meta mono">{n} species</span>"#,
+                w = week_words(year, usize::try_from(wk).unwrap_or(0))
             )
         },
     );
@@ -878,7 +1077,7 @@ mod tests {
         )
         .expect("tiles");
         assert!(
-            html.contains(">w52<"),
+            html.contains(">late Dec (week 52)<"),
             "the peak week is off the chart: {html}"
         );
         assert_eq!(week_of_year("2026-12-31"), 51);
@@ -1255,5 +1454,292 @@ mod tests {
         // Degrades rather than panicking: this module aborts the process on a
         // panic, so a corrupt date must not reach one.
         assert_eq!(year_of("oops"), 1970);
+    }
+
+    /// UIR-36. What the page covers is a sentence, not three pills styled like the range
+    /// buttons a reader will try to press; and the caption names the seasons in words, not by
+    /// a colour ("amber in the fall" over an orange-red ridge).
+    #[test]
+    fn the_scope_is_a_caption_and_the_seasons_are_words() {
+        let html = content();
+        assert!(!html.contains("bnb-pill"), "{html}");
+        assert!(!html.contains("pill-row"), "{html}");
+        let year = current_year();
+        assert!(
+            html.contains(&format!(
+                "Calendar year {year}, seasonal birds only, compared with last year."
+            )),
+            "{html}"
+        );
+        // Whole words: "compared" holds "red".
+        let words: Vec<String> = html
+            .split(|c: char| !c.is_ascii_alphabetic())
+            .map(str::to_ascii_lowercase)
+            .collect();
+        for colour in ["green", "amber", "orange", "red"] {
+            assert!(
+                !words.iter().any(|w| w == colour),
+                "a season named by {colour}: {html}"
+            );
+        }
+        assert!(
+            html.contains("the spring one or the fall one, and the key under the chart names them"),
+            "{html}"
+        );
+    }
+
+    /// UIR-23. The peak diversity week is a time of year a reader says, with the chart's
+    /// week number beside it. A column is named by the day in its middle (the fourth of its
+    /// seven, or the middle of the last column's eight or nine): days 1–10 of a month are
+    /// "early", 11–20 "mid", 21 on "late".
+    ///
+    /// Worked by hand: 2026-09-27 is day 270, column (270 − 1) / 7 = 38, days 267–273, middle
+    /// 270 = 27 Sep: "late Sep (week 39)". 2026-01-01 is column 0, middle day 4 = 4 Jan:
+    /// "early Jan (week 1)". 2024-12-31 is day 366 of a leap year, column 51 (never a 53rd),
+    /// days 358–366, middle 362 = 27 Dec: "late Dec (week 52)". 2024-02-29 is day 60, column
+    /// 8, days 57–63, middle 60: in a leap year 29 Feb, "late Feb (week 9)"; the same column
+    /// of 2026 has middle 60 = 1 Mar, "early Mar (week 9)".
+    #[test]
+    fn the_peak_week_is_a_date_a_reader_says() {
+        for (date, words) in [
+            ("2026-09-27", "late Sep (week 39)"),
+            ("2026-01-01", "early Jan (week 1)"),
+            ("2024-12-31", "late Dec (week 52)"),
+            ("2024-02-29", "late Feb (week 9)"),
+            ("2026-03-01", "early Mar (week 9)"),
+            ("2026-05-14", "mid May (week 20)"),
+        ] {
+            let conn = station(&[("Song Sparrow", date)]);
+            let html = stats_fragment(&conn, date, &english()).expect("tiles");
+            assert!(
+                html.contains(&format!(
+                    r#"<span class="value mig-peak-val">{words}</span>"#
+                )),
+                "{date}: {html}"
+            );
+            assert!(!html.contains(">w"), "{date}: {html}");
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // N24-08: the weekly index is per listened time
+    // -----------------------------------------------------------------------
+
+    /// Every date of 2025 with its day of the year (1-based).
+    fn days_of_2025() -> Vec<(String, u32)> {
+        let lens = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        let mut out = Vec::new();
+        let mut doy = 0;
+        for (m, len) in lens.iter().enumerate() {
+            for d in 1..=*len {
+                doy += 1;
+                out.push((format!("2025-{:02}-{d:02}", m + 1), doy));
+            }
+        }
+        out
+    }
+
+    /// A station with the real schema: `seconds(doy)` of listening on each date of 2025
+    /// (`None`: no ledger row) and `heard(name, doy)` detections of each species.
+    fn ledger_station(
+        seconds: impl Fn(u32) -> Option<f64>,
+        heard: &[(&str, &dyn Fn(u32) -> u32)],
+    ) -> (tempfile::TempDir, rusqlite::Connection) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = birdnet_db::sqlite::open_or_create(&dir.path().join("birds.db")).expect("db");
+        for (date, doy) in days_of_2025() {
+            if let Some(s) = seconds(doy) {
+                conn.execute(
+                    "INSERT INTO recording_effort (date, source, seconds) VALUES (?1, 'local', ?2)",
+                    rusqlite::params![date, s],
+                )
+                .expect("effort");
+            }
+            for (name, n) in heard {
+                for i in 0..n(doy) {
+                    conn.execute(
+                        "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                         VALUES (?1, ?2, 'Sci ' || ?3, ?3, 0.9, ?3 || ?1 || ?4 || '.wav')",
+                        rusqlite::params![date, format!("{:02}:00:00", i % 24), name, i],
+                    )
+                    .expect("detection");
+                }
+            }
+        }
+        (dir, conn)
+    }
+
+    /// Week column (0-based) of a day of the year, as [`WEEK_COLUMN`] has it.
+    fn col(doy: u32) -> u32 {
+        ((doy - 1) / 7).min(51)
+    }
+
+    /// A station that listened six hours a day (21 600 s) all of 2025 but for six weeks of
+    /// all-day listening in spring (columns 14–19, 9 Apr – 20 May) and six weeks switched off
+    /// in summer (columns 30–35, 30 Jul – 9 Sep, no ledger row).
+    fn spring_all_day(doy: u32) -> Option<f64> {
+        match col(doy) {
+            14..=19 => Some(86_400.0),
+            30..=35 => None,
+            _ => Some(21_600.0),
+        }
+    }
+
+    /// A Carolina Wren is resident: one detection an hour listened, 6 a day on a six-hour
+    /// day and 24 on an all-day one, none while the station was off.
+    fn wren(doy: u32) -> u32 {
+        match spring_all_day(doy) {
+            Some(s) => (s / 3_600.0) as u32,
+            None => 0,
+        }
+    }
+
+    /// A Swainson's Thrush passes through in the fall: one a day in columns 38, 39, 41 and
+    /// 42 and ten a day in column 40.
+    fn thrush(doy: u32) -> u32 {
+        match col(doy) {
+            40 => 10,
+            38 | 39 | 41 | 42 => 1,
+            _ => 0,
+        }
+    }
+
+    /// N24-08. On raw weekly counts the wren read 42 a week on six-hour weeks and 168 on the
+    /// all-day ones: a busiest week four times its usual one, a spring migrant. Per listened
+    /// time it is one detection an hour throughout.
+    ///
+    /// Worked by hand: the typical day is the median of 323 dates with audio, 281 of them
+    /// 21 600 s, so 21 600; every date with a row is a listened day (the all-day ones are four
+    /// typical days each). A six-hour week is 7 typical days and 42 detections, 42 per seven
+    /// typical days; an all-day week is 28 typical days and 168 detections, 168 / 28 × 7 = 42;
+    /// column 51 (24–31 Dec) is 8 typical days and 48 detections, 42. The index is 42 in every
+    /// week with listening, so the wren's busiest week is its usual week and it has no ridge.
+    /// The thrush (counterpart) is 7, 7, 70, 7, 7 per seven typical days in columns 38–42:
+    /// its busiest week ten times its usual week, so it keeps its ridge.
+    #[test]
+    fn a_resident_is_not_a_migrant_because_the_station_listened_longer() {
+        let (_dir, conn) = ledger_station(
+            spring_all_day,
+            &[("Carolina Wren", &wren), ("Swainson's Thrush", &thrush)],
+        );
+        let picked = collect_ridges(&conn, 2025, "2026-01-01", MAX_RIDGES).expect("ridges");
+        let names: Vec<&str> = picked.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["Swainson's Thrush"],
+            "a resident was drawn as a migrant"
+        );
+    }
+
+    /// A week the station was off is unknown, not a week the wren went quiet: the six weeks
+    /// of the outage (columns 30–35) have no index, and every other week's is 42. A week
+    /// with fewer than three days to count is unknown too, and today is not counted: with
+    /// today Monday 13 Oct 2025 (day 286, column 40, days 281–287) column 40 has 281–285,
+    /// five days, and is known; with today 16 Oct (day 289) column 41 (days 288–294) has
+    /// only the 15th, and is not.
+    #[test]
+    fn a_week_nobody_listened_to_has_no_index() {
+        let (_dir, conn) = ledger_station(spring_all_day, &[("Carolina Wren", &wren)]);
+        let all = weekly(&conn, 2025, "2026-01-01").expect("weeks");
+        let w = &all[0];
+        for (c, v) in w.index.iter().enumerate() {
+            if (30..=35).contains(&c) {
+                assert_eq!(*v, None, "column {c}");
+            } else {
+                let v = v.unwrap_or_else(|| panic!("column {c} has no index"));
+                assert!((v - 42.0).abs() < 1e-9, "column {c}: {v}");
+            }
+        }
+        // Today's week: 13 Oct 2025 is day 286; 281–285 are counted, today is not.
+        let all = weekly(&conn, 2025, "2025-10-13").expect("weeks");
+        assert!(all[0].index[40].is_some_and(|v| (v - 42.0).abs() < 1e-9));
+        assert_eq!(all[0].index[41], None, "a week that has not begun");
+        let all = weekly(&conn, 2025, "2025-10-16").expect("weeks");
+        assert_eq!(all[0].index[41], None, "one day is too few to say");
+    }
+
+    /// Counterpart: on a station that listened all day, every day, a real migrant keeps its
+    /// ridge and a resident heard at a constant rate has none.
+    #[test]
+    fn with_full_listening_a_migrant_is_still_a_migrant() {
+        let (_dir, conn) = ledger_station(
+            |_| Some(86_400.0),
+            &[("Carolina Wren", &|_| 24), ("Swainson's Thrush", &thrush)],
+        );
+        let picked = collect_ridges(&conn, 2025, "2026-01-01", MAX_RIDGES).expect("ridges");
+        let names: Vec<&str> = picked.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Swainson's Thrush"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // N05-02: "Earliest vs last year" is the arrival of the bulk, not the first bird
+    // -----------------------------------------------------------------------
+
+    /// `name` on every date from `from` to `to` (inclusive, one year), one row a day.
+    fn daily(name: &'static str, from: &str, to: &str) -> Vec<(&'static str, String)> {
+        let (a, b) = (
+            crate::routes::pages::date_to_epoch_days(from),
+            crate::routes::pages::date_to_epoch_days(to),
+        );
+        (a..=b)
+            .map(|e| {
+                let (y, m, d) = crate::routes::pages::days_to_date(e);
+                (name, format!("{y}-{m:02}-{d:02}"))
+            })
+            .collect()
+    }
+
+    fn station_of(rows: &[(&'static str, String)]) -> rusqlite::Connection {
+        let refs: Vec<(&str, &str)> = rows.iter().map(|(n, d)| (*n, d.as_str())).collect();
+        station(&refs)
+    }
+
+    /// A station recording from 1 Jan 2025 (a resident Cardinal every day to today, 31 Aug
+    /// 2026), and a Barn Swallow heard every day from 1 May to 28 Aug in both years: 120
+    /// detection days each year.
+    fn swallow_years(extra_2026: &[(&'static str, String)]) -> rusqlite::Connection {
+        let mut rows = daily("Northern Cardinal", "2025-01-01", "2026-08-31");
+        rows.extend(daily("Barn Swallow", "2025-05-01", "2025-08-28"));
+        rows.extend(daily("Barn Swallow", "2026-05-01", "2026-08-28"));
+        rows.extend_from_slice(extra_2026);
+        station_of(&rows)
+    }
+
+    /// N05-02. One stray detection of the swallow on 10 Jan 2026 (a false positive) does not
+    /// move the tile.
+    ///
+    /// The onset is the phenology module's (`phenology/timing.rs`): the 5th percentile of the
+    /// year's distinct detection days, `quantile_disc`, the `ceil(0.05 n)`-th day. Worked by
+    /// hand, last year to 31 Aug: 120 days, ceil(6) = 6th, 6 May. This year: 121 days (the
+    /// stray and the 120), ceil(6.05) = 7th: 10 Jan, then 1–6 May, so 6 May. 0 d: on time.
+    /// The Cardinal's onset is in January in both years, so it is no arrival.
+    ///
+    /// On `MIN(Date)` the swallow's first date this year was 10 January, before the end of
+    /// January, so it was not an arrival at all and the tile lost it.
+    #[test]
+    fn one_stray_january_detection_does_not_move_the_arrival() {
+        let conn = swallow_years(&[("Barn Swallow", "2026-01-10".to_owned())]);
+        let html = stats_fragment(&conn, "2026-08-31", &english()).expect("tiles");
+        assert!(
+            html.contains(
+                r#"<span class="value">on time</span><span class="bnb-meta">Barn Swallow</span>"#
+            ),
+            "{html}"
+        );
+    }
+
+    /// Counterpart: a real early arrival of several days moves it. The swallow is heard every
+    /// day from 25 Apr 2026: 126 days, ceil(6.3) = 7th, 1 May, against last year's 6 May:
+    /// 5 days early.
+    #[test]
+    fn a_real_early_arrival_still_moves_it() {
+        let conn = swallow_years(&daily("Barn Swallow", "2026-04-25", "2026-04-30"));
+        let html = stats_fragment(&conn, "2026-08-31", &english()).expect("tiles");
+        assert!(
+            html.contains(
+                r#"<span class="value">-5 d</span><span class="bnb-meta">Barn Swallow</span>"#
+            ),
+            "{html}"
+        );
     }
 }
