@@ -114,7 +114,7 @@ pub(super) fn content(terrain: &str) -> String {
             topic: "Hour by hour",
             title: "Detections by hour",
             action: Some(("/patterns?tab=dawn", "See who sings when →")),
-            note: "Totals for every hour of the day over the chosen range. The darker bars are the hours around today's sunrise and sunset, for a range of up to two weeks at a station with a location, and otherwise fixed morning and evening clock hours; the key under the chart names them.",
+            note: "Totals for every hour of the day over the chosen range. The bars in the stronger ink are the hours around today's sunrise and sunset, for a range of up to two weeks at a station with a location, and otherwise fixed morning and evening clock hours; the key under the chart names them.",
             body: "",
         },
         "hourly-totals",
@@ -482,7 +482,7 @@ fn render_hourly_bars(
         id: "hourly-totals",
         name: "Detections by hour of the day",
         desc: &format!(
-            "Detections for each hour of the day over the last {window_days} days; the hours around sunrise and sunset are in a darker ink, the rest grey."
+            "Detections for each hour of the day over the last {window_days} days; the hours around sunrise and sunset are in a stronger ink, the rest grey."
         ),
         unit: "detections",
         counts: by_hour,

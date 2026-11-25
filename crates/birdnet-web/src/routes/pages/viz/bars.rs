@@ -120,7 +120,7 @@ fn daylight_text(hours: f64) -> String {
     format!("{} h {:02} min of daylight", total / 60, total % 60)
 }
 
-/// Whether hour `h` (0 to 23) is one of the darker hours of a [`Fill::SunHours`] chart.
+/// Whether hour `h` (0 to 23) is one of the hours drawn in the stronger ink of a [`Fill::SunHours`] chart.
 ///
 /// With the station's sunrise and sunset (`solar`, local hours, the sun rising before it sets):
 /// the hour before sunrise and the three after it, and the three hours before sunset and the hour
@@ -139,7 +139,7 @@ pub fn sun_hour(h: usize, solar: Option<(f64, f64)>) -> bool {
     }
 }
 
-/// The key's words for a [`Fill::SunHours`] chart: which hours are darker, each run of them from
+/// The key's words for a [`Fill::SunHours`] chart: which hours are in the stronger ink, each run of them from
 /// its first hour to the end of its last, through the reader's clock.
 fn sun_hours_key(solar: Option<(f64, f64)>) -> String {
     let mut runs: Vec<(usize, usize)> = Vec::new();
@@ -165,7 +165,7 @@ fn sun_hours_key(solar: Option<(f64, f64)>) -> String {
         "by the clock: the station has no location, or the range is too long for one day's sun to stand for it"
     };
     format!(
-        r#"<span class="bnb-meta ck-scale-note"><span class="viz-swatch ck-sw ck-cink"></span>Darker bars: {}; {why}.</span>"#,
+        r#"<span class="bnb-meta ck-scale-note"><span class="viz-swatch ck-sw ck-cink"></span>Bars in the stronger ink: {}; {why}.</span>"#,
         spans.join(" and ")
     )
 }
@@ -1092,20 +1092,20 @@ mod tests {
         c
     }
 
-    /// The hours drawn in the darker ink, read back from the bars.
+    /// The hours drawn in the stronger ink, read back from the bars.
     fn ink_hours(svg: &str) -> Vec<usize> {
         (0..24)
             .filter(|h| svg.contains(&format!(r#"fill="url(#g-t-ck-cink)" data-ck-i="{h}""#)))
             .collect()
     }
 
-    /// UIC-26: with the station's sun known, the darker hours are the ones around its sunrise and
+    /// UIC-26: with the station's sun known, the hours in the stronger ink are the ones around its sunrise and
     /// sunset (the hour before sunrise and the three after, the three before sunset and the hour
     /// after), not 05:00 to 09:00 and 18:00 to 22:00 wherever the sun is: in a northern June those
     /// "dusk" bars were mid-afternoon. Seen failing on the fixed hours:
     /// `left: [5, 6, 7, 8, 18, 19, 20, 21]`, `right: [3, 4, 5, 6, 19, 20, 21, 22]`.
     #[test]
-    fn the_darker_hours_follow_the_sun_when_it_is_known() {
+    fn the_stronger_hours_follow_the_sun_when_it_is_known() {
         let mut o = opts([10_i64; 24]);
         o.solar = Some((4.3, 21.7));
         let svg = hourly(&o);
@@ -1213,7 +1213,7 @@ mod tests {
     /// moves with its width). Before it: `(13276, 4_905_990_690_813_501_481)`. Then N25-06:
     /// the hours around the sun and the temperature line are `ck-cink`, not `ck-c1` and
     /// `ck-c5` (before it: `(13278, 16_920_649_687_254_706_049)`). Then UIC-26: with this sun the
-    /// darker evening hours are 17-20 and not 18-21, and the key under the chart names them
+    /// evening hours in the stronger ink are 17-20 and not 18-21, and the key under the chart names them
     /// (before it: `(13292, 861_900_518_338_093_380)`).
     #[test]
     fn the_hour_chart_is_pinned() {
@@ -1231,7 +1231,7 @@ mod tests {
         let svg = hourly(&o);
         assert_eq!(
             super::super::kit::pin("hour-chart", &svg),
-            (13715, 2_178_104_591_179_203_952),
+            (13728, 14_811_197_866_716_694_081),
             "the hour chart changed"
         );
     }
