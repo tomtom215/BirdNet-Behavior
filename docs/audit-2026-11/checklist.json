@@ -3215,15 +3215,15 @@
   },
   {
    "id": "N26-08",
-   "title": "Small chart defects seen while regenerating: the bursts' 00:00 tick hidden at 390 px; History's count runs into '10 sp' in dark; Trends' two near-identical greys in dark; ck-cink has no hatch in plate mode",
-   "severity": "low",
+   "title": "Small chart defects seen in screenshots: History's day count runs into its species count; Today's temperature ticks are clipped on a phone; the bursts' 00:00 tick hidden at 390 px; Trends' two near-identical greys in dark; ck-cink has no hatch in plate mode",
+   "severity": "medium",
    "already_tracked": false,
    "mentions_conjecture": false,
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-26.md",
    "status": "open",
-   "evidence": "Reported by the chart lane from its screenshots, 2026-11-25; not fixed. Also: the clock sweep reads kit.rs only to its first #[cfg(test)], and charts.mjs is not a step in a11y.yml."
+   "evidence": "Reported by the chart lane from its screenshots, 2026-11-25; not fixed. Also: the clock sweep reads kit.rs only to its first #[cfg(test)], and charts.mjs is not a step in a11y.yml. Seen again in the integration's own screenshots (2026-11-25): on History at 1280x900 a two-digit count and a two-digit species count read as one number ('2818 sp', '4411 sp'); two attempts at moving the species count inside the 62 px cell each produced a different collision and were reverted. On Today at 390x844 the temperature strip's ticks ('11°', '2°') are end-anchored at x=8.6 and clipped by the left edge of the picture (bars.rs, pad_l - 6.0); read from the DOM, not changed by this batch. The kiosk links were fixed for a 900 px-high screen (30e4dcd); on a shorter one the sheet's rule is higher and may meet them again."
   }
  ]
 }
