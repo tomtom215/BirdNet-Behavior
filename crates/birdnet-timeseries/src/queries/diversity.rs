@@ -8,58 +8,131 @@
 
 use super::QueryPlan;
 
-/// Daily species richness (count of distinct species per day).
+/// The days a richness or diversity row is reported for, judged by effort.
+///
+/// A row for every date of the window from the station's first detection to
+/// today (none at all for a station with no detections), with that date's
+/// detections, species and recorded seconds, `judged` to the dates the
+/// station listened to — the rule and floor the trend queries use
+/// ([`super::trend::EFFORT_FLOOR_SHARE`] of its typical day, and a date the
+/// ledger says nothing about counts as listened). A listened date with no
+/// detections is a row with zero species; a date the station did not listen
+/// to is no row at all, because how many species it heard is not known
+/// (RES-14). Today is never judged: it is still being recorded.
+fn judged_days_ctes(lookback_days: u32, has_effort_ledger: bool) -> String {
+    let window = super::last_days(lookback_days);
+    let back = lookback_days.saturating_sub(1);
+    let effort = super::trend::effort_ctes(has_effort_ledger);
+    let seconds = super::trend::effort_seconds("s.detection_date");
+    let listened = super::trend::listened("effort_seconds", "typical");
+    format!(
+        "{effort}
+counts AS (
+    SELECT detection_date,
+           COUNT(DISTINCT Com_Name) AS species,
+           COUNT(*)                 AS total
+    FROM detections_ts
+    WHERE {window}
+    GROUP BY detection_date
+),
+first_day AS (
+    SELECT MIN(detection_date) AS d FROM detections_ts WHERE detection_date IS NOT NULL
+),
+spine AS (
+    SELECT CAST(range AS DATE) AS detection_date
+    FROM range(
+        (SELECT CASE WHEN d IS NOT NULL THEN
+             GREATEST(d, CURRENT_DATE - INTERVAL {back} DAYS) END FROM first_day)::TIMESTAMP,
+        (CURRENT_DATE + INTERVAL 1 DAY)::TIMESTAMP,
+        INTERVAL 1 DAY
+    )
+),
+days AS (
+    SELECT s.detection_date,
+           COALESCE(c.species, 0) AS species,
+           COALESCE(c.total, 0)   AS total,
+           {seconds}              AS effort_seconds,
+           l.typical              AS typical
+    FROM spine s
+    LEFT JOIN counts c USING (detection_date)
+    LEFT JOIN effort e ON e.day = s.detection_date
+    CROSS JOIN ledger l
+),
+judged AS (
+    SELECT detection_date, species, total
+    FROM days
+    WHERE detection_date = CURRENT_DATE OR {listened}
+)"
+    )
+}
+
+/// Daily species richness (count of distinct species per day), for the
+/// days the station listened to — see `judged_days_ctes`.
 #[derive(Debug, Clone)]
 pub struct DailyRichness {
     /// Look back this many days (default: 90).
     pub lookback_days: u32,
+    /// Whether the store has a `recording_effort` table to read. `false`
+    /// judges every day as listened; the executor sets it from the catalog.
+    pub has_effort_ledger: bool,
 }
 
 impl Default for DailyRichness {
     fn default() -> Self {
-        Self { lookback_days: 90 }
+        Self {
+            lookback_days: 90,
+            has_effort_ledger: false,
+        }
     }
 }
 
 impl QueryPlan for DailyRichness {
     fn sql(&self) -> String {
-        let window = super::last_days(self.lookback_days);
+        let judged = judged_days_ctes(self.lookback_days, self.has_effort_ledger);
         format!(
-            "SELECT
+            "WITH {judged}
+SELECT
     strftime(detection_date, '%Y-%m-%d') AS date,
-    COUNT(DISTINCT Com_Name)    AS species_richness,
-    COUNT(*)                    AS total_detections
-FROM detections_ts
-WHERE {window}
-GROUP BY detection_date
+    species                     AS species_richness,
+    total                       AS total_detections
+FROM judged
 ORDER BY detection_date"
         )
     }
 }
 
-/// Shannon diversity index per day.
+/// Shannon diversity index per day, for the days the station listened to —
+/// see `judged_days_ctes`.
 ///
-/// Uses `DuckDB`'s `entropy` aggregate (available in `DuckDB` 0.8+) which
-/// computes the Shannon entropy of a distribution given a column of values.
-/// Falls back to a manual formula if needed.
+/// H′ = −Σ pᵢ ln pᵢ over the day's species. A listened day with no
+/// detections has zero species and no H′ (there is no distribution to
+/// measure); a day the station did not listen to has no row.
 #[derive(Debug, Clone)]
 pub struct DailyShannon {
     /// Look back this many days (default: 90).
     pub lookback_days: u32,
+    /// Whether the store has a `recording_effort` table to read. `false`
+    /// judges every day as listened; the executor sets it from the catalog.
+    pub has_effort_ledger: bool,
 }
 
 impl Default for DailyShannon {
     fn default() -> Self {
-        Self { lookback_days: 90 }
+        Self {
+            lookback_days: 90,
+            has_effort_ledger: false,
+        }
     }
 }
 
 impl QueryPlan for DailyShannon {
     fn sql(&self) -> String {
         let window = super::last_days(self.lookback_days);
+        let judged = judged_days_ctes(self.lookback_days, self.has_effort_ledger);
         // Manual Shannon: -SUM(p * ln(p)) where p = count/total per species-day
         format!(
-            "WITH species_daily AS (
+            "WITH {judged},
+species_daily AS (
     SELECT
         detection_date,
         Com_Name,
@@ -74,18 +147,26 @@ totals AS (
         SUM(n) AS total
     FROM species_daily
     GROUP BY detection_date
+),
+shannon AS (
+    SELECT
+        sd.detection_date,
+        -SUM((sd.n * 1.0 / t.total) * ln(sd.n * 1.0 / t.total)) AS shannon_h,
+        -SUM((sd.n * 1.0 / t.total) * ln(sd.n * 1.0 / t.total))
+            / NULLIF(ln(COUNT(DISTINCT sd.Com_Name)), 0) AS pielou_evenness
+    FROM species_daily sd
+    JOIN totals t ON sd.detection_date = t.detection_date
+    GROUP BY sd.detection_date
 )
 SELECT
-    strftime(sd.detection_date, '%Y-%m-%d') AS date,
-    COUNT(DISTINCT sd.Com_Name)           AS species_richness,
-    t.total                               AS total_detections,
-    -SUM((sd.n * 1.0 / t.total) * ln(sd.n * 1.0 / t.total)) AS shannon_h,
-    -SUM((sd.n * 1.0 / t.total) * ln(sd.n * 1.0 / t.total))
-        / NULLIF(ln(COUNT(DISTINCT sd.Com_Name)), 0) AS pielou_evenness
-FROM species_daily sd
-JOIN totals t ON sd.detection_date = t.detection_date
-GROUP BY sd.detection_date, t.total
-ORDER BY sd.detection_date"
+    strftime(j.detection_date, '%Y-%m-%d') AS date,
+    j.species                              AS species_richness,
+    j.total                                AS total_detections,
+    h.shannon_h,
+    h.pielou_evenness
+FROM judged j
+LEFT JOIN shannon h USING (detection_date)
+ORDER BY j.detection_date"
         )
     }
 }
@@ -188,6 +269,12 @@ mod tests {
         let sql = q.sql();
         assert!(sql.contains("COUNT(DISTINCT Com_Name)"));
         assert!(sql.contains("GROUP BY detection_date"));
+        assert!(!sql.contains("recording_effort"), "no ledger, no join");
+        let with_ledger = DailyRichness {
+            has_effort_ledger: true,
+            ..DailyRichness::default()
+        };
+        assert!(with_ledger.sql().contains("recording_effort"));
     }
 
     #[test]

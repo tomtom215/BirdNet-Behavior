@@ -237,6 +237,14 @@ fn event_date_of(row: &birdnet_db::sqlite::DetectionRow) -> Option<String> {
 /// recorded, where empty means nobody was counting and `1` means one
 /// classifier was asked and one answered. Each classifier's own score is in the
 /// separate model-scores export.
+///
+/// Then, appended so no earlier column moves (RES-08): `Source` (the input
+/// that heard it), `Review_Verdict` (`confirmed`, or empty for unreviewed:
+/// rejected rows are not exported), `Chunk_Offset_Secs` (where the analysed
+/// chunk began in its recording, part of the detection's key),
+/// `Clip_Pruned_At` (when retention removed the clip's audio, RFC 3339 UTC;
+/// empty while it is kept), `Import_Batch_Id` (the import it came from; empty
+/// for a row this station recorded) and `BirdWeather_Soundscape_Id`.
 fn detections_to_csv(
     rows: &[birdnet_db::sqlite::DetectionRow],
     runs: &std::collections::HashMap<i64, birdnet_db::sqlite::RunModel>,
@@ -244,14 +252,16 @@ fn detections_to_csv(
     let mut csv = String::with_capacity(rows.len() * 240);
     csv.push_str(
         "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name,\
-         Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256,Model_Id,Model_Agreement\n",
+         Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256,Model_Id,Model_Agreement,\
+         Source,Review_Verdict,Chunk_Offset_Secs,Clip_Pruned_At,Import_Batch_Id,\
+         BirdWeather_Soundscape_Id\n",
     );
 
     for row in rows {
         let model = row.run_id.and_then(|id| runs.get(&id));
         let _ = writeln!(
             csv,
-            "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             escape_csv(&row.date),
             escape_csv(&row.time),
             escape_csv(&row.sci_name),
@@ -272,6 +282,17 @@ fn detections_to_csv(
             model.map_or(String::new(), |m| escape_csv(&m.model_sha256)),
             row.model_id.as_deref().map_or(String::new(), escape_csv),
             row.model_agreement.map_or(String::new(), |n| n.to_string()),
+            row.source.as_deref().map_or(String::new(), escape_csv),
+            row.review_verdict
+                .as_deref()
+                .map_or(String::new(), escape_csv),
+            row.chunk_offset_secs
+                .map_or(String::new(), |v| v.to_string()),
+            row.clip_pruned_at
+                .map_or(String::new(), birdnet_core::civil::rfc3339_utc),
+            row.import_batch_id.map_or(String::new(), |v| v.to_string()),
+            row.birdweather_soundscape_id
+                .map_or(String::new(), |v| v.to_string()),
         );
     }
 
@@ -308,7 +329,54 @@ mod tests {
         assert_eq!(
             csv.trim_end(),
             "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name,\
-             Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256,Model_Id,Model_Agreement"
+             Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256,Model_Id,Model_Agreement,\
+             Source,Review_Verdict,Chunk_Offset_Secs,Clip_Pruned_At,Import_Batch_Id,\
+             BirdWeather_Soundscape_Id"
+        );
+    }
+
+    /// RES-08: the columns a methods section needs are appended, and the
+    /// nineteen a consumer already reads keep their positions.
+    #[test]
+    fn the_appended_columns_carry_the_row_and_move_nothing() {
+        let row = birdnet_db::sqlite::DetectionRow {
+            date: "2026-04-05".into(),
+            time: "06:07:08".into(),
+            sci_name: "Turdus merula".into(),
+            com_name: "Eurasian Blackbird".into(),
+            confidence: 0.9,
+            file_name: Some("a.wav".into()),
+            source: Some("garden".into()),
+            review_verdict: Some("confirmed".into()),
+            chunk_offset_secs: Some(4.5),
+            clip_pruned_at: Some(0),
+            import_batch_id: Some(12),
+            birdweather_soundscape_id: Some(34),
+            ..Default::default()
+        };
+        let csv = detections_to_csv(&[row], &std::collections::HashMap::new());
+        let mut lines = csv.lines();
+        let header: Vec<&str> = lines.next().unwrap().split(',').collect();
+        let cells: Vec<&str> = lines.next().unwrap().split(',').collect();
+        assert_eq!(header.len(), cells.len());
+        assert_eq!(header[11], "File_Name");
+        assert_eq!(cells[11], "a.wav");
+        assert_eq!(header[18], "Model_Agreement");
+        let tail: Vec<(&str, &str)> = header[19..]
+            .iter()
+            .copied()
+            .zip(cells[19..].iter().copied())
+            .collect();
+        assert_eq!(
+            tail,
+            [
+                ("Source", "garden"),
+                ("Review_Verdict", "confirmed"),
+                ("Chunk_Offset_Secs", "4.5"),
+                ("Clip_Pruned_At", "1970-01-01T00:00:00Z"),
+                ("Import_Batch_Id", "12"),
+                ("BirdWeather_Soundscape_Id", "34"),
+            ]
         );
     }
 
@@ -386,7 +454,7 @@ mod tests {
         let runs = std::collections::HashMap::new();
         let csv = detections_to_csv(&[two.clone(), legacy.clone()], &runs);
         let lines: Vec<&str> = csv.lines().collect();
-        assert!(lines[1].ends_with(",\"perch,v2\",2"), "{}", lines[1]);
+        assert!(lines[1].ends_with(",\"perch,v2\",2,,,,,,"), "{}", lines[1]);
         assert!(
             lines[2].ends_with(",,"),
             "a legacy row leaves both empty: {}",
@@ -437,7 +505,7 @@ mod tests {
         // The run's three columns are followed by `Model_Id,Model_Agreement`,
         // empty here because neither row names a classifier.
         assert!(
-            lines[1].ends_with(",7,BirdNET+_V3.0-preview3_Global_11K_FP32,2a0f9efb,,"),
+            lines[1].ends_with(",7,BirdNET+_V3.0-preview3_Global_11K_FP32,2a0f9efb,,,,,,,,"),
             "{}",
             lines[1]
         );

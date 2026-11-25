@@ -267,17 +267,27 @@ async fn the_detections_csv_ends_with_the_classifier_and_agreement_columns() {
     let (status, csv) = get(&state, "/api/v2/detections/export").await;
     assert_eq!(status, StatusCode::OK);
     let lines: Vec<&str> = csv.lines().collect();
-    assert!(
-        lines[0].ends_with(",Model_Id,Model_Agreement"),
+    // The two columns close the original nineteen and keep their places, 18th
+    // and 19th; RES-08 appended six more after them, so they no longer end
+    // the row.
+    let header: Vec<&str> = lines[0].split(',').collect();
+    assert_eq!(
+        (header.get(17), header.get(18)),
+        (Some(&"Model_Id"), Some(&"Model_Agreement")),
         "{}",
         lines[0]
     );
-    let hairy = lines.iter().find(|l| l.contains(SCI)).expect("row");
-    assert!(hairy.ends_with(",birdnet-v3,1"), "{hairy}");
-    let legacy = lines.iter().find(|l| l.contains("Pica pica")).expect("row");
-    assert!(
-        legacy.ends_with(",,"),
-        "empty means nobody was counting: {legacy}"
+    let cells = |sci: &str| -> Vec<&str> {
+        let line = lines.iter().find(|l| l.contains(sci)).expect("row");
+        line.split(',').collect()
+    };
+    let hairy = cells(SCI);
+    assert_eq!((hairy[17], hairy[18]), ("birdnet-v3", "1"), "{hairy:?}");
+    let legacy = cells("Pica pica");
+    assert_eq!(
+        (legacy[17], legacy[18]),
+        ("", ""),
+        "empty means nobody was counting: {legacy:?}"
     );
     // Every row has the header's column count.
     let n = lines[0].matches(',').count();

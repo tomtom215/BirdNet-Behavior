@@ -321,7 +321,7 @@ pub fn approve_quarantine(conn: &Connection, id: i64) -> Result<bool, DbError> {
     // from the verdict list and counts. `DO NOTHING` on the detection's key: a
     // verdict already recorded for it is someone's, and is not overwritten here.
     if inserted > 0 {
-        tx.execute(
+        let reviewed = tx.execute(
             "INSERT INTO detection_reviews
                 (date, time, sci_name, file_name, com_name, status, notes, reviewed_at)
              SELECT date, time, sci_name, COALESCE(file_name, ''), com_name, 'confirmed',
@@ -330,6 +330,18 @@ pub fn approve_quarantine(conn: &Connection, id: i64) -> Result<bool, DbError> {
              ON CONFLICT(date, time, sci_name, file_name) WHERE detached IS NULL DO NOTHING",
             params![id],
         )?;
+        // And in the history (migration 64), where every verdict is kept. This
+        // function is not told who approved it, so the event names nobody; the
+        // audit log the caller writes does, for as long as it is kept.
+        if reviewed > 0 {
+            tx.execute(
+                "INSERT INTO review_events (date, time, sci_name, file_name, verdict, via, notes)
+                 SELECT date, time, sci_name, COALESCE(file_name, ''), 'confirmed', 'quarantine',
+                        'Approved from quarantine'
+                   FROM quarantine WHERE id = ?1",
+                params![id],
+            )?;
+        }
     }
 
     // Mark as reviewed + approved.

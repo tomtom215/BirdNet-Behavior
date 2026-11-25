@@ -842,11 +842,11 @@ fn valid_confidence(raw: &str) -> bool {
 
 /// Whether `raw` is a notification trigger the runtime understands.
 ///
-/// `TriggerMode::parse` maps anything it does not recognise to
-/// `EachDetection` — an alert on every single detection. So an unvalidated
-/// write here would turn a typo, or a stale value from an older wizard, into
-/// the chattiest possible setting: the exact opposite of what an operator
-/// choosing a quieter mode asked for. Kept in step with
+/// `TriggerMode::parse` maps anything it does not recognise to the default
+/// mode (new species only; until N14-01 it was `EachDetection`). So an
+/// unvalidated write here would turn a typo, or a stale value from an older
+/// wizard, into a mode the operator did not choose, with nothing on the form
+/// saying so. Kept in step with
 /// `birdnet_integrations::notification::TriggerMode::parse`.
 fn valid_trigger(raw: &str) -> bool {
     matches!(raw, "each" | "new-species" | "new-species-daily")
@@ -1172,9 +1172,8 @@ async fn onboarding_save(
         // `notification_mode`, which nothing anywhere consumed: the operator
         // picked "Quiet" or "Everything", it was persisted, and it governed
         // nothing. Only the three values `TriggerMode::parse` understands are
-        // accepted, because an unknown value silently parses as "every
-        // detection" — the chattiest mode, and the opposite of what someone
-        // choosing a quieter one intends.
+        // accepted, because an unknown value parses as the default mode
+        // (new species only), which is not the one the operator chose.
         if valid_trigger(mode) {
             items.push(("notify_trigger", mode, SettingsCategory::Notifications));
         }

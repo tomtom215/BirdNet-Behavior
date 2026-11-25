@@ -265,8 +265,8 @@ fn listened_for(state: &AppState, dates: &[String]) -> Option<Vec<bool>> {
     super::listening::listened_on(&effort, dates, last)
 }
 
-/// Fill the days with no row with zero, so a day that heard nothing is a point on the
-/// line and not a gap that the line steps over. `(date, value)` in, one per calendar
+/// Fill the days with no row with zero, so every calendar day has its place on the axis.
+/// Whether a filled day is a real zero or a day nobody measured is the caller's to say. `(date, value)` in, one per calendar
 /// day from the first to `last` out.
 #[cfg(feature = "analytics")]
 fn zero_fill(rows: &[(String, f64)], last: &str) -> Vec<(String, f64)> {
@@ -404,8 +404,10 @@ fn render_diversity_table(
     if rows.is_empty() {
         return r#"<p class="tsd-muted">No diversity data yet.</p>"#.to_string();
     }
-    // One point a calendar day to today: a day with no detections is zero species, a point
-    // on the line, not a day the line steps over.
+    // One point a calendar day to today. The query reports a listened day that heard
+    // nothing as a row of zero species and leaves out a day the station did not listen to
+    // (RES-14), so a day with no row is unknown: it is filled only to keep its place on
+    // the axis and is marked not listened below, never drawn as a zero.
     let last = today.unwrap_or_else(|| rows.last().map_or("", |r| r.date.as_str()));
     let dated: Vec<(String, f64)> = rows
         .iter()
@@ -413,7 +415,21 @@ fn render_diversity_table(
         .collect();
     let filled = zero_fill(&dated, last);
     let day_keys: Vec<String> = filled.iter().map(|d| d.0.clone()).collect();
-    let listened = listened_for(&day_keys);
+    let reported: std::collections::HashSet<&str> = rows.iter().map(|r| r.date.as_str()).collect();
+    let ledger = listened_for(&day_keys);
+    let any_left_out = day_keys.iter().any(|d| !reported.contains(d.as_str()));
+    let listened = (ledger.is_some() || any_left_out).then(|| {
+        day_keys
+            .iter()
+            .enumerate()
+            .map(|(i, d)| {
+                reported.contains(d.as_str())
+                    && ledger
+                        .as_ref()
+                        .is_none_or(|l| l.get(i).copied().unwrap_or(true))
+            })
+            .collect::<Vec<bool>>()
+    });
     let split = filled.len().saturating_sub(30);
     let point = |d: &(String, f64)| super::viz::TrendPoint {
         date: d.0.clone(),
@@ -618,6 +634,52 @@ mod tests {
         // Counterparts: an ordinary value and a missing one are unchanged.
         assert_eq!(super::shannon_cell(Some(std::f64::consts::LN_2)), "0.693");
         assert_eq!(super::shannon_cell(None), "—");
+    }
+
+    fn diversity(date: &str, species: i64) -> birdnet_timeseries::types::results::DiversityRow {
+        birdnet_timeseries::types::results::DiversityRow {
+            date: date.into(),
+            species_richness: species,
+            total_detections: species * 3,
+            shannon_h: None,
+            pielou_evenness: None,
+        }
+    }
+
+    /// RES-14: the diversity query leaves out a day the station did not
+    /// listen to (it reports a listened day with nothing heard as zero
+    /// species). The chart filled every missing day with zero, so the day
+    /// left out as unknown was drawn as "0 species" whenever the 60-second
+    /// ledger rule still called it listened.
+    #[test]
+    fn a_day_the_diversity_query_left_out_is_not_drawn_as_zero_species() {
+        let rows = [
+            diversity("2026-10-05", 6),
+            diversity("2026-10-06", 5),
+            // 2026-10-07: no row, the station recorded under half its usual day.
+            diversity("2026-10-08", 7),
+        ];
+        let all_listened = |dates: &[String]| Some(vec![true; dates.len()]);
+        let html = super::render_diversity_table(&rows, Some("2026-10-08"), &all_listened);
+        assert!(html.contains("The station was not listening"), "{html}");
+        assert!(html.contains("&quot;Wed 7 Oct&quot;,[null]"), "{html}");
+
+        // Counterpart: a listened day that heard nothing is a row with zero
+        // species, and is drawn as the zero it is.
+        let rows = [
+            diversity("2026-10-05", 6),
+            diversity("2026-10-06", 5),
+            diversity("2026-10-07", 0),
+            diversity("2026-10-08", 7),
+        ];
+        let html = super::render_diversity_table(&rows, Some("2026-10-08"), &all_listened);
+        assert!(!html.contains("The station was not listening"), "{html}");
+        assert!(html.contains("&quot;Wed 7 Oct&quot;,[0.0]"), "{html}");
+
+        // And with no ledger at all the query returns every day, so nothing
+        // is marked.
+        let html = super::render_diversity_table(&rows, Some("2026-10-08"), &|_| None);
+        assert!(!html.contains("The station was not listening"), "{html}");
     }
 
     fn anomaly(

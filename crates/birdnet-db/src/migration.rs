@@ -2760,6 +2760,111 @@ pub const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (date, hour, source)
         );",
     },
+    Migration {
+        version: 64,
+        description: "Every review verdict, with who gave it and when, kept as an append-only history",
+        // RES-06. `detection_reviews` holds one row per detection, written with
+        // `INSERT … ON CONFLICT DO UPDATE`, and has no reviewer column: a second
+        // reviewer silently replaced the first, and the only record of who had
+        // reviewed anything was `audit_log`, which is pruned after 180 days.
+        //
+        // `review_events` is one row per verdict given or withdrawn, never
+        // rewritten (the trigger below), and not touched by the audit-log
+        // retention. `verdict` NULL is a withdrawal. The reviewer's account id
+        // and name are both kept: the name *as it was*, so the row stays
+        // readable after the account is deleted or renamed, as comments do
+        // (migration 49). `via` says which path wrote it (`review`, `detection`,
+        // `api`, `bulk`, `quarantine`); a row with no reviewer name was written
+        // by something that is not a signed-in person, or before this history
+        // existed.
+        //
+        // The current verdict stays where every reader looks for it
+        // (`detection_reviews` and the mirrored `detections.review_verdict`),
+        // and it is defined as the latest event's: the write paths update both
+        // in one transaction.
+        //
+        // The detection is named as `detection_reviews` names it, by
+        // `(date, time, sci_name, file_name)` with `file_name` the detection's
+        // `COALESCE(File_Name, '')`. A relabelled detection's earlier events stay
+        // under the name they were about, as its detached review does.
+        //
+        // Each verdict on record now becomes one event, at its `reviewed_at`,
+        // with no reviewer: who gave it was never stored outside the audit log,
+        // and an audit row matched by target and verdict is a guess this does
+        // not make. `via` says where it came from. Purely additive.
+        up_sql: "CREATE TABLE IF NOT EXISTS review_events (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            date             TEXT NOT NULL,
+            time             TEXT NOT NULL,
+            sci_name         TEXT NOT NULL,
+            file_name        TEXT NOT NULL DEFAULT '',
+            verdict          TEXT CHECK (verdict IS NULL OR verdict IN ('confirmed','rejected')),
+            reviewer_user_id INTEGER,
+            reviewer_name    TEXT,
+            via              TEXT NOT NULL,
+            notes            TEXT,
+            at               TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_review_events_detection
+            ON review_events(date, time, sci_name, file_name);
+        INSERT INTO review_events (date, time, sci_name, file_name, verdict, via, notes, at)
+        SELECT date, time, sci_name, file_name, status, 'before-history', notes, reviewed_at
+          FROM detection_reviews
+         ORDER BY reviewed_at, id;
+        CREATE TRIGGER IF NOT EXISTS review_events_are_append_only
+            BEFORE UPDATE ON review_events
+        BEGIN
+            SELECT RAISE(ABORT, 'review_events is append-only: a verdict on record is never rewritten');
+        END;",
+    },
+    Migration {
+        version: 65,
+        description: "A comment follows its detection when the detection is relabelled",
+        // MSC-22 (TECH_DEBT TD-9). A comment names its detection by date, time,
+        // species and clip (migration 62), and nothing moved it when the
+        // detection's `Sci_Name` changed: the relabelled detection's thread was
+        // empty and the old thread was on no detection's page. A comment is
+        // about what was heard in the clip, and is often the reason for the
+        // relabel, so it follows the detection. (A review verdict does not: it
+        // was a judgement of the old species, and migration 59 detaches it.)
+        //
+        // The append-only trigger locked `sci_name`, so the move has to be let
+        // through it without opening the door to rewriting a comment. The
+        // trigger is recreated without `sci_name`, and a second one refuses a
+        // change of `sci_name` unless a detection with the new name exists at
+        // the comment's date, time and clip: following a relabel passes, a
+        // stray rename to a detection that is not there does not. Every other
+        // column stays locked as before.
+        //
+        // The move is a trigger on `detections`, as the review's detach is, so
+        // every path that renames a detection carries its comments. A legacy
+        // comment whose clip could not be told (`file_name` NULL) names no one
+        // detection and is not moved. No row is deleted and no text changes.
+        up_sql: "DROP TRIGGER IF EXISTS detection_comments_are_append_only;
+        CREATE TRIGGER detection_comments_are_append_only
+            BEFORE UPDATE OF id, date, time, file_name, author, body, at
+            ON detection_comments
+        BEGIN
+            SELECT RAISE(ABORT, 'detection_comments is append-only: a comment is never edited');
+        END;
+        CREATE TRIGGER detection_comments_move_only_with_their_detection
+            BEFORE UPDATE OF sci_name ON detection_comments
+            WHEN NOT EXISTS (SELECT 1 FROM detections d
+                              WHERE d.Date = NEW.date AND d.Time = NEW.time
+                                AND d.Sci_Name = NEW.sci_name
+                                AND COALESCE(d.File_Name, '') = NEW.file_name)
+        BEGIN
+            SELECT RAISE(ABORT, 'detection_comments is append-only: a comment moves only with its detection');
+        END;
+        CREATE TRIGGER detections_relabel_carries_comments
+        AFTER UPDATE OF Sci_Name ON detections
+        WHEN OLD.Sci_Name IS NOT NEW.Sci_Name
+        BEGIN
+            UPDATE detection_comments SET sci_name = NEW.Sci_Name
+             WHERE date = OLD.Date AND time = OLD.Time AND sci_name = OLD.Sci_Name
+               AND file_name = COALESCE(OLD.File_Name, '');
+        END;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -5203,5 +5308,61 @@ mod tests {
             .query_row(rewrite.affects_sql, [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 2, "one detection gets a verdict, one review is re-keyed");
+    }
+
+    /// Migration 64 copies every verdict already on record into the history,
+    /// as one event at the time it was given and with no reviewer (none was
+    /// ever stored outside the audit log), and the history refuses rewrites.
+    #[test]
+    fn migration_64_keeps_every_verdict_on_record_and_names_nobody_it_cannot() {
+        let conn = memory_db_at_version(63);
+        conn.execute(
+            "INSERT INTO detection_reviews
+                (date, time, sci_name, file_name, com_name, status, notes, reviewed_at)
+             VALUES ('2026-05-01', '06:00:00', 'Strix aluco', 'a.wav', 'Tawny Owl',
+                     'rejected', 'a dog', '2026-05-02 08:00:00')",
+            [],
+        )
+        .unwrap();
+        let m64 = MIGRATIONS.iter().find(|m| m.version == 64).unwrap();
+        conn.execute_batch(m64.up_sql).unwrap();
+        let row: (
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+            String,
+            String,
+        ) = conn
+            .query_row(
+                "SELECT file_name, verdict, reviewer_name, notes, via, at FROM review_events",
+                [],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            row,
+            (
+                "a.wav".to_owned(),
+                "rejected".to_owned(),
+                None,
+                Some("a dog".to_owned()),
+                "before-history".to_owned(),
+                "2026-05-02 08:00:00".to_owned()
+            )
+        );
+        assert!(
+            conn.execute("UPDATE review_events SET verdict = 'confirmed'", [])
+                .is_err()
+        );
     }
 }

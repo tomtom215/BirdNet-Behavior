@@ -217,6 +217,7 @@ extend-ignore-re = [
 # Words that the dictionary thinks are typos but are correct in context.
 # Each entry must be lowercase = lowercase to avoid case-sensitive misses.
 ot = "ot"             # ONNX op type
+numer = "numer"       # symphonia `TimeBase::numer`, the numerator of a time base
 nd = "nd"             # ndarray crate
 nin = "nin"           # NIN (neural network in network)
 arange = "arange"     # numpy-style function name

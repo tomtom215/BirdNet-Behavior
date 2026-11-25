@@ -222,8 +222,8 @@
    "work_package": "WP-07",
    "phase": 1,
    "source": "01-multi-source-capture.md:110",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "22ed559: --doctor gains an 'Overlapping windows' warning when OVERLAP is above 0 and DUPLICATE_INTERVAL_SECS is off, with the remedy; a warning, so the configuration stays usable. Gates overlap_without_a_duplicate_interval_is_reported and no_overlap_or_a_duplicate_interval_is_not_reported red before. Remaining, for the maintainer: collapsing rows across overlapping windows or changing the default interval (it changes counts). See N24-06."
   },
   {
    "id": "MSC-10",
@@ -714,8 +714,8 @@
    "work_package": "WP-09",
    "phase": 2,
    "source": "03-precision-accuracy.md:154",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not started in the batch of 2026-11-24 (the gate was written and never run, so it was reverted). For the Wilson unit test, computed with the formula in Python by that session: 2 of 3 gives 0.2077 to 0.9385, and 16 of 24 gives 0.4671 to 0.8203."
   },
   {
    "id": "ACC-08",
@@ -786,8 +786,8 @@
    "work_package": "WP-07",
    "phase": 1,
    "source": "03-precision-accuracy.md:242",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "61d1b9d: a packet the decoder refuses is replaced by silence of its own length (packet duration through the track's time base), or counted as dropped when the container gives no length; one warning per file. Gate decode_mp3_with_a_corrupt_mid_file_frame_keeps_its_length red on the old decoder (\"left: 44928 right: 46080\"); counterpart decode_clean_mp3_fixture_yields_every_frame. WAV PCM had no input that reaches DecodeError, so the fixture is 40 MPEG-1 Layer III frames with one frame's big_values set to 511."
   },
   {
    "id": "ACC-14",
@@ -1170,8 +1170,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:170",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "a398610: the cell fill is set at the table's own specificity, and the text colour is chosen per step and theme. Gate in tools/visual-qa/tokens.mjs (each step's cell is filled, matches its key swatch, text at 4.5:1, both themes): 12 failures on the shipped CSS (\"retention cell .rt-cell.ck-m7 paints rgba(0, 0, 0, 0), the key says it is filled\"), and 7 contrast failures with the fill but the old ink (1.95:1 on ck-m7 in light). Not graded: ck-m2, which the fixture never draws."
   },
   {
    "id": "UIR-04",
@@ -1183,7 +1183,7 @@
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:184",
    "status": "open",
-   "evidence": ""
+   "evidence": "Not fixed in the batch of 2026-11-24 (a source test was written and never run, so it was reverted). Strings found then: history.rs:133, correlation.rs:74, viz/radial.rs:277, viz/matrix.rs:200, and a fifth the audit did not list, viz/matrix.rs:91."
   },
   {
    "id": "UIR-05",
@@ -1206,8 +1206,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:211",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "a398610: .sp-rank is width auto, min-width 3ch, nowrap. Gate: layout.mjs's new wrap check, red on td.sp-rank 10 to 15 at desktop in both themes (\"\\\"10\\\" is set over 2 lines in a 30px box\"); counterparts in layout-selftest.mjs."
   },
   {
    "id": "UIR-07",
@@ -1254,8 +1254,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:261",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "a398610: only the secondary row actions wait for hover or focus; Play is always drawn. Gate interactions.mjs 'recordings play at rest', red on the shipped CSS (\"Play Northern Cardinal paints at opacity 0.00\"); counterpart: hovering still shows Download."
   },
   {
    "id": "UIR-11",
@@ -1627,7 +1627,7 @@
    "phase": 2,
    "source": "06-ui-code-charts-ia.md:225",
    "status": "open",
-   "evidence": ""
+   "evidence": "Not fixed in the batch of 2026-11-24. The birdnet-db gate was seen red on the shared-days ordering (\"left: [House Sparrow, Pine Grosbeak] right: [Pine Grosbeak, House Sparrow]\") and green with a Jaccard ordering, but the web side was unfinished and the work was reverted. Whoever takes it: the compute_companion row of tests/data/read_default_sweep.tsv must not change."
   },
   {
    "id": "UIC-05",
@@ -1723,7 +1723,7 @@
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:337",
    "status": "open",
-   "evidence": ""
+   "evidence": "Not fixed in the batch of 2026-11-24 (tests written and never run, reverted). Sites then: today.rs:1446, dashboard/partials.rs:153 and :255."
   },
   {
    "id": "UIC-13",
@@ -1915,7 +1915,7 @@
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:525",
    "status": "open",
-   "evidence": ""
+   "evidence": "Not fixed in the batch of 2026-11-24 (a handler test was written and never run, reverted)."
   },
   {
    "id": "UIC-29",
@@ -2058,8 +2058,8 @@
    "work_package": "WP-09",
    "phase": 2,
    "source": "07-research-grade.md:255",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "0f4bf36: migration 64 adds review_events, an append-only history (reviewer id and name as they were, verdict, via, at) written in the same transaction as the current verdict and untouched by audit-log pruning; the current verdict stays latest-wins. Gate every_verdict_keeps_its_reviewer red against today's storage (\"left: [(None, Some(\\\"rejected\\\"))] right: [(Some(\\\"ada\\\"), Some(\\\"confirmed\\\")), (Some(\\\"grace\\\"), Some(\\\"rejected\\\"))]\"); web gate a_verdict_names_its_reviewer red with the page handlers reverted. Not built, by scope: uncertain / wrong_species verdicts, blind review, protocol ids, any page or export of the history. See N24-01 and N24-04."
   },
   {
    "id": "RES-07",
@@ -2082,8 +2082,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:295",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "435137c: the CSV appends Source, Review_Verdict, Chunk_Offset_Secs, Clip_Pruned_At, Import_Batch_Id and BirdWeather_Soundscape_Id after the existing 19 columns, and the JSON carries the same. Coverage gate every_detection_column_reaches_an_export (a sentinel in every detections column, searched for in the CSV, JSON, BirdDB and Raven exports; is_locked exempt by name) red before (\"these detections columns reach no export: [chunk_offset_secs, Clip_Pruned_At, import_batch_id, birdweather_soundscape_id]\"). Remaining: dataset.zip and datapackage.json, a schema version, a licence, and exports of reviews, comments, effort, levels and weather."
   },
   {
    "id": "RES-09",
@@ -2094,8 +2094,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:311",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "435137c: the probe held (the combined Raven table listed a clip with Clip_Pruned_At set). Pruned rows are left out, X-Omitted-Pruned-Clips carries the count, and a fully pruned clip's own table answers 410. Gate the_raven_export_leaves_out_pruned_clips, with the kept clip as counterpart."
   },
   {
    "id": "RES-10",
@@ -2106,8 +2106,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:325",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Not committed in the batch of 2026-11-24. An exemption for rows with a review verdict or a comment, a RETAIN_REVIEWED_AUDIO setting and its tests were written, but the gate was never seen red before the session's deadline, so the work was reverted. Found while doing it: the disk-full purge has the same hole and is not in src/maintenance.rs but in birdnet-core's DiskManager, fed by locked_clips() in src/helpers/system.rs; the setting also needs a line in src/app.rs and a row in docs/book/reference/where-to-change-it.md."
   },
   {
    "id": "RES-11",
@@ -2154,8 +2154,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:394",
-   "status": "in_progress",
-   "evidence": "e2cc9b1 + 6d4d55c: moving average NULL over unlistened days, anomalies exclude them from flag and baseline, year-over-year adds per-listened-day fields, rows carry effort; the floor is half the station's median day with audio (6d4d55c, after the first version's 24-hour floor judged every day of a scheduled station unlistened: a_scheduled_station_is_judged_against_its_own_day red on it). Gate a_week_without_effort_has_no_average_and_no_low_anomaly red on the unfixed code. Remaining: richness, Shannon diversity and QuietDays (gap.rs) are not effort-aware."
+   "status": "done",
+   "evidence": "49f65e3: daily richness, Shannon diversity and QuietDays read the recording_effort ledger through the trend helpers (same floor, same unknown-means-listened rule); a day below the floor has no row, a listened day with nothing heard is zero species. Gates a_week_without_effort_has_no_richness_and_no_diversity and a_week_without_effort_is_not_a_run_of_quiet_days red on the unfixed code (\"a day the station did not listen to (2026-11-12) has a species richness\"). 8eca45f: the Trends chart no longer draws a day the query left out as 0 species (gate a_day_the_diversity_query_left_out_is_not_drawn_as_zero_species, red at timeseries_dash.rs:648 before). Remaining, under RES-26: the chart's hatching for days that have a row still uses the ledger's 60-second rule."
   },
   {
    "id": "RES-15",
@@ -2310,8 +2310,8 @@
    "work_package": "WP-09",
    "phase": 2,
    "source": "07-research-grade.md:571",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "435137c: ?verdict=confirmed exports only reviewer-confirmed rows (any other value answers 400), and each record's comment says it is an automated acoustic detection, names the model file and hash, and counts the confirmed detections. Gate the_ebird_export_says_what_it_claims red before; counterpart without_the_parameter_unreviewed_detections_still_export. Remaining, for the maintainer: whether confirmed-only becomes the default (eBird's policy on recorder-only records is unchecked), and Duration from effort."
   },
   {
    "id": "RES-28",
@@ -2406,8 +2406,8 @@
    "work_package": "WP-02",
    "phase": 1,
    "source": "02-multi-model-pipeline.md (MMP-25, added 2026-11-23 by the WP-02 session)",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "0d6a9c7: DaemonOccurrence loads every configured classifier's vocabulary, as the daemon's filter does, and the report lists each other classifier's scored species. Gate a_second_classifiers_species_are_explained_and_its_include_list_binds red on the old code (the page listed three species and ignored an include list of Corvus corax); counterpart a_primary_only_station_is_explained_as_before. Module doc and two manual sentences corrected. Not run: the tests that need real V2.4 model files."
   },
   {
    "id": "ACC-21",
@@ -2430,8 +2430,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "docs/TECH_DEBT.md TD-9 (narrowed by 0052bbf); found while fixing MSC-05",
-   "status": "open",
-   "evidence": "Reviews follow a relabel through a trigger; detection_comments has none, so a comment keyed by (date, time, sci_name, file_name) is orphaned when sci_name changes. Read, not tested."
+   "status": "done",
+   "evidence": "0f4bf36: the probe failed on the unfixed tree (\"left: [] right: [\\\"Too short for a Hairy; I think Downy.\\\"]\"). Migration 65 adds a trigger on detections that moves a comment with its relabelled detection, and narrows the append-only trigger so sci_name may change only to a name a detection at that date, time and clip now has. Gate a_comment_follows_its_detection_through_a_relabel. Remaining: comments with no clip (file_name NULL) are not moved, and a moved comment does not record the name it was written under. Note: docs/TECH_DEBT.md TD-9 had recorded follow / stay / show-on-both as the maintainer's decision; this fix took 'follow' without it, and TD-9 now says so and how to reverse it."
   },
   {
    "id": "UIR-38",
@@ -2442,8 +2442,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "seen in a render while fixing UIC-03",
-   "status": "open",
-   "evidence": "The table on the Trends page's anomaly card has no scroll wrapper; at 390 px the Type column's words are cut off at the card edge. Present before WP-05; the partial-day label widens the cell. Seen in a screenshot by the session that did UIC-03, not measured."
+   "status": "done",
+   "evidence": "a398610 (CSS): re-observed at 390x844 inside the closed 'See the full analytics dashboard' disclosure, which no gate route opened; 'Unusual days' needed 466px in 304px, and 'Peak 15-minute windows' 474px. Gate: layout.mjs's new DISCLOSED pass opens the disclosure and requires its tables to fit, red before. Clean at 390, 360 and 320. Remaining: at 360 and 320 a date breaks at its hyphen. See N24-07."
   },
   {
    "id": "N14-01",
@@ -2454,8 +2454,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-14.md",
-   "status": "open",
-   "evidence": "Found while implementing WP-14; not re-checked against the code by this session beyond the finder's reading."
+   "status": "done",
+   "evidence": "0243b85: verified by test, then fixed. TriggerMode::parse falls back to DEFAULT_NOTIFY_TRIGGER (new-species) when no word names a rule, including an empty value; the start-up log and the validator's warning say which mode is in force. Gates an_unrecognised_trigger_falls_back_to_the_default_not_each and a_misspelt_trigger_runs_on_the_default_not_every_detection red with \"left: EachDetection right: NewSpecies\". Two existing assertions pinned the old mapping and were changed, as the commit says. 2fb282c corrects two wizard comments."
   },
   {
    "id": "N14-02",
@@ -2466,8 +2466,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-14.md",
-   "status": "open",
-   "evidence": "Found while implementing WP-14; not re-checked against the code by this session beyond the finder's reading."
+   "status": "done",
+   "evidence": "fe4ed0b: gate solar_window_remedies_read_as_plain_sentences red (\"a run of spaces in the doctor's output for 0 minutes\"). A scripted sweep of every string literal in src/doctor.rs and src/doctor/*.rs found 17 hits: 2 real (these, fixed), 11 test fixtures or inputs, 4 deliberate terminal alignment."
   },
   {
    "id": "N14-03",
@@ -2478,8 +2478,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-14.md",
-   "status": "open",
-   "evidence": "Found while implementing WP-14; not re-checked against the code by this session beyond the finder's reading."
+   "status": "done",
+   "evidence": "caae3e3: amixer's -99999.99dB parses as minus infinity instead of no value, and a new Advice::Silent ranks worst, so another control in range no longer excuses it. Gate a_control_at_minus_infinity_silences_the_card_beside_one_in_range red (\"left: Pass right: Warn\"); counterpart a_low_control_beside_one_in_range_passes. See N24-05 for the PulseAudio path."
   },
   {
    "id": "N06-01",
@@ -2490,8 +2490,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-06.md",
-   "status": "open",
-   "evidence": "Found while implementing WP-06; not re-checked beyond the finder's reading."
+   "status": "done",
+   "evidence": "0f4bf36: the SQLite half was already fixed by migration 61 (approve_quarantine copies source; asserted as the gate's precondition). The DuckDB half held: gate an_approved_detection_is_the_same_in_both_stores red with \"left: (None, None, None, None) right: (Some(\\\"garden\\\"), Some(0.7), Some(1.25), Some(0.5))\"; the mirror now copies source, cutoff, sens and overlap. Remaining: the drift fingerprint does not cover cutoff, sens and overlap; see N24-02."
   },
   {
    "id": "N06-02",
@@ -2514,8 +2514,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-05.md",
-   "status": "open",
-   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since."
+   "status": "done",
+   "evidence": "Duplicate of UIR-38; fixed by a398610 with the same gate."
   },
   {
    "id": "N05-02",
@@ -2538,8 +2538,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-05.md",
-   "status": "open",
-   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since."
+   "status": "done",
+   "evidence": "08b4eaf: templates/migration.html and docs/architecture 07 and 13 now say what the code computes (raw weekly counts scaled to each species' peak week; an effort-corrected detection rate for the phenology module). docs/architecture/08 held neither phrase, so that part of the row did not hold. See N24-08."
   },
   {
    "id": "N05-04",
@@ -2550,8 +2550,404 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-05.md",
+   "status": "in_progress",
+   "evidence": "Confirmed by reading on 2026-11-24, no gate run: weekday_sentence leaves out weekdays with fewer than 3 listened days (MIN_WEEKDAY_OCCURRENCES, routes/pages/insight.rs:35) while hour_by_weekday in viz/heat.rs draws a margin bar for every weekday with any detection. A fixture for the gate: listened days [4,4,4,4,4,2,4] with 40 detections on each weekday and 30 on the two-day one, which gets the longest bar while the sentence says no weekday stands out."
+  },
+  {
+   "id": "N24-01",
+   "title": "A relabelled detection leaves its review history under the old name, and review_events can be deleted from",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
    "status": "open",
-   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since."
+   "evidence": "Read in migration 64 (0f4bf36): the append-only trigger is BEFORE UPDATE only, so a DELETE is not refused; and because every UPDATE is refused, review_events rows cannot follow a relabel the way detection_reviews and, since migration 65, comments do. A reading; no probe run."
+  },
+  {
+   "id": "N24-02",
+   "title": "The DuckDB mirror of an approved quarantined detection leaves review_verdict unset while SQLite writes confirmed",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
+   "status": "open",
+   "evidence": "Noticed by the lane A session of 2026-11-24 while fixing N06-01; not probed."
+  },
+  {
+   "id": "N24-03",
+   "title": "clear_detection_review returns true whenever the detection exists, even with no verdict to clear",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
+   "status": "open",
+   "evidence": "Noticed by the lane A session of 2026-11-24; only the history write was guarded. Not probed."
+  },
+  {
+   "id": "N24-04",
+   "title": "The API, the bulk confirm and reject on /search, and quarantine approval record no reviewer in review_events",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
+   "status": "open",
+   "evidence": "Follows RES-06 (0f4bf36): api_write.rs, pages/search.rs and pages/quarantine.rs still call the unattributed functions; each needs the _by call with the signed-in user. Reported by the lane A session, whose lane did not own those files."
+  },
+  {
+   "id": "N24-05",
+   "title": "A PulseAudio source at -inf dB still parses as no dB value",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
+   "status": "open",
+   "evidence": "Left by caae3e3 (N14-03): the amixer path is fixed, the Pulse path is not. One source, so nothing masks it, and 0% already warns."
+  },
+  {
+   "id": "N24-06",
+   "title": "The doctor's overlap check copies the daemon's duplicate-interval resolution and assumes 3 s windows",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
+   "status": "open",
+   "evidence": "22ed559 (MSC-09): daemon::config::resolve_i64_with_default is pub(super), so the check restates the rule and the two can drift; Perch's 5 s windows are not considered in the row count it prints."
+  },
+  {
+   "id": "N24-07",
+   "title": "layout.mjs's new fit check grades only the routes listed in DISCLOSED, and layout.mjs does not read text below the first screen of a scrolling main on a phone",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
+   "status": "open",
+   "evidence": "Reported by the lane D session of 2026-11-24 (a398610). The second half was there before."
+  },
+  {
+   "id": "N24-08",
+   "title": "Migration's per-species weekly index is not corrected for listening time",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
+   "status": "open",
+   "evidence": "Noticed by the lane C session of 2026-11-24 in seasonal_ratio (routes/pages/migration.rs) while fixing N05-03. A reading."
+  },
+  {
+   "id": "N24-09",
+   "title": "CI: the 'extension loads offline' step rebuilds its dependencies from scratch, and the manifest prints two cargo warnings",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
+   "status": "open",
+   "evidence": "Read from the log of job 138833156312 (run 45503657894, Tests (x86_64), 46m37s): the step the workflow comment calls near-instant printed 'Finished test profile ... in 6m 34s' for a test that ran in 0.90s, because -p birdnet-behavioral --features analytics resolves to other build units than --workspace --all-features. Also 'unused workspace dependency ndarray' (Cargo.toml:179) and 'package.homepage is redundant with package.documentation' (Cargo.toml:338). Only the last 5000 of 25193 log lines were readable; whether the cache was hit was not seen. A fix needs a trial run and a guard that the named test ran."
+  },
+  {
+   "id": "CHT-01",
+   "title": "Sparklines are each scaled to their own maximum, so the rail compares shapes that are not comparable",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:99",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-02",
+   "title": "The streamgraph answers \"how much, of whom\" for the top band only",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:113",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-03",
+   "title": "Hour-of-day columns pool a season of shifting sunrises onto a clock axis",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:128",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-04",
+   "title": "Hour × weekday is the wrong second axis for birds",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:143",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-05",
+   "title": "Dawn rings: radius is free, so identical activity is longer on an outer ring",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:160",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-06",
+   "title": "Trends has no band, so \"unusual\" is a table two folds away from the chart it is about",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:175",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-07",
+   "title": "Richness per day is mostly a picture of how much was heard",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:189",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-08",
+   "title": "The chord diagram cannot show the absence of association, and has no chance level",
+   "severity": "high",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:202",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-09",
+   "title": "Ridgeline: own-max heights hide low-count ridges that are one false positive",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:221",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-10",
+   "title": "Bursts shows seven days of bars and no summary of what a visit is",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:235",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-11",
+   "title": "Retention counts the end of the record as \"did not return\"",
+   "severity": "high",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:244",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-12",
+   "title": "Before/after ranks neighbours by frequency, so the commonest bird follows everything",
+   "severity": "high",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:267",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-13",
+   "title": "The running order is drawn on a clock that the dawn moves across",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:287",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-14",
+   "title": "Who answers whom draws raw exchange counts; two frequent singers \"answer\" by chance",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:303",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-15",
+   "title": "Chorus assembling encodes a cumulative share as disc area on an ordinal time axis",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:315",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-23",
+   "title": "The kit has no mark for uncertainty and no shared rule for \"too few to say\"",
+   "severity": "high",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:434",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-24",
+   "title": "No gate grades whether a relational figure would say \"nothing\" when nothing is there",
+   "severity": "high",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:448",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-16",
+   "title": "Reporting frequency through the year — the birder's bar chart",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:347",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-17",
+   "title": "What a visit is — session length and visits per day, per species",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:359",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-18",
+   "title": "Mixed-species bouts",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:371",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-19",
+   "title": "What happens when the hawk calls — an event-aligned plot",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:382",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-20",
+   "title": "Song onset against sunrise through the season",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:396",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-21",
+   "title": "Weather response",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:408",
+   "status": "open",
+   "evidence": ""
+  },
+  {
+   "id": "CHT-22",
+   "title": "Return across years, and the arrival order of spring",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "WP-17",
+   "phase": 4,
+   "source": "09-chart-review.md:419",
+   "status": "open",
+   "evidence": ""
   }
  ]
 }

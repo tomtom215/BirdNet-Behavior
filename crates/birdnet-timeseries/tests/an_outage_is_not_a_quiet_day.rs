@@ -384,11 +384,18 @@ fn trend_rows_carry_effort() {
 #[test]
 fn year_over_year_compares_per_listened_day() {
     use birdnet_timeseries::types::params::WeeklyParams;
-    // 10 a day for 380 days, except three days of one week 52 weeks back
+    // 10 a day for 400 days, except three days of one week 52 weeks back
     // (364 days + 8..=10 days ago), when the station was off.
+    //
+    // 400, not 380: the earliest week the query reports starts up to 34 days
+    // back (four weeks, and back to that week's Monday), and its prior-year
+    // week starts 364 days before that, so the record must reach 398 days
+    // back. With 380 the test passed or failed by the weekday it ran on: on
+    // Wednesday 2026-11-25 the week of 2026-11-02 had no prior year at all
+    // ("left: None right: Some(0.0)"), the day after it had passed.
     let prior_outage = 372..=374;
-    let (db, _dir) = store(380, |b| if prior_outage.contains(&b) { 0 } else { 10 });
-    ledger(&db, 380, |b| {
+    let (db, _dir) = store(400, |b| if prior_outage.contains(&b) { 0 } else { 10 });
+    ledger(&db, 400, |b| {
         Some(if prior_outage.contains(&b) {
             0.0
         } else {

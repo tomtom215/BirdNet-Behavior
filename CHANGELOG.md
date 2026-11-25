@@ -26,6 +26,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Every review verdict is kept, with who gave it and when (RES-06 of the 2026-11 audit).** A new append-only
+  history (`review_events`, schema 64) is written with each verdict from the review queue and the detection
+  page, and the 180-day audit-log pruning does not touch it, so a second reviewer no longer erases the first.
+  The current verdict is still the latest one. Verdicts from before the upgrade are copied in with no
+  reviewer. The API, the bulk actions on Search and quarantine approval do not record a name yet.
+- **More columns in the detections export (RES-08).** The CSV appends `Source`, `Review_Verdict`,
+  `Chunk_Offset_Secs`, `Clip_Pruned_At`, `Import_Batch_Id` and `BirdWeather_Soundscape_Id` after the existing
+  columns, whose positions do not move; the JSON carries the same. A test fails when a `detections` column
+  reaches no export.
+- **eBird export: `verdict=confirmed`, and a comment that says what the record is (RES-27).** The parameter
+  exports only reviewer-confirmed detections; without it the export is as before. Each record's comment now
+  says it is an automated acoustic detection, names the model file and its hash, and counts the detections a
+  reviewer confirmed.
+- **`--doctor` warns when overlapping windows record one call several times (MSC-09).** With `OVERLAP` above 0
+  and `DUPLICATE_INTERVAL_SECS` off, each overlapping window writes its own row; the check says so and names
+  the remedy. Nothing about how rows are written changes.
 - **Which source heard a bird, in the live feed and in notifications (WP-06 of the 2026-11 audit, MSC-19).** The
   `/api/v2/ws/detections` event carries `source`, and notification templates gain `$source`: the source's label,
   its device, or a camera's host and port, as the public pages name it, never a stream address's password.
@@ -134,6 +150,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An `APPRISE_TRIGGER` that names no rule means `new-species`, not every detection (N14-01).** A typo, or
+  an empty value, used to select `each`, the chattiest mode. It now selects the documented default, and the
+  journal and `--doctor` say which mode is in force. **A station that relied on an empty or misspelt value to
+  be notified of every detection must set `APPRISE_TRIGGER=each`.**
+- **A comment follows its detection when the detection is relabelled (MSC-22, schema 65).** It used to stay
+  under the old species name, on no detection's page. `docs/TECH_DEBT.md` TD-9 had left this choice to the
+  maintainer; it records how to reverse it.
 - **Notification trigger default is `new-species` everywhere (OOB-12).** The setup wizard recommended it while
   the daemon and the settings form defaulted to `each` (every detection). One constant,
   `DEFAULT_NOTIFY_TRIGGER`, now feeds all three. **A station that never chose a trigger changes on upgrade:**
@@ -204,6 +227,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A damaged packet in an uploaded MP3 or FLAC no longer shifts everything after it (ACC-13).** The decoder
+  dropped a packet it could not read, so later detections were stamped and clipped a packet early. The packet
+  is replaced by silence of its own length, and one warning per file reports the damage.
+- **The Raven selection table leaves out clips retention has deleted (RES-09).** It listed them, and Raven
+  then failed to open the table. The count left out is in the `X-Omitted-Pruned-Clips` response header, and a
+  deleted clip's own table answers 410.
+- **An approved quarantined detection reaches the analytics copy whole (N06-01).** The DuckDB row lost its
+  source, cutoff, sensitivity and overlap.
+- **Trends: a day the station did not listen is not a day with no species (RES-14).** Daily richness, Shannon
+  diversity and the quiet-days query judge a day by the same rule as the moving average (half the station's
+  usual day of recorded audio). A day below it is left out and drawn as not listened; a day the station
+  listened and heard nothing reads 0 species, where it used to be missing.
+- **`--doctor` reports a capture control at minus infinity dB as silencing the card (N14-03),** instead of
+  passing it beside another control in range.
+- **`--doctor`'s solar recording-window remedies print as sentences (N14-02),** without runs of spaces.
+- **"Why isn't a bird heard here?" answers for every classifier (MMP-25).** `/species/occurrence` listed only
+  the primary classifier's species and ignored an Allow list that named only a second classifier's.
+- **Patterns, Visits: the "who keeps coming back" table shows its colours (UIR-03).** Every cell was
+  transparent under a seven-step key; each now takes its step's fill, with text at 4.5:1 in both themes.
+- **Species list: ranks 10 and above stay on one line (UIR-06).**
+- **Recordings: Play is visible without hovering (UIR-10).** Download, lock and delete still wait for hover
+  or focus.
+- **Patterns, Trends on a phone: the "Unusual days" and "Peak 15-minute windows" tables fit their card
+  (UIR-38).** Their last column was cut off at 390 px.
+- **The Migration page and the architecture notes say what the ridgeline is (N05-03):** weekly detection
+  counts scaled to each species' busiest week, not abundance.
 - **`--doctor` and the installer warn about a time zone far from the station (OOB-06).** A Pi left on
   Europe/London in Ohio passed whenever the setup wizard had not recorded a zone, and filed every detection at
   the wrong hour. Both now compare the machine's UTC offset with the station's longitude and warn when they are
