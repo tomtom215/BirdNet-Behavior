@@ -1233,6 +1233,34 @@ async function todayHeadingSurvivesASwap(page) {
   check('today: the line under the heading was swapped with it', got.subSwapped, 'the #today-sub line was not replaced');
 }
 
+/** A control that reloads the region it sits in takes its own container with it, so focus fell
+ * to `<body>` and a keyboard user was sent back to the top of the page (UIC-29, probed: Tab to
+ * "Confirmed" in the review queue's filter, Enter, `document.activeElement` was `body`). The
+ * shared listener in `layout.html` now moves focus to the new content's control that carries the
+ * same `data-focus-after-swap` key. Counterpart: a second swap from the control focus landed on
+ * lands too, so it is not a one-off.
+ */
+async function focusFollowsASwapThatRemovedIt(page) {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`${BASE}/detection-reviews`, { waitUntil: 'domcontentloaded' });
+  await page.waitForSelector('#dr-queue .dr-filter a', { timeout: 15000 });
+  for (const label of ['Confirmed', 'All']) {
+    await page.locator('#dr-queue .dr-filter a', { hasText: label }).first().focus();
+    const settled = page.evaluate(() => new Promise((r) => {
+      const t = setTimeout(() => r(false), 8000);
+      document.body.addEventListener('htmx:afterSettle', () => { clearTimeout(t); setTimeout(() => r(true), 50); }, { once: true });
+    }));
+    await page.keyboard.press('Enter');
+    const ok = await settled;
+    const got = await page.evaluate(() => {
+      const a = document.activeElement;
+      return a === document.body ? 'body' : `${a.tagName.toLowerCase()} "${a.textContent.trim()}" current=${a.getAttribute('aria-current')}`;
+    });
+    check(`review queue: "${label}" reloaded the queue`, ok, 'no htmx:afterSettle in 8 s');
+    check(`review queue: focus stays on "${label}" after the queue it was in is replaced`, got === `a "${label}" current=page`, `focus on ${got}`);
+  }
+}
+
 async function main() {
   const browser = await chromium.launch({
     headless: process.env.HEADED !== '1',
@@ -1279,6 +1307,7 @@ async function main() {
     ['kiosk controls readable at rest', kioskControlsReadableAtRest],
     ['kiosk credits say where they are', kioskCreditsSayWhereTheyAre],
     ['today heading survives a swap', todayHeadingSurvivesASwap],
+    ['focus follows a swap that removed it', focusFollowsASwapThatRemovedIt],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();
