@@ -45,11 +45,13 @@ The cost is real and worth measuring before you commit to it: check the daemon's
 
 ## Installing one
 
-The station carries a small catalogue of classifiers it knows how to fetch and verify. The default one (BirdNET V2.4 and its local species filter) can be installed from the browser: **Settings → Capture → Bird-identifying model → Install**, or step 2 of the setup wizard. The others below are installed from the command line. To see the catalogue:
+The station carries a small catalogue of classifiers it knows how to fetch and verify. The default one (BirdNET V2.4 and its local species filter) can be installed from the browser: **Settings → Capture → Bird-identifying model → Install**, or step 2 of the setup wizard. The others below are installed from the command line. To see the catalogue, with where each model comes from, its licence and where that licence was read, and the taxonomy its labels follow where that is known:
 
 ```bash
 birdnet-behavior --install-model list
 ```
+
+The licences differ: BirdNET V2.4, its range filter and BirdNET+ V3.0 are Creative Commons licences (V2.4's is non-commercial), Perch v2 is Apache-2.0. A licence the catalogue cannot cite from a source is printed as not recorded, and so is a labels file's taxonomy edition (only Perch's, iNaturalist 2024, is recorded today).
 
 To install one:
 

@@ -531,7 +531,7 @@ pub fn install_from_catalogue(
 /// where it comes from.
 #[must_use]
 pub fn catalogue_listing() -> String {
-    use birdnet_integrations::model_catalog::{CATALOG, Use, model_origins};
+    use birdnet_integrations::model_catalog::{CATALOG, Use, model_origins, taxonomy_edition};
     use std::fmt::Write as _;
 
     let mut out = String::from("Models this build can install:\n\n");
@@ -569,7 +569,25 @@ pub fn catalogue_listing() -> String {
                     "not shipped — supply your own"
                 }
             );
+            // RES-32: the checklist the labels' names come from, only where
+            // it can be cited.
+            let _ = match entry.labels_sha256.and_then(taxonomy_edition) {
+                Some(t) => writeln!(
+                    out,
+                    "    taxonomy: {} (read from {})",
+                    t.edition, t.cited_from
+                ),
+                None => writeln!(out, "    taxonomy: not recorded"),
+            };
         }
+        // MMP-20: who made it, under what licence, and where that was read.
+        let _ = writeln!(out, "    source: {}", entry.source);
+        let _ = writeln!(
+            out,
+            "    licence: {} (read from {})",
+            entry.licence.unwrap_or("not recorded"),
+            entry.licence_cited_from
+        );
         let _ = writeln!(
             out,
             "    downloaded from, in order: {}",
@@ -1085,5 +1103,69 @@ mod tests {
     fn the_policy_constants_are_what_the_module_header_says() {
         assert_eq!(CLASSIFIER_SHARE_DENOMINATOR, 2, "half the ceiling");
         assert_eq!(PER_MODEL_WORKING_SET_MIB, 256);
+    }
+
+    /// The block `--install-model list` prints for one id.
+    fn listed(id: &str) -> String {
+        let all = super::catalogue_listing();
+        let start = all
+            .find(&format!("\n  {id}\n"))
+            .unwrap_or_else(|| panic!("{id} is not listed:\n{all}"));
+        // To the next entry: the next line indented by exactly two spaces.
+        let rest = &all[start + 1..];
+        let end = rest
+            .match_indices('\n')
+            .map(|(i, _)| i)
+            .find(|&i| {
+                let line = &rest[i + 1..];
+                line.starts_with("  ") && !line.starts_with("   ")
+            })
+            .unwrap_or(rest.len());
+        rest[..end].to_owned()
+    }
+
+    /// MMP-20: every entry says where it comes from and under what licence,
+    /// and the licences are the ones the sources cited in the catalogue say:
+    /// two networks under a non-commercial licence and one under Apache-2.0
+    /// are not interchangeable for an operator who sells what the station
+    /// records.
+    #[test]
+    fn the_listing_names_each_models_source_and_licence() {
+        for (id, licence) in [
+            ("birdnet-v24", "CC BY-NC-SA 4.0"),
+            ("birdnet-v24-range-v2", "CC BY-NC-SA 4.0"),
+            ("birdnet-v3", "CC BY-SA 4.0"),
+            ("perch-v2", "Apache-2.0"),
+        ] {
+            let block = listed(id);
+            assert!(
+                block.contains("    source: "),
+                "{id}: no source line:\n{block}"
+            );
+            assert!(
+                block.contains(&format!("    licence: {licence} (")),
+                "{id}: licence is not {licence}, with where it was read:\n{block}"
+            );
+        }
+    }
+
+    /// RES-32: a classifier's labels say which taxonomy they follow where that
+    /// can be cited, and say "not recorded" where it cannot, rather than
+    /// guessing. The range filter has no labels and no such line.
+    #[test]
+    fn the_listing_says_which_taxonomy_the_labels_follow_or_that_it_is_unknown() {
+        assert!(
+            listed("perch-v2").contains("    taxonomy: iNaturalist 2024"),
+            "{}",
+            listed("perch-v2")
+        );
+        for id in ["birdnet-v24", "birdnet-v3"] {
+            assert!(
+                listed(id).contains("    taxonomy: not recorded"),
+                "{id}: {}",
+                listed(id)
+            );
+        }
+        assert!(!listed("birdnet-v24-range-v2").contains("taxonomy:"));
     }
 }

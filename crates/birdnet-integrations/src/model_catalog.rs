@@ -141,6 +141,14 @@ pub struct CatalogEntry {
     /// GitHub reports them, are this catalogue's). `None` where the upstream URL
     /// already is this project's release (V3.0) or nothing is mirrored (Perch).
     pub mirror_url: Option<&'static str>,
+    /// Who made the model and where it is published (MMP-20).
+    pub source: &'static str,
+    /// The licence the model file is published under, by its short name, or
+    /// `None` when no source this repository can cite records one (MMP-20).
+    /// Never a guess: a station that sells what it records needs the real one.
+    pub licence: Option<&'static str>,
+    /// Where [`Self::licence`] was read, so anyone can check it again.
+    pub licence_cited_from: &'static str,
     /// Lowercase hex sha256 of that file, measured from the file itself.
     pub model_sha256: &'static str,
     /// Its size in bytes, for the free-space check before downloading.
@@ -188,6 +196,14 @@ pub const CATALOG: &[CatalogEntry] = &[
         model_url: "https://github.com/tomtom215/BirdNet-Behavior/releases/download/\
                     models-v3.0-preview3/BirdNET%2B_V3.0-preview3_Global_11K_FP32.onnx",
         mirror_url: None,
+        source: "BirdNET+ V3.0 developer preview 3 (Lasseck, Eibl, Klinck, Kahl; K. Lisa Yang \
+                 Center for Conservation Bioacoustics), published on Zenodo (record 18247420); \
+                 fetched from this project's models-v3.0-preview3 release, which mirrors it",
+        licence: Some("CC BY-SA 4.0"),
+        licence_cited_from: "the models-v3.0-preview3 release notes written by \
+                             .github/workflows/publish-model.yml (\"licensed CC-BY-SA-4.0\", \
+                             pointing to the upstream record's TERMS_OF_USE.txt), and \
+                             docs/book/reference/taxonomy-overlap.md for its labels",
         model_sha256: "2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743",
         model_bytes: 541_391_777,
         labels_url: Some(
@@ -207,6 +223,14 @@ pub const CATALOG: &[CatalogEntry] = &[
         model_url: "https://huggingface.co/justinchuby/Perch-onnx/resolve/\
                     da88bf8c37c0b3068fc706fe509f633b9fbd28c1/perch_v2.onnx",
         mirror_url: None,
+        source: "Google's Perch v2 (bird-vocalization-classifier v2, \
+                 kaggle.com/models/google/bird-vocalization-classifier), as the ONNX \
+                 conversion published at huggingface.co/justinchuby/Perch-onnx",
+        licence: Some("Apache-2.0"),
+        licence_cited_from: "the model card of huggingface.co/justinchuby/Perch-onnx at the \
+                             pinned revision (license: apache-2.0), read 2026-11-25; the \
+                             labels' source, cgeorgiaw/Perch, declares the same \
+                             (crates/birdnet-core/data/labels/README.md)",
         model_sha256: "bf0c8467a924cb074663970ca4a0ab1e143602121930209657d0dff5d5cefa1f",
         model_bytes: 409_148_616,
         // No labels file accompanies the ONNX conversion. Google's list of the
@@ -244,6 +268,14 @@ pub const CATALOG: &[CatalogEntry] = &[
             "https://github.com/tomtom215/BirdNet-Behavior/releases/download/\
              models-v2.4/birdnet-v24.onnx",
         ),
+        source: "BirdNET V2.4 (K. Lisa Yang Center for Conservation Bioacoustics, Cornell Lab of \
+                 Ornithology, and Chemnitz University of Technology), as birdnet-go's FP32 ONNX \
+                 conversion at huggingface.co/tphakala/BirdNET-v2.4; mirrored in this \
+                 project's models-v2.4 release",
+        licence: Some("CC BY-NC-SA 4.0"),
+        licence_cited_from: "the model card of huggingface.co/tphakala/BirdNET-v2.4 at the \
+                             pinned revision (license: cc-by-nc-sa-4.0), read 2026-11-25; \
+                             also installer/lib/55-model.sh and the models-v2.4 release notes",
         model_sha256: "3b72e88b3ad0c310a41adabccf8cf75b1a05daeeb40884ebd38038c91d0e423d",
         model_bytes: 54_068_648,
         // Not downloaded: the birdnet-go file this model is paired with names 460
@@ -280,6 +312,14 @@ pub const CATALOG: &[CatalogEntry] = &[
             "https://github.com/tomtom215/BirdNet-Behavior/releases/download/\
              models-v2.4/birdnet-v24-range-v2.onnx",
         ),
+        source: "BirdNET's species-occurrence (metadata) model V2, by the authors of BirdNET \
+                 V2.4, as the ONNX file birdnet-go ships (github.com/tphakala/birdnet-go); \
+                 mirrored in this project's models-v2.4 release",
+        licence: Some("CC BY-NC-SA 4.0"),
+        licence_cited_from: "the models-v2.4 release notes written by \
+                             .github/workflows/publish-model.yml (\"BirdNET V2.4 and its \
+                             metadata (range) model ... CC BY-NC-SA 4.0\"); no upstream page \
+                             for this file was read",
         model_sha256: "b1810073d16c6c39df95a7419f9a11a02f98dbea562c96d4993c6af52b54b271",
         model_bytes: 29_524_170,
         labels_url: None,
@@ -301,6 +341,46 @@ pub const CATALOG: &[CatalogEntry] = &[
 #[must_use]
 pub fn find(id: &str) -> Option<&'static CatalogEntry> {
     CATALOG.iter().find(|e| e.id == id)
+}
+
+/// Which taxonomy a labels file follows, where that can be cited (RES-32).
+///
+/// A row's scientific names are free text, and `labels_sha256` in an analysis
+/// run says which label file named them, not which checklist those names come
+/// from. This table is that second step, keyed by the label file's digest. A
+/// label file not in it has no recorded edition, and says so: an edition is
+/// written here only where a source can be cited, never inferred from what the
+/// names look like.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TaxonomyEdition {
+    /// Lowercase hex sha256 of the labels file, as [`CatalogEntry::labels_sha256`].
+    pub labels_sha256: &'static str,
+    /// The taxonomy and its edition.
+    pub edition: &'static str,
+    /// Where that was read.
+    pub cited_from: &'static str,
+}
+
+/// The label files whose taxonomy edition can be cited.
+///
+/// Every other label file's is not recorded: BirdNET V2.4's (neither its model
+/// card nor the BirdNET-Analyzer README, read 2026-11-25, names one) and
+/// BirdNET+ V3.0's (nothing in this repository names one).
+pub const TAXONOMY_EDITIONS: &[TaxonomyEdition] = &[TaxonomyEdition {
+    labels_sha256: birdnet_core::inference::labels::PERCH_V2_LABELS_SHA256,
+    edition: "iNaturalist 2024 taxa (Google's label set inat2024_fsd50k), plus 200 FSD50K \
+              sound classes; English names from BirdNET V2.4's, then IOC World Bird List 15.2",
+    cited_from: "crates/birdnet-core/data/labels/README.md (the label set's first line, and \
+                 \"14,595 classes are Latin binomials (iNaturalist 2024 taxa ...)\")",
+}];
+
+/// The taxonomy edition a labels file follows, by its sha256, when it can be
+/// cited; `None` when it is not recorded.
+#[must_use]
+pub fn taxonomy_edition(labels_sha256: &str) -> Option<&'static TaxonomyEdition> {
+    TAXONOMY_EDITIONS
+        .iter()
+        .find(|t| t.labels_sha256.eq_ignore_ascii_case(labels_sha256))
 }
 
 /// Where an entry's model file is fetched from, in the order they are tried:
@@ -2146,5 +2226,48 @@ mod tests {
         }
         assert!(!dest.join("birdnet-v24.onnx").exists());
         assert!(!dest.join("birdnet-v24_labels.txt").exists());
+    }
+
+    /// RES-32: the taxonomy table names only label files the catalogue ships,
+    /// and a label file it does not know has no edition (not a guess).
+    #[test]
+    fn every_taxonomy_row_is_a_label_file_the_catalogue_ships() {
+        for row in super::TAXONOMY_EDITIONS {
+            assert!(
+                CATALOG
+                    .iter()
+                    .any(|e| e.labels_sha256 == Some(row.labels_sha256)),
+                "{} is no catalogue entry's labels",
+                row.labels_sha256
+            );
+            assert!(!row.cited_from.is_empty() && !row.edition.is_empty());
+        }
+        let v24 = find("birdnet-v24")
+            .and_then(|e| e.labels_sha256)
+            .expect("labels");
+        assert!(
+            super::taxonomy_edition(v24).is_none(),
+            "V2.4's edition is not recorded"
+        );
+        let perch = find("perch-v2")
+            .and_then(|e| e.labels_sha256)
+            .expect("labels");
+        assert!(
+            super::taxonomy_edition(perch).is_some_and(|t| t.edition.contains("iNaturalist 2024"))
+        );
+    }
+
+    /// MMP-20: every entry carries where it comes from and, when it states a
+    /// licence, where that was read.
+    #[test]
+    fn every_entry_says_where_it_comes_from_and_where_its_licence_was_read() {
+        for e in CATALOG {
+            assert!(!e.source.trim().is_empty(), "{}: no source", e.id);
+            assert!(
+                !e.licence_cited_from.trim().is_empty(),
+                "{}: a licence (or its absence) with nowhere it was read",
+                e.id
+            );
+        }
     }
 }
