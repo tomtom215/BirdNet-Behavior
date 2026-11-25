@@ -33,8 +33,9 @@ These are the reason the charts are not simply "prettier". Each one is held by a
 4. **Thickness is the real total.** A streamgraph shows the eight busiest species as
    bands and **every other species as one more band**, so a day's total thickness is
    that day's detections and not "the top eight's". (A band's colour is its species' on
-   the station, so two neutral bands can sit side by side; the seam between them and the
-   legend keep them two.)
+   the station, so two neutral bands can sit side by side; the seam between them, in the
+   card's colour, and the legend keep them two. The bands of one of Today's hour columns
+   stand on the same seam: `ck-seg-seam`, `neighbouring_bands_of_a_column_have_a_seam`.)
 5. **A second measure gets its own axis.** Temperature is a labelled strip beneath
    Today's hour bars, never a second scale on the same plot (a dual axis invents a
    correlation).
@@ -88,8 +89,9 @@ a promise a test holds.
   most heard, each in the colour it owns on the station (the neutral if it owns none), from the baseline up in
   a fixed order, and everyone else as one
   "Other species" band whose height is the hour's total minus the named species. A column is exactly as tall
-  as the hour's count (honesty rule 4); the bands add up to it. The key names each colour and says what a
-  notch is.
+  as the hour's count (honesty rule 4); the bands add up to it, and each band above the first stands on a
+  one-pixel seam in the card's colour, so two neutral bands one above the other read as two. The key names
+  each colour and says what a notch is.
 * **Discs** (`heat::disc`, `ck-disc`). A heat grid cell is a disc whose area and colour step are the same
   number, both the square root of the value, so one detection beside two hundred is drawn. A cell with
   something has at least a 2.2 to 2.4 unit disc. A cell with none is a small empty mark, a day the station was
@@ -163,9 +165,15 @@ species owns: lending an unused slot to a chart's ninth bird would make "the gre
 Robin" false on the next page. The assignment is made in one place (`kit::station_slots`,
 cached, the same all day because its window ends yesterday) and every species chart takes its
 colour from it (`kit::SpeciesSlots`); a figure whose assignment cannot be read says so, or, for
-decoration such as a list's sparklines, draws the neutral. A category that is not a species
-(a season, the dawn and dusk hours, one series) keeps a fixed slot, and
-`tests/a_species_keeps_its_colour_on_every_chart.rs` names each such site. Magnitude is `--seq-*` (or
+decoration such as a list's sparklines, draws the neutral. A mark that is not a species (a
+total drawn as one series, the hours around sunrise and sunset, the temperature under Today's
+hours, a migration season, the life list) never takes a slot: it is drawn in the annotation
+ink, `ck-cink` (`--chart-annot`), against the neutral where it needs a second state. Spring in
+`--chart-1` had told the reader that spring was the station's most heard bird (N25-06).
+`tools/visual-qa/species-colours.mjs` reads the painted colour of each such mark and fails on
+one within 6 OKLab units of a colour a species owns, and
+`tests/a_species_keeps_its_colour_on_every_chart.rs` names every site that still makes a colour
+from a position. Magnitude is `--seq-*` (or
 `--seq-moss-*`), stepped by the **square root** of the count and spaced so one detection
 and ten are told apart; a state is hatched. The colour key is printed under every heat
 map with the counts its steps start at.
@@ -197,7 +205,16 @@ CSS only (`.ck-grow`, `.ck-reveal`, `.ck-drawn`, `.ck-fadein` in the `/* charts 
 of `app.css`) so it is switched off by `prefers-reduced-motion` and by the operator's
 Motion setting in the same two places as every other animation, and the kit marks a
 refresh `.ck-still` (on `htmx:afterSwap`, before paint) so a 30-second poll does not replay
-it. Theme changes need nothing: every colour is a custom property.
+it. It also marks a chart `.ck-still` once its entrance has finished, and every chart on the
+page after a window resize, so the drawing kept for the other width (a card's and a phone's)
+does not arrive again when a media query shows it (UIR-33; `motion.mjs` resizes each chart
+page and fails on an entrance that plays again). Theme changes need nothing: every colour is
+a custom property.
+
+A figure served from the analytics cache (`analytics_cache.rs`, ten minutes) ends with the
+time it was worked out ("As of 14:32"), stamped when the cache stores it and printed through
+the reader's clock (`analytics_cache::AS_OF_LINE`), so a reader is never shown a cached "now"
+as the present (UIC-23).
 
 The text-fitting script (`chart-text.js`) still enlarges any label that would render under
 9.5 px on a phone and hides one that then collides; its `svg[data-readout]` readout
@@ -209,8 +226,11 @@ remains for charts that have not moved to the kit.
    look like for this chart, and whether there is a second measure that needs its own axis.
 2. Write a renderer in `viz/` that returns a `String`: take scales and ticks from
    `kit.rs`; draw bars with `kit::bar_path`, curves with `kit::monotone_path`; colour with
-   classes (`ck-c1`..`ck-c8`, `ck-q1`..`ck-q7`, `ck-m1`..`ck-m7`) or `var(--chart-*)`
-   references, never a literal. The empty case returns `viz::EMPTY`.
+   classes (a species' `kit::SpeciesSlots::class`, `ck-cink` and `ck-cother` for what is not
+   a species, `ck-q1`..`ck-q7`, `ck-m1`..`ck-m7`) or `var(--chart-*)` references, never a
+   literal. A time on an axis is `kit::clock_of_hours` (or `clock_of_secs`) marked with
+   `display::clock_attr`, so the reader's 12- or 24-hour choice reaches it. The empty case
+   returns `viz::EMPTY`.
 3. Emit the kit attributes (`kit::cols_attrs` or `data-tip` per mark), a `<title>` and
    `<desc>` (`svg_a11y`), the legend as `.ck-leg` buttons when there is more than one
    series, and a table or readout that carries every value.
