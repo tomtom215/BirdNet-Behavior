@@ -243,9 +243,10 @@ Each level names the fraction of the windows within six seconds that must carry
 the species — 20%, 30%, 50%, 70% — rounded up, and never fewer than the
 detection itself.
 
-**It does nothing without `BIRDNET_OVERLAP`.** With no overlap, six seconds is
-two 3-second windows, and 20% of two rounds up to one — which every detection
-already satisfies. How much overlap each level needs:
+**`lenient` and `moderate` do nothing without `BIRDNET_OVERLAP`.** With BirdNET
+V2.4's 3-second windows and no overlap, six seconds holds three windows (the
+window and one either side), and 20% or 30% of three rounds up to one — which
+every detection already satisfies. How much overlap each level needs at 3 s:
 
 | Level | Fraction | Windows it looks at | Minimum useful `OVERLAP` |
 |---|---|---|---|
@@ -253,6 +254,19 @@ already satisfies. How much overlap each level needs:
 | `moderate` | 30% | 6 s | `1.5` |
 | `balanced` | 50% | 6 s | any (already 2 of 3) |
 | `strict` | 70% | 6 s | any (already 3 of 3) |
+
+A longer window needs more. With the V3.0 preview's 4.5-second window and no
+overlap, each window is the only one within six seconds of itself, so no level
+rejects anything; `balanced` and `strict` start at `OVERLAP=1.5`, and `lenient`
+and `moderate` need more overlap than the 2.9 s the setting allows.
+
+**Each recording segment is judged on its own.** Its first and last windows
+have neighbours on one side only, and they are held to the count a window in
+the middle needs, capped at the windows they have: at `balanced` with no
+overlap, the first and last window of a 15-second segment each need the one
+window beside them to agree. The window on the other side of the join is in the
+next (or previous) segment and is not consulted, so a bird heard only across
+the join of two segments is dropped from both.
 
 `--doctor` reports which of these you are in, and the daemon logs a warning at
 startup when the level you set cannot reject anything at your overlap — so a

@@ -48,7 +48,7 @@ A key the station does not read is reported rather than ignored: a `birdnet.conf
 | `BIRDNET_NOISE_THRESHOLD` | `--noise-threshold` | `NOISE_THRESHOLD` | `0.0` |
 | `BIRDNET_NOISE_CLASSES` | `--noise-classes` | `NOISE_CLASSES` | `Dog` |
 | — | — | `NOISE_REMEMBER_SECS` | `0.0` (off; keeps suppressing the species a bark produced for this long after it — see [tuning](../guides/tuning.md#7-barking-dogs-and-other-non-birds)) |
-| `BIRDNET_CONFIRMATION_LEVEL` | `--confirmation-level` | `CONFIRMATION_LEVEL` | `off` (needs `OVERLAP`) |
+| `BIRDNET_CONFIRMATION_LEVEL` | `--confirmation-level` | `CONFIRMATION_LEVEL` | `off` (`lenient` and `moderate` need `OVERLAP`) |
 | `BIRDNET_OFFSITE_BACKUP` | `--offsite-backup` | `OFFSITE_BACKUP` | `off`; also `s3`, `sftp` and `rsync` (the `--help` text lists three) |
 | `BIRDNET_OFFSITE_PASSPHRASE` | — (deliberately no flag) | `OFFSITE_PASSPHRASE` | — |
 | `BIRDNET_OFFSITE_KEEP` | — | `OFFSITE_KEEP` | `8` |
