@@ -952,6 +952,24 @@ pub struct Cli {
     #[arg(long, default_value = "0", env = "BIRDNET_CLIP_RETENTION_DAYS")]
     pub clip_retention_days: u32,
 
+    /// Keep the audio of every detection someone has reviewed or commented on
+    /// (`true`, the default), or let `--clip-retention-days`,
+    /// `--max-files-per-species` and the disk-full purge reclaim it like any
+    /// other clip (`false`).
+    ///
+    /// A confirmed or rejected detection, or one with a comment, is a record
+    /// somebody judged by listening, and its clip is the evidence a second
+    /// reviewer needs to check that judgement. Locked clips are kept either
+    /// way.
+    #[arg(
+        long,
+        env = "BIRDNET_RETAIN_REVIEWED_AUDIO",
+        default_value_t = true,
+        action = clap::ArgAction::Set,
+        value_parser = clap::builder::BoolishValueParser::new()
+    )]
+    pub retain_reviewed_audio: bool,
+
     /// Disk-usage percentage at which recordings start being purged.
     ///
     /// The safety net that keeps a 24/7 station from filling its card: once the

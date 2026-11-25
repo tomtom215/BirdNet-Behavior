@@ -23,8 +23,8 @@ pub use filter::{
     search_detection_count, search_detections,
 };
 pub use locks::{
-    is_detection_locked, is_detection_locked_at, lock_detection, lock_detection_at,
-    locked_file_names, unlock_detection, unlock_detection_at,
+    clip_kept_back_sql, is_detection_locked, is_detection_locked_at, kept_back_file_names,
+    lock_detection, lock_detection_at, locked_file_names, unlock_detection, unlock_detection_at,
 };
 pub use read::{
     CLIP_AVAILABLE, RecordingsFilter, SpeciesHeard, TodayFilter, analytic_detection_count,

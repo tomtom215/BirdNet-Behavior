@@ -44,7 +44,7 @@ Time-based retention is **off by default**, not absent: set **Keep Clip Audio (d
 - the disk manager purges the **oldest** recordings once the disk crosses `DISK_PURGE_THRESHOLD` (default 95%);
 - `MAX_FILES_SPECIES` keeps at most N clips per species, pruned on the daily maintenance tick.
 
-Recordings you have **locked** are never purged by either, and locking takes effect on the next cycle — no restart needed. When a clip is pruned its detection row survives: your counts, species lists and analytics are unaffected, only the audio is removed.
+Recordings you have **locked** are never purged by either, and locking takes effect on the next cycle — no restart needed. The audio of every detection someone has confirmed, rejected or commented on is kept the same way by all three (the age limit, the per-species cap and the disk-full purge): that clip is the evidence a second reviewer needs. Set `BIRDNET_RETAIN_REVIEWED_AUDIO=false` (`--retain-reviewed-audio false`) to let them reclaim it like any other. When a clip is pruned its detection row survives: your counts, species lists and analytics are unaffected, only the audio is removed.
 
 To lock a clip, open [Recordings](../guide/recordings.md) and use the 🔒 **Lock** action on a row — or select several and use the bulk **Lock** button above the grid. Locked rows show an unlock action in the same place.
 

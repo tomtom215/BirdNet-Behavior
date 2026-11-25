@@ -393,6 +393,7 @@ Every flag `birdnet-behavior --help` lists, the environment variable that sets i
 | `--rebuild-species-summary` | — | — | A repair run once, with the service stopped, after a data fix; the species totals are kept up to date on every write. |
 | `--recording-schedule` | `BIRDNET_RECORDING_SCHEDULE` | Settings → Capture → Location & Recording Schedule → Recording window (`recording_schedule`) (the same as `RECORDING_SCHEDULE`) | |
 | `--refresh-extension` | — | — | Reinstalls the analytics extension, a repair run with the service stopped. |
+| `--retain-reviewed-audio` | `BIRDNET_RETAIN_REVIEWED_AUDIO` | — | On by default. Turning it off lets retention and the disk-full purge delete the audio a reviewer judged, which cannot be undone, so it is a launch-time choice and not a control beside Keep Clip Audio; it has no configuration-file key. |
 | `--rtsp-url` | `BIRDNET_RTSP_URL` | Settings → Capture → Audio Capture → Network camera address (`rtsp_url`) (the same as `RTSP_URL`) | |
 | `--rtsp-urls` | `BIRDNET_RTSP_URLS` | Settings → Capture → Audio Capture → Several network cameras (separated by commas) (`rtsp_urls`) (the same as `RTSP_URLS`) | |
 | `--segment-duration` | `BIRDNET_SEGMENT_DURATION` | Settings → Capture → Audio Capture → Segment Duration (seconds) (`segment_duration`) (the same as `SEGMENT_DURATION`) | |
