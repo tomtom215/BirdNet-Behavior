@@ -529,15 +529,12 @@ fn render_polar_svg(
     }
     for h in [0, 3, 6, 9, 12, 15, 18, 21] {
         let (lx, ly) = radial::polar(CX, CY, LABEL_R, hour_to_angle(f64::from(h)));
-        let label = match h {
-            0 => "12a".to_string(),
-            12 => "12p".to_string(),
-            h if h < 12 => format!("{h}a"),
-            h => format!("{}p", h - 12),
-        };
+        // A time marked for the reader's 12- or 24-hour choice, as every other on the page (UIR-19).
+        let label = clock_of_hours(f64::from(h));
         let _ = write!(
             s,
-            r#"<text x="{lx:.2}" y="{ly:.2}" text-anchor="middle" dominant-baseline="central" class="mono dcv-hr">{label}</text>"#,
+            r#"<text x="{lx:.2}" y="{ly:.2}" text-anchor="middle" dominant-baseline="central" class="mono dcv-hr" {clk}>{label}</text>"#,
+            clk = crate::display::clock_attr(&label),
         );
     }
 
@@ -789,16 +786,12 @@ fn day_strips(
         );
     }
     for hr in [0, 6, 12, 18] {
-        let label = match hr {
-            0 => "12a".to_string(),
-            12 => "12p".to_string(),
-            h if h < 12 => format!("{h}a"),
-            h => format!("{}p", h - 12),
-        };
+        let label = clock_of_hours(f64::from(hr));
         let _ = write!(
             s,
-            r#"<text class="ck-lbl dcv-hr mono" x="{x:.1}" y="12" text-anchor="start">{label}</text>"#,
+            r#"<text class="ck-lbl dcv-hr mono" x="{x:.1}" y="12" text-anchor="start" {clk}>{label}</text>"#,
             x = x_of(f64::from(hr)),
+            clk = crate::display::clock_attr(&label),
         );
         for &(y0, y1) in &bands {
             let _ = write!(
@@ -1158,6 +1151,8 @@ mod tests {
     /// `fmt_hour` were replaced by `radial::polar` (radius before angle) and the kit's clock
     /// (UIC-18), so a swapped argument or a changed rounding shows here as a changed picture.
     /// The polar figure is cut before the moon and the "now" hand, which follow the real clock.
+    /// UIR-19 changed both on purpose: the hour ticks are marked times (`03:00`, was `3a`);
+    /// before it `((40650, 12_278_785_045_523_209_542), (24812, 9_668_514_204_813_496_225))`.
     #[test]
     fn the_rings_and_strips_are_pinned() {
         let mut evening = [0.0_f32; 24];
@@ -1188,11 +1183,34 @@ mod tests {
                 crate::routes::pages::viz::kit::pin("dawn-strips", &strips)
             ),
             (
-                (40650, 12_278_785_045_523_209_542),
-                (24812, 9_668_514_204_813_496_225)
+                (40808, 11_323_075_395_231_097_400),
+                (24890, 13_058_009_865_060_522_103)
             ),
             "the rings or the strips changed"
         );
+    }
+
+    /// UIR-19: the hour ticks around the rings and over the strips are marked times, not "3a".
+    #[test]
+    fn the_hour_ticks_are_marked_times() {
+        let ribbons = [
+            morning_singer("American Robin"),
+            morning_singer("Song Sparrow"),
+        ];
+        let slots = SpeciesSlots::default();
+        let rings = render_polar_svg(&ribbons, None, &english(), &slots);
+        let strips = day_strips(&ribbons, None, &english(), &slots);
+        for (what, svg, t) in [
+            ("rings", &rings, "03:00"),
+            ("rings", &rings, "21:00"),
+            ("strips", &strips, "18:00"),
+        ] {
+            assert!(
+                svg.contains(&format!(r#"data-clk="{t}">{t}</text>"#)),
+                "{what} {t}: {svg}"
+            );
+        }
+        assert!(!rings.contains(">3a<") && !strips.contains(">6p<"));
     }
 
     /// A ring swells where the bird was heard, not half an hour before it.

@@ -182,18 +182,24 @@ pub fn burst_timeline(
         ),
     ));
     // Hours.
-    for (hr, label) in [(0, "12a"), (6, "6a"), (12, "12p"), (18, "6p"), (24, "12a")] {
+    // Each tick is a time marked for the reader's 12- or 24-hour choice (UIR-19); the line at the
+    // right-hand midnight closes the day and carries no second "00:00".
+    for hr in [0_u32, 6, 12, 18, 24] {
         let xx = x(f64::from(hr) * 3600.0);
-        let anchor = match hr {
-            0 => "start",
-            24 => "end",
-            _ => "middle",
-        };
         let _ = write!(
             s,
-            r#"<line class="ck-grid" x1="{xx:.1}" y1="{TOP}" x2="{xx:.1}" y2="{bot:.1}"/><text class="ck-lbl bt-hr mono" x="{xx:.1}" y="12" text-anchor="{anchor}">{label}</text>"#,
+            r#"<line class="ck-grid" x1="{xx:.1}" y1="{TOP}" x2="{xx:.1}" y2="{bot:.1}"/>"#,
             bot = h - 6.0,
         );
+        if hr < 24 {
+            let label = clock(hr * 3600);
+            let _ = write!(
+                s,
+                r#"<text class="ck-lbl bt-hr mono" x="{xx:.1}" y="12" text-anchor="{anchor}" {clk}>{label}</text>"#,
+                anchor = if hr == 0 { "start" } else { "middle" },
+                clk = crate::display::clock_attr(&label),
+            );
+        }
     }
     let mut index = 0usize;
     for lane in &lanes {
@@ -310,7 +316,8 @@ mod tests {
 
     /// The timeline drawn from one fixed input, reduced to its length and hash: taken before its
     /// private `clock` was replaced by the kit's (UIC-18), so a changed time shows as a changed
-    /// picture.
+    /// picture. UIR-19 changed it on purpose: the hour ticks are marked times (`06:00`, was
+    /// `6a`) and the closing midnight has no label; before it `(3110, 2_507_182_675_635_988_869)`.
     #[test]
     fn the_timeline_is_pinned() {
         let b = [
@@ -350,9 +357,25 @@ mod tests {
         let svg = burst_timeline(&b, &legend, 7, &slots());
         assert_eq!(
             super::super::kit::pin("bursts", &svg),
-            (3110, 2_507_182_675_635_988_869),
+            (3111, 16_735_637_615_115_965_336),
             "the timeline changed"
         );
+    }
+
+    /// UIR-19: the hour ticks are times like every other on the page, marked for the reader's
+    /// 12- or 24-hour choice; they were "12a", "6a", "12p", "6p", a vocabulary no other chart
+    /// used and no setting reached.
+    #[test]
+    fn the_hour_ticks_are_marked_times() {
+        let b = [burst("American Robin", 0, "2026-10-21", 6 * 3600, 7 * 3600)];
+        let svg = burst_timeline(&b, &[("American Robin".to_owned(), 0)], 7, &slots());
+        for t in ["00:00", "06:00", "12:00", "18:00"] {
+            assert!(
+                svg.contains(&format!(r#"data-clk="{t}">{t}</text>"#)),
+                "{t}: {svg}"
+            );
+        }
+        assert!(!svg.contains(">6a<") && !svg.contains(">12p<"), "{svg}");
     }
 
     #[test]

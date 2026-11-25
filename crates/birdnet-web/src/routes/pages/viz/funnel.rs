@@ -295,15 +295,12 @@ pub fn morning_order(
     // Hours, down the whole picture.
     for hr in hours.0..=hours.1 + 1 {
         let xx = x(f64::from(hr) * 3600.0);
-        let label = match hr {
-            0 | 24 => "12a".to_owned(),
-            12 => "12p".to_owned(),
-            n if n < 12 => format!("{n}a"),
-            n => format!("{}p", n - 12),
-        };
+        // A time marked for the reader's 12- or 24-hour choice, as every other on the page (UIR-19).
+        let label = clock(hr * 3600);
         let _ = write!(
             s,
-            r#"<line class="ck-grid" x1="{xx:.1}" y1="{y1:.1}" x2="{xx:.1}" y2="{y2:.1}"/><text class="ck-lbl mo-hr mono" x="{xx:.1}" y="{ty:.1}" text-anchor="middle">{label}</text>"#,
+            r#"<line class="ck-grid" x1="{xx:.1}" y1="{y1:.1}" x2="{xx:.1}" y2="{y2:.1}"/><text class="ck-lbl mo-hr mono" x="{xx:.1}" y="{ty:.1}" text-anchor="middle" {clk}>{label}</text>"#,
+            clk = crate::display::clock_attr(&label),
             y1 = TOP + 28.0,
             y2 = h - 18.0,
             ty = h - 4.0,
@@ -516,7 +513,8 @@ mod tests {
     }
 
     /// The running order drawn from one fixed input, reduced to its length and hash: taken before
-    /// its private `clock` was replaced by the kit's (UIC-18).
+    /// its private `clock` was replaced by the kit's (UIC-18). UIR-19 changed it on purpose: the
+    /// hour ticks are marked times (`06:00`, was `6a`); before it `(5198, 9_814_355_112_052_969_163)`.
     #[test]
     fn the_running_order_is_pinned() {
         let m = [
@@ -530,9 +528,22 @@ mod tests {
         let svg = morning_order(&voices(), &m, (4, 8), &SpeciesSlots::default());
         assert_eq!(
             super::super::kit::pin("running-order", &svg),
-            (5198, 9_814_355_112_052_969_163),
+            (5318, 11_860_146_256_634_253_470),
             "the running order changed"
         );
+    }
+
+    /// UIR-19: the hour ticks are marked times, not "4a" .. "9a".
+    #[test]
+    fn the_hour_ticks_are_marked_times() {
+        let svg = morning_order(&voices(), &[], (4, 8), &SpeciesSlots::default());
+        for t in ["04:00", "06:00", "09:00"] {
+            assert!(
+                svg.contains(&format!(r#"data-clk="{t}">{t}</text>"#)),
+                "{t}: {svg}"
+            );
+        }
+        assert!(!svg.contains(">6a<"), "{svg}");
     }
 
     #[test]
