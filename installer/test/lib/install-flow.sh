@@ -129,24 +129,42 @@ flow_seed() {
 #   FLOW_FAIL_MODEL=1   birdnet-v24 fails as if the network were down
 #   FLOW_FAIL_RANGE=1   birdnet-v24-range-v2 fails likewise
 #   FLOW_OLD_BINARY=1   every id is "unknown", as in a binary from before V2.4
+#   FLOW_FAIL_MODEL_TIMES=N  birdnet-v24 fails its first N downloads, then works
+# (and, for the installer's own V3.0 downloads, FLOW_FAIL_V3_MODEL=1 makes every
+# origin of the V3.0 model fail; see flow_serve)
+# `--from-file PATH` stands in for the real binary's check of a local file
+# against its pins: a file whose content is the fixed V2.4 body is "the pinned
+# model"; anything else is refused as a sha256 mismatch.
 flow_write_stub_binary() { # $1 = path
     cat >"$1" <<'STUB'
 #!/bin/sh
 id=""
+from=""
+next=""
 for a in "$@"; do
-    if [ "${id}" = "?" ]; then id="${a}"; fi
+    case "${next}" in
+        id) id="${a}"; next=""; continue ;;
+        from) from="${a}"; next=""; continue ;;
+    esac
     case "${a}" in
         --version) echo "birdnet-behavior 0.0.1"; exit 0 ;;
-        --install-model) id="?" ;;
+        --install-model) next=id ;;
+        --from-file) next=from ;;
     esac
 done
-[ -n "${id}" ] && [ "${id}" != "?" ] || exit 0
+[ -n "${id}" ] || exit 0
 dir="${BIRDNET_MODEL_DIR:-}"
-[ -n "${FLOW_REQUESTS:-}" ] && echo "INSTALL-MODEL ${id} dir=${dir}" >>"${FLOW_REQUESTS}"
+if [ -n "${FLOW_REQUESTS:-}" ]; then
+    if [ -n "${from}" ]; then
+        echo "INSTALL-MODEL ${id} dir=${dir} from=${from}" >>"${FLOW_REQUESTS}"
+    else
+        echo "INSTALL-MODEL ${id} dir=${dir}" >>"${FLOW_REQUESTS}"
+    fi
+fi
 # The real binary reports every BIRDNET_* variable it does not read; the
 # installer's own settings must not reach it.
-for v in BIRDNET_CLASSIFIER BIRDNET_SKIP_MODEL BIRDNET_NONINTERACTIVE; do
-    eval "[ -n \"\${${v}:-}\" ]" && echo "CHILD-SAW ${v}" >>"${FLOW_REQUESTS}"
+for v in BIRDNET_CLASSIFIER BIRDNET_SKIP_MODEL BIRDNET_NONINTERACTIVE BIRDNET_LOCAL_MODEL BIRDNET_MODEL_RETRY_WAITS; do
+    eval "[ -n \"\${${v}+set}\" ]" && echo "CHILD-SAW ${v}" >>"${FLOW_REQUESTS}"
 done
 if [ "${FLOW_OLD_BINARY:-0}" = 1 ]; then
     echo "Install failed: no classifier called ${id}" >&2
@@ -154,7 +172,17 @@ if [ "${FLOW_OLD_BINARY:-0}" = 1 ]; then
 fi
 case "${id}" in
     birdnet-v24)
-        if [ "${FLOW_FAIL_MODEL:-0}" = 1 ]; then echo "Install failed: network error" >&2; exit 1; fi
+        if [ -n "${from}" ]; then
+            if [ "$(cat "${from}" 2>/dev/null)" != "fake BirdNET V2.4 classifier" ]; then
+                echo "Install failed: sha256 mismatch: ${from} is not the pinned model" >&2
+                exit 1
+            fi
+        elif [ "${FLOW_FAIL_MODEL:-0}" = 1 ]; then
+            echo "Install failed: network error" >&2; exit 1
+        elif [ -n "${FLOW_FAIL_MODEL_TIMES:-}" ]; then
+            tries="$(grep -c "^INSTALL-MODEL birdnet-v24 " "${FLOW_REQUESTS}")"
+            if [ "${tries}" -le "${FLOW_FAIL_MODEL_TIMES}" ]; then echo "Install failed: network error" >&2; exit 1; fi
+        fi
         printf '%s' "fake BirdNET V2.4 classifier" >"${dir}/birdnet-v24.onnx"
         printf '%s' "fake BirdNET V2.4 labels" >"${dir}/birdnet-v24_labels.txt"
         ;;
@@ -276,6 +304,9 @@ flow_run() {
         flow_serve() { # URL DEST
             local url="$1" dest="$2" name
             echo "GET ${url}" >>"${sb}/requests.log"
+            if [ "${FLOW_FAIL_V3_MODEL:-0}" = 1 ] && [[ "${url}" == *V3.0-preview3_Global_11K_FP32.onnx* ]]; then
+                return 1
+            fi
             name="${url%%\?*}"
             name="${name%/content}"
             name="${name##*/}"
@@ -291,6 +322,9 @@ flow_run() {
                     ;;
             esac
         }
+        # Waits are recorded, not slept: the retry schedule is asserted from
+        # the log, and a test never waits two minutes for it.
+        sleep() { echo "SLEEP $*" >>"${sb}/requests.log"; }
         download_large() { flow_serve "$1" "$2"; }
         download()       { flow_serve "$1" "$2"; }
         # The plain downloader's contract: 4 means "the origin has no such file".

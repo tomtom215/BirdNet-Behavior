@@ -137,6 +137,40 @@ V24_LABELS_FILE="birdnet-v24_labels.txt"
 V24_RANGE_FILE="birdnet-v24-range-v2.onnx"
 
 # ---------------------------------------------------------------------------
+# When the classifier cannot be installed (OOB-20; decision 7 of 2026-11-25).
+#
+# A failed classifier download used to be `fatal` before the config and the
+# service existed, leaving a binary and nothing else. Now the fetch is retried
+# a bounded number of times, and if it still fails the install FINISHES — the
+# config, the unit, the dashboard — and says loudly, last thing on the screen,
+# that the station is not detecting and how to install the model. The run then
+# exits with EXIT_NO_CLASSIFIER, so a script can tell "installed, not
+# detecting" from success (0) and from a run that stopped (1, or any other
+# status a failing command gives under `set -e`). 75 is sysexits' EX_TEMPFAIL:
+# "a temporary failure; try again later", which is exactly the remedy.
+#
+#   BIRDNET_MODEL_RETRY_WAITS  seconds to wait before each retry, space
+#                              separated: "30 90" is three attempts over two
+#                              minutes. "" is one attempt. Tests set "0 0".
+#   BIRDNET_LOCAL_MODEL        (or --local-model PATH) install the classifier
+#                              from a file already on this machine instead of
+#                              downloading it. It is checked against the same
+#                              pins as a download (V2.4: the sha256 AND size the
+#                              binary carries; V3.0: the sha256 below) and a
+#                              file that does not match is refused, never
+#                              installed. For an offline install.
+# BIRDNET_SKIP_MODEL=1 is not a failure: the operator asked for it, and it
+# still exits 0.
+# ---------------------------------------------------------------------------
+EXIT_NO_CLASSIFIER=75
+MODEL_RETRY_WAITS="${BIRDNET_MODEL_RETRY_WAITS-30 90}"
+LOCAL_MODEL="${BIRDNET_LOCAL_MODEL:-}"
+# Set by classifier_not_installed (55-model.sh); read by the summary and by the
+# exit status of install and repair.
+CLASSIFIER_MISSING=0
+CLASSIFIER_MISSING_WHY=""
+
+# ---------------------------------------------------------------------------
 # BirdNET+ V3.0 model files (opt-in: --classifier birdnet-v3). FP32 ONNX
 # (~541 MB), arch-independent and working on every platform. This is the
 # successor to BirdNET V2.4, the network BirdNET-Pi and birdnet-go run, not the

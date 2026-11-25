@@ -88,6 +88,7 @@ do_install() {
     maybe_start_service
     validate_install
     print_summary
+    exit_if_classifier_missing
 }
 
 # Repair: fix a broken or drifted install WITHOUT forcing the big downloads.
@@ -159,8 +160,14 @@ do_repair() {
 
     validate_install
     echo
-    success "Repair complete."
+    if [ "${CLASSIFIER_MISSING}" = 1 ]; then
+        warn "Repair finished, but the classifier is still not installed."
+    else
+        success "Repair complete."
+    fi
     echo "  Logs:  sudo journalctl -u birdnet-behavior -f"
+    print_classifier_missing
+    exit_if_classifier_missing
 }
 
 # Remove the software cleanly. Data/config are kept unless the operator opts in

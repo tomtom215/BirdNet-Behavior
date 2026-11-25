@@ -36,10 +36,19 @@ Options:
                                        BirdNET-Pi's by design. ~555 MB.
                         An existing station keeps the classifier its config names:
                         install, update, repair and reinstall never change it.
+      --local-model PATH
+                        Install the classifier from a model file already on this
+                        machine (also: BIRDNET_LOCAL_MODEL), for an install without
+                        internet. It must have the sha256 and size this release
+                        pins, like a download, or it is refused.
       --noninteractive  Don't prompt; auto-detect audio and leave location
                         unset (also implied by BIRDNET_NONINTERACTIVE=1 or no TTY).
                         With an existing install this implies 'update'.
   -h, --help            Show this help and exit.
+
+Exit status: 0 installed; 75 installed, but the classifier could not be
+installed, so the station is NOT detecting yet (the summary says how to fix it);
+any other status, the run stopped.
 
 Avoid  sudo bash <(curl ...)  — sudo closes the process-substitution file
 descriptor on the way to root, so the script never loads. Use the pipe above.
@@ -67,6 +76,15 @@ parse_args() {
                 CLASSIFIER_REQUEST="${1#*=}"
                 shift
                 ;;
+            --local-model)
+                [ "$#" -ge 2 ] || fatal "--local-model needs a path to the model file."
+                LOCAL_MODEL="$2"
+                shift 2
+                ;;
+            --local-model=*)
+                LOCAL_MODEL="${1#*=}"
+                shift
+                ;;
             --noninteractive | --non-interactive)
                 BIRDNET_NONINTERACTIVE=1
                 shift
@@ -91,6 +109,12 @@ parse_args() {
                 ;;
         esac
     done
+    # A local model that is not there is a mistake in the command, not a
+    # network failure: refuse it before anything is installed. Whether it is
+    # the RIGHT file is decided later, against the pins, by what installs it.
+    if [ -n "${LOCAL_MODEL}" ] && { [ ! -f "${LOCAL_MODEL}" ] || [ ! -r "${LOCAL_MODEL}" ]; }; then
+        fatal "--local-model / BIRDNET_LOCAL_MODEL: ${LOCAL_MODEL} is not a readable file."
+    fi
     # Refuse a typo now, before any download, whichever way it arrived (flag or
     # BIRDNET_CLASSIFIER). resolve_classifier checks again for the paths that
     # do not come through here.

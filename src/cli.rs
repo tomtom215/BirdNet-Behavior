@@ -234,6 +234,15 @@ pub struct Cli {
     #[arg(long, value_name = "ID")]
     pub install_model: Option<String>,
 
+    /// With `--install-model ID`: install the model from this file instead of
+    /// downloading it (an install with no internet).
+    ///
+    /// The file is held to the size and sha256 this binary pins for ID, the
+    /// same check a download passes, and copied into place only when both
+    /// match; a file that does not match is refused and nothing is installed.
+    #[arg(long, value_name = "PATH", requires = "install_model")]
+    pub from_file: Option<PathBuf>,
+
     /// Seconds of audio saved around each detection (default 6).
     ///
     /// BirdNET-Pi's `EXTRACTION_LENGTH`. Longer clips are easier to verify by

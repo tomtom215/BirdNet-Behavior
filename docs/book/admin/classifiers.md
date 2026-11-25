@@ -45,11 +45,13 @@ The cost is real and worth measuring before you commit to it: check the daemon's
 
 ## Installing one
 
-The station carries a small catalogue of classifiers it knows how to fetch and verify. The default one (BirdNET V2.4 and its local species filter) can be installed from the browser: **Settings → Capture → Bird-identifying model → Install**, or step 2 of the setup wizard. The others below are installed from the command line. To see the catalogue:
+The station carries a small catalogue of classifiers it knows how to fetch and verify. The default one (BirdNET V2.4 and its local species filter) can be installed from the browser: **Settings → Capture → Bird-identifying model → Install**, or step 2 of the setup wizard. The others below are installed from the command line. To see the catalogue, with where each model comes from, its licence and where that licence was read, and the taxonomy its labels follow where that is known:
 
 ```bash
 birdnet-behavior --install-model list
 ```
+
+The licences differ: BirdNET V2.4, its range filter and BirdNET+ V3.0 are Creative Commons licences (V2.4's is non-commercial), Perch v2 is Apache-2.0. A licence the catalogue cannot cite from a source is printed as not recorded, and so is a labels file's taxonomy edition (only Perch's, iNaturalist 2024, is recorded today).
 
 To install one:
 
@@ -78,13 +80,15 @@ What it can install:
 
 The installers do this for you on a new station (V2.4 and its range filter). To make an older station report what BirdNET-Pi would, install `birdnet-v24` and `birdnet-v24-range-v2` and follow [Same audio, same detections](../guides/parity.md).
 
-This runs in the foreground and exits — deliberately. It is a several-hundred-megabyte download that takes hours on the uplink a field station has, and you should be able to watch it, interrupt it, and see it fail. There is no button in the web interface for the same reason: a multi-hour download inside a request handler has nowhere to report progress, and a retry would start a second download beside the first.
+This runs in the foreground and exits — deliberately. It is a several-hundred-megabyte download that takes hours on the uplink a field station has, and you should be able to watch it, interrupt it, and see it fail. Only the default classifier has a button in the web interface (it runs one install at a time, on its own thread, and shows progress); the others are installed here.
 
 Three things it does before and while it downloads:
 
 - **Checks free space first**, with a 512 MiB margin on top of the file. Filling the card stops the station recording, which is worse than not having the classifier. A filesystem that will not say how much space it has counts as no space rather than plenty.
 - **Verifies as the bytes arrive.** The sha256 of each file is compiled into the binary — not fetched alongside it — so the checksum is a promise this project makes rather than one the download site makes. The digest is computed while streaming, so a 541 MB model never has to fit in a 1 GB board's memory at once.
 - **Never leaves a half-file the station would load.** Unverified bytes carry a `.part` name; the file is renamed into place only after its digest matches.
+
+With `--from-file PATH`, the model is copied from a file already on the machine instead of downloaded, and held to the same size and sha256; a file that differs is refused and nothing is installed. Where the catalogue names this project's own copy of a file (the V2.4 model and range filter, in the `models-v2.4` release), that copy is tried first and the upstream URL second, each checked the same way.
 
 Running it again is cheap: a file already in place whose sha256 matches is **not fetched again** (the command says so, and skips the free-space check for it), while a truncated or substituted file under the right name is fetched afresh. A download that is interrupted starts over; it does not resume.
 

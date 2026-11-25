@@ -63,7 +63,7 @@ docker compose logs --tail=200 birdnet
 docker compose run --rm birdnet birdnet-behavior --doctor   # the doctor in a one-shot container
 ```
 
-When a model download fails, the entrypoint lists the common causes: no internet in the container, the model's host unreachable, or the volume out of disk. See [Model not found](#model-not-found).
+A model download that fails does not stop the container: it is retried, then the container starts without the model and its log says the station is not detecting, with the common causes (no internet in the container, the model's hosts unreachable, or the volume out of disk). See [Model not found](#model-not-found).
 
 ## Web UI not reachable
 
@@ -142,7 +142,9 @@ A BirdNET V2.4 station (the default for a new install) has three files there: `b
 - **Bare metal:** `sudo bash install.sh repair` installs whatever the configured classifier is missing (it re-checks V3.0's files against their SHA-256; V2.4's are trusted if present and not empty). Or install the V2.4 files yourself: `sudo -u "$SVC" env BIRDNET_MODEL_DIR="$DATA/models" birdnet-behavior --install-model birdnet-v24` and the same with `birdnet-v24-range-v2`. Running it again is cheap: a file that already matches its SHA-256 is not fetched again.
 - **Docker:** restart the container; the entrypoint installs what is missing and says what it is doing. The next start resumes a BirdNET+ V3.0 download from the partial file; a V2.4 install starts the file again.
 
-If a download fails, the message names the cause: no internet (the V2.4 files come from `huggingface.co` and `raw.githubusercontent.com`, the V3.0 files from this project's GitHub release with Zenodo as the fallback), a full disk (the model installer wants the file's size plus 512 MiB free), or a SHA-256 mismatch, which means the bytes were wrong and nothing was kept. To bring your own model, mount it over `/data/model` and set `BIRDNET_SKIP_MODEL_DOWNLOAD=1` (Docker), or `BIRDNET_SKIP_MODEL=1` when running the installer.
+If a download fails, the message names the cause: no internet (the V2.4 files come from this project's `models-v2.4` release on `github.com`, then `huggingface.co` and `raw.githubusercontent.com`; the V3.0 files from this project's GitHub release with Zenodo as the fallback), a full disk (the model installer wants the file's size plus 512 MiB free), or a SHA-256 mismatch, which means the bytes were wrong and nothing was kept. The installer tries three times and then finishes without the model, ending with a warning that the station is not detecting and exiting with status 75; `sudo bash install.sh repair` tries again.
+
+With no internet on the station, copy the model file over and install it from there: `sudo bash install.sh repair --local-model /path/to/birdnet-v24.onnx` (bare metal), `BIRDNET_LOCAL_MODEL=/path/in/container` (Docker), or by hand `sudo -u "$SVC" env BIRDNET_MODEL_DIR="$DATA/models" birdnet-behavior --install-model birdnet-v24 --from-file /path/to/birdnet-v24.onnx`. The file is held to the same SHA-256 and size as a download and refused if it differs. To run a model that is not in the catalogue, mount it over `/data/model` and set `BIRDNET_SKIP_MODEL_DOWNLOAD=1` (Docker), or `BIRDNET_SKIP_MODEL=1` when running the installer.
 
 ## Database errors
 

@@ -329,6 +329,7 @@ Every flag `birdnet-behavior --help` lists, the environment variable that sets i
 | `--extraction-length` | `BIRDNET_EXTRACTION_LENGTH` | Settings → General → System & Display → Clip Length (seconds) (`extraction_length`) (the same as `EXTRACTION_LENGTH`) | |
 | `--fix` | — | — | Safe repairs (missing directories) run with the diagnostic at the command line; the station creates its directories at start and Diagnostics reports any it cannot. |
 | `--freq-shift-hz` | `BIRDNET_FREQ_SHIFT_HZ` | Settings → Capture → Audio Capture → Frequency Shift (Hz, 0 = disabled) (`freq_shift_hz`) (the same as `FREQ_SHIFT`) | |
+| `--from-file` | — | — | Only meaningful with --install-model: installs the model from a file already on the station's disk (an install with no internet), which a browser cannot reach. |
 | `--heartbeat-url` | `BIRDNET_HEARTBEAT_URL` | Settings → Alerts → Notifications → Heartbeat URL (`heartbeat_url`) (the same as `HEARTBEAT_URL`) | |
 | `--image-cache-dir` | `BIRDNET_IMAGE_CACHE_DIR` | Settings → General → System & Display → Species Image Cache Directory (`image_cache_dir`) (the same as `IMAGE_CACHE_DIR`) | |
 | `--import-birdnet-pi-clips` | — | Settings → Data → Bring your history with you → Recordings |  |
