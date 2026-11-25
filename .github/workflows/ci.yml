@@ -259,8 +259,16 @@ jobs:
         # Surface the offline-load result explicitly in the log. When the embed
         # step above succeeded this asserts the extension loads from the embedded
         # bytes with no network (the air-gapped guarantee); otherwise it prints a
-        # skip line. Already built by the step above, so this is near-instant.
-        run: cargo test -p birdnet-behavioral --features analytics embedded_extension_loads_when_bundled -- --nocapture
+        # skip line. The command selects the same packages and features as the
+        # step above so that it reuses that build: `-p birdnet-behavioral
+        # --features analytics` resolved to other build units and rebuilt Arrow
+        # and DuckDB for a 0.9 s test (6m34s of run 45503657894). The filter
+        # runs across every test binary, so the last line holds it to having
+        # run a test and passed: a filter that matches nothing is not a pass.
+        shell: bash
+        run: |
+          cargo test --workspace --all-features embedded_extension_loads_when_bundled -- --nocapture 2>&1 | tee "$RUNNER_TEMP/embedded-extension.log"
+          grep -q '^test result: ok\. 1 passed' "$RUNNER_TEMP/embedded-extension.log"
 
   # ── doc ────────────────────────────────────────────────────────────────────
   # ── inference ──────────────────────────────────────────────────────────────
