@@ -36,6 +36,53 @@ pub const EFFORT_FLOOR_SHARE: f64 = 0.5;
 /// short is not noise.
 pub const FULL_DAY_SHARE: f64 = 0.95;
 
+/// The station's typical day, in seconds.
+///
+/// The median of `daily`, the seconds recorded on each local date summed over
+/// sources, over the dates with any audio. `None` when no date has any (a
+/// ledger of zeros, or none at all).
+///
+/// This is the `ledger` CTE's `MEDIAN(seconds) FILTER (WHERE seconds > 0)`
+/// for code that reads the `SQLite` ledger rather than the analytics copy (the
+/// listened-day rule of `birdnet-web`'s `pages/listening.rs`), so every
+/// surface judges a day against the same number. `DuckDB`'s `MEDIAN` is the
+/// continuous median: with an even number of dates it is the mean of the two
+/// in the middle, and so is this.
+#[must_use]
+pub fn typical_day(daily: impl IntoIterator<Item = f64>) -> Option<f64> {
+    let mut days: Vec<f64> = daily
+        .into_iter()
+        .filter(|s| s.is_finite() && *s > 0.0)
+        .collect();
+    if days.is_empty() {
+        return None;
+    }
+    days.sort_by(f64::total_cmp);
+    let mid = days.len() / 2;
+    Some(if days.len() % 2 == 1 {
+        days[mid]
+    } else {
+        f64::midpoint(days[mid - 1], days[mid])
+    })
+}
+
+/// Whether a local date with `seconds` of audio is a day the station listened to.
+///
+/// `seconds` is summed over sources, and the date is listened to when it is
+/// at least [`EFFORT_FLOOR_SHARE`] of `typical`, the station's
+/// [`typical_day`]. With no typical day no date is listened to, as in the SQL
+/// (`COALESCE(seconds >= share * typical, false)`).
+///
+/// This answers for a date the ledger covers. What a date it does not cover
+/// means (before its first row, or a station with no ledger) is each figure's
+/// to say, and they do not all say the same: the trend queries count it as
+/// listened, the reporting frequency leaves it out, and the charts that hatch
+/// "not listening" claim nothing for a period the ledger holds no row in.
+#[must_use]
+pub fn is_listened_day(seconds: f64, typical: Option<f64>) -> bool {
+    typical.is_some_and(|t| seconds >= EFFORT_FLOOR_SHARE * t)
+}
+
 /// The `effort` and `ledger` CTEs every effort-aware trend query joins.
 ///
 /// `effort` is the recorded seconds per local date, summed over sources;
@@ -567,6 +614,30 @@ ORDER BY detection_date"
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The typical day is the median of the days with any audio; an even count
+    /// takes the mean of the middle two, as `DuckDB`'s `MEDIAN` does.
+    #[test]
+    fn the_typical_day_is_the_median_of_the_days_with_audio() {
+        // Zeros are not days with audio: [100, 300, 900] → 300.
+        assert_eq!(typical_day([0.0, 900.0, 100.0, 300.0, 0.0]), Some(300.0));
+        // [100, 200, 300, 400] → (200 + 300) / 2 = 250.
+        assert_eq!(typical_day([400.0, 100.0, 300.0, 200.0]), Some(250.0));
+        assert_eq!(typical_day([0.0, 0.0]), None);
+        assert_eq!(typical_day(std::iter::empty()), None);
+    }
+
+    /// Both sides of the floor: half the typical day is listened, a second less is not,
+    /// and with no typical day nothing is.
+    #[test]
+    fn a_listened_day_is_half_the_typical_day_or_more() {
+        assert!(is_listened_day(43_200.0, Some(86_400.0)));
+        assert!(!is_listened_day(43_199.0, Some(86_400.0)));
+        assert!(!is_listened_day(61.0, Some(86_400.0)));
+        // A two-hour schedule's day is its own typical day.
+        assert!(is_listened_day(7_200.0, Some(7_200.0)));
+        assert!(!is_listened_day(86_400.0, None));
+    }
 
     #[test]
     fn moving_avg_sql_has_trailing_row_frame() {

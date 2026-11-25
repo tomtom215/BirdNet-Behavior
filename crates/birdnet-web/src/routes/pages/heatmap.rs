@@ -167,6 +167,38 @@ document.getElementById('range-controls').addEventListener('click', function(e) 
 // GET /pages/heatmap-grid — SVG heatmap partial
 // ---------------------------------------------------------------------------
 
+/// How many of the `n` days ending on `today` of each weekday (Sunday first) the station
+/// listened on, and the per-day verdicts they come from (`None` where the ledger says
+/// nothing, and then every day counts). Without a date the days are spread over the week
+/// evenly. An unreadable ledger is unknown, as it was.
+fn weekday_occurrences(
+    conn: &rusqlite::Connection,
+    today: Option<&str>,
+    n: usize,
+) -> ([u32; 7], Option<Vec<bool>>) {
+    let listened = today.and_then(|end| {
+        let from = super::listening::first_date(end, n)?;
+        let effort = super::listening::effort_by_date(conn, &from, end).ok()?;
+        super::listening::listened_days(&effort, end, n)
+    });
+    let mut occurrences = [0_u32; 7];
+    for d in 0..n {
+        let on = listened
+            .as_ref()
+            .is_none_or(|l| l.get(d).copied().unwrap_or(true));
+        let dow = today
+            .and_then(|end| {
+                super::viz::kit::epoch_day(end).map(|e| super::viz::kit::weekday_back(e, n - 1 - d))
+            })
+            // Without a date, spread the days over the week evenly.
+            .unwrap_or(d % 7);
+        if on {
+            occurrences[dow] += 1;
+        }
+    }
+    (occurrences, listened)
+}
+
 /// Compute the hour × day-of-week heatmap SVG, or `None` on a query error.
 fn compute_heatmap_grid(state: &AppState, days: u32) -> Option<String> {
     let cells = state.with_read_db(|conn| weekly_heatmap(conn, days)).ok()?;
@@ -181,32 +213,11 @@ fn compute_heatmap_grid(state: &AppState, days: u32) -> Option<String> {
     // weekday it was off for is not drawn as a quiet one, and a 90-day window's thirteen
     // Mondays are compared with its twelve Tuesdays per day and not in total.
     let n = days as usize;
-    let effort = today.as_deref().and_then(|end| {
-        let from = super::listening::first_date(end, n)?;
-        state
-            .with_read_db(|conn| super::listening::effort_by_date(conn, &from, end))
-            .ok()
-    });
-    let listened = match (today.as_deref(), effort.as_ref()) {
-        (Some(end), Some(e)) => super::listening::listened_days(e, end, n),
-        _ => None,
-    };
-    let mut occurrences = [0_u32; 7];
-    for d in 0..n {
-        let on = listened
-            .as_ref()
-            .is_none_or(|l| l.get(d).copied().unwrap_or(true));
-        let dow = today
-            .as_deref()
-            .and_then(|end| {
-                super::viz::kit::epoch_day(end).map(|e| super::viz::kit::weekday_back(e, n - 1 - d))
-            })
-            // Without a date, spread the days over the week evenly.
-            .unwrap_or(d % 7);
-        if on {
-            occurrences[dow] += 1;
-        }
-    }
+    let (occurrences, listened) = state
+        .with_read_db(|conn| {
+            Ok::<_, rusqlite::Error>(weekday_occurrences(conn, today.as_deref(), n))
+        })
+        .ok()?;
     // Today's weekday and the hour it is now, so the hours still to come are not drawn as quiet ones.
     let now = today
         .as_deref()
@@ -509,6 +520,45 @@ fn with_as_of(html: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A station's store with `seconds` of listening on each of the 14 dates from Monday
+    /// 19 Feb to Sunday 3 Mar 2024, two of every weekday.
+    fn fortnight(seconds: impl Fn(&str) -> f64) -> (tempfile::TempDir, rusqlite::Connection) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = birdnet_db::sqlite::open_or_create(&dir.path().join("birds.db")).expect("db");
+        let dates = (19..=29)
+            .map(|d| format!("2024-02-{d:02}"))
+            .chain((1..=3).map(|d| format!("2024-03-{d:02}")));
+        for date in dates {
+            conn.execute(
+                "INSERT INTO recording_effort (date, source, seconds) VALUES (?1, 'local', ?2)",
+                rusqlite::params![date, seconds(&date)],
+            )
+            .expect("effort");
+        }
+        (dir, conn)
+    }
+
+    /// RES-26. The weekday margin divides each weekday's detections by the days of that
+    /// weekday the station listened on. A fortnight of whole days but for Thursday 29 Feb, a
+    /// leap day of 61 s: the typical day is 86 400, the floor 43 200, and Thursday was listened
+    /// on once, every other weekday twice (Sunday first). Under the 60-second rule, twice.
+    #[test]
+    fn a_minute_of_audio_is_not_a_thursday() {
+        let (_dir, conn) = fortnight(|d| if d == "2024-02-29" { 61.0 } else { 86_400.0 });
+        // `today` is Sunday 3 Mar, the last of the fourteen.
+        let (occ, listened) = weekday_occurrences(&conn, Some("2024-03-03"), 14);
+        assert_eq!(occ, [2, 2, 2, 2, 1, 2, 2]);
+        assert!(listened.is_some());
+    }
+
+    /// Counterpart: a two-hours-a-day schedule listened on every one of its days.
+    #[test]
+    fn a_short_schedule_listens_every_weekday() {
+        let (_dir, conn) = fortnight(|_| 7_200.0);
+        let (occ, _) = weekday_occurrences(&conn, Some("2024-03-03"), 14);
+        assert_eq!(occ, [2; 7]);
+    }
 
     #[test]
     fn heat_color_empty() {

@@ -4157,7 +4157,7 @@ a.login-about    { color: var(--fg-3); }
 
 /* ── Migration / phenology (/migration) ─────────────────────────────────── */
 
-.mig-pills       { margin: 0; }
+.mig-cover       { margin: 0; }
 .mig-legend      { display: flex; gap: var(--space-14); align-items: center; }
 .mig-legend-item { display: inline-flex; align-items: center; gap: var(--space-6); }
 .mig-swatch      { width: 10px; height: 6px; border-radius: var(--r-3xs); }
