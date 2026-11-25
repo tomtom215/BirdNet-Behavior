@@ -48,15 +48,7 @@ pub(super) async fn content(state: AppState) -> String {
         // Each species in "who led" is in the colour it owns on the station, as on every chart.
         let slots = super::viz::kit::station_slots(&state)?;
         state.with_read_db(|conn| {
-            let daily = birdnet_db::sqlite::range_daily_counts(conn, &start, &today)?;
-            // 1000 is more species than any station has heard.
-            let top = birdnet_db::sqlite::weekly_top_species(conn, &start, &today, 1000)?;
-            let new = birdnet_db::sqlite::weekly_new_species(conn, &start, &today)?;
-            // Month by month, for the "who led" picture; the same rows the leaderboard is made of.
-            let monthly = birdnet_db::sqlite::monthly_species_counts(conn, &start, &today)?;
-            // When the station was listening, so a day it was off is not a quiet one in the
-            // calendar. Unreadable means unknown, which draws nothing.
-            let effort = super::listening::effort_by_date(conn, &start, &today).ok();
+            let (daily, top, new, effort, monthly) = read_year(conn, &start, &today)?;
             Ok::<_, birdnet_db::sqlite::DbError>((today, daily, top, new, effort, monthly, slots))
         })
     })
@@ -84,6 +76,34 @@ pub(super) async fn content(state: AppState) -> String {
         &names,
         &slots,
     )
+}
+
+/// What the page reads for `start..=today`: the days, the leaderboard, the new species, the
+/// listening ledger and the month-by-month rows. A plain function of its dates, so a test can
+/// hold them fixed.
+type YearRows = (
+    Vec<birdnet_db::sqlite::DailyCount>,
+    Vec<(String, String, i64)>,
+    Vec<(String, String, String)>,
+    Option<std::collections::BTreeMap<String, f64>>,
+    Vec<(String, String, u32, i64)>,
+);
+
+fn read_year(
+    conn: &rusqlite::Connection,
+    start: &str,
+    today: &str,
+) -> Result<YearRows, birdnet_db::sqlite::DbError> {
+    let daily = birdnet_db::sqlite::range_daily_counts(conn, start, today)?;
+    // 1000 is more species than any station has heard.
+    let top = birdnet_db::sqlite::weekly_top_species(conn, start, today, 1000)?;
+    let new = birdnet_db::sqlite::weekly_new_species(conn, start, today)?;
+    // Month by month, for the "who led" picture; the same rows the leaderboard is made of.
+    let monthly = birdnet_db::sqlite::monthly_species_counts(conn, start, today)?;
+    // When the station was listening, so a day it was off is not a quiet one in the
+    // calendar. Unreadable means unknown, which draws nothing.
+    let effort = super::listening::effort_by_date(conn, start, today).ok();
+    Ok((daily, top, new, effort, monthly))
 }
 
 /// `YYYY-01-01` for the year `today` falls in.
@@ -703,6 +723,97 @@ mod tests {
             "{html}"
         );
         assert!(!html.contains("days of listening"), "{html}");
+    }
+
+    /// The page as it is read from a station's store on the fixed date `today`.
+    fn page_of(conn: &rusqlite::Connection, today: &str) -> String {
+        let (daily, top, new, effort, monthly) =
+            read_year(conn, &year_start(today), today).expect("read");
+        render_content(
+            today,
+            &daily,
+            &top,
+            &new,
+            effort.as_ref(),
+            &monthly,
+            &birdnet_core::i18n::NameLocalizer::english(),
+            &crate::routes::pages::viz::kit::SpeciesSlots::default(),
+        )
+    }
+
+    /// A station in its `SQLite` store: `seconds` of listening and `n` Blackbirds on each date.
+    fn station(days: &[(String, f64, u32)]) -> (tempfile::TempDir, rusqlite::Connection) {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let conn = birdnet_db::sqlite::open_or_create(&dir.path().join("birds.db")).expect("db");
+        for (date, seconds, n) in days {
+            conn.execute(
+                "INSERT INTO recording_effort (date, source, seconds) VALUES (?1, 'local', ?2)",
+                rusqlite::params![date, seconds],
+            )
+            .expect("effort");
+            for i in 0..*n {
+                conn.execute(
+                    "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                     VALUES (?1, ?2, 'Turdus merula', 'Eurasian Blackbird', 0.9, ?3)",
+                    rusqlite::params![date, format!("06:00:{i:02}"), format!("{date}-{i}.wav")],
+                )
+                .expect("detection");
+            }
+        }
+        (dir, conn)
+    }
+
+    /// 1 Jan to 10 Mar 2024, 70 dates (31 + 29 + 10, a leap year).
+    fn early_2024() -> Vec<String> {
+        [(1, 31), (2, 29), (3, 10)]
+            .iter()
+            .flat_map(|&(m, last)| (1..=last).map(move |d| format!("2024-{m:02}-{d:02}")))
+            .collect()
+    }
+
+    /// RES-26. A whole day of listening (86 400 s) and ten Blackbirds on each of the 70 dates
+    /// to 10 Mar 2024, but for the leap day, 61 s and none heard. The typical day is 86 400 and
+    /// the floor 43 200, so 69 days of listening, 690 detections, 690 / 69 = 10 a day, and the
+    /// 29th is hatched in the calendar. Under the 60-second rule the 29th was a day of
+    /// listening that heard nothing: 70 days, 690 / 70 = 9 a day (whole detections).
+    #[test]
+    fn a_minute_of_audio_is_not_a_day_in_the_year() {
+        let days: Vec<_> = early_2024()
+            .into_iter()
+            .map(|d| {
+                if d == "2024-02-29" {
+                    (d, 61.0, 0)
+                } else {
+                    (d, 86_400.0, 10)
+                }
+            })
+            .collect();
+        let (_dir, conn) = station(&days);
+        let html = page_of(&conn, "2024-03-10");
+        assert!(
+            html.contains("across 69 days of listening in 2024"),
+            "{html}"
+        );
+        assert!(html.contains("≈ 10 a day"), "{html}");
+        assert!(
+            html.contains("Thu 29 Feb 2024&#10;The station was not listening"),
+            "{html}"
+        );
+    }
+
+    /// Counterpart: a station on a two-hours-a-day schedule (7 200 s every date) listened on
+    /// all 70 of them, and ten a day is 700 / 70 = 10 a day.
+    #[test]
+    fn a_short_schedule_is_a_year_of_listening() {
+        let days: Vec<_> = early_2024().into_iter().map(|d| (d, 7_200.0, 10)).collect();
+        let (_dir, conn) = station(&days);
+        let html = page_of(&conn, "2024-03-10");
+        assert!(
+            html.contains("across 70 days of listening in 2024"),
+            "{html}"
+        );
+        assert!(html.contains("≈ 10 a day"), "{html}");
+        assert!(!html.contains("The station was not listening"), "{html}");
     }
 
     /// Two equal days: the busiest is the first, whatever order a fold meets
