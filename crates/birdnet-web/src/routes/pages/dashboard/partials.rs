@@ -154,7 +154,7 @@ fn render_feed_row(
                 // The clock as text: `time_short` is the markup that draws it in the reader's style.
                 let label = escape_html(&format!(
                     "Play {shown}, {}",
-                    d.time.get(0..5).unwrap_or(&d.time)
+                    crate::display::clock_minutes(&d.time).unwrap_or_else(|| d.time.clone())
                 ));
                 format!(
                     r#"<button type="button" class="x-fplay" data-play-src="/api/v2/recordings/{safe}" title="Play clip" aria-label="{label}">▶</button>"#
@@ -261,7 +261,7 @@ fn render_best_row(
             // The clock as text: `time_short` is the markup that draws it in the reader's style.
             let label = escape_html(&format!(
                 "Play {shown}, {}",
-                d.time.get(0..5).unwrap_or(&d.time)
+                crate::display::clock_minutes(&d.time).unwrap_or_else(|| d.time.clone())
             ));
             format!(
                 r#"<button type="button" class="x-play" data-play-src="/api/v2/recordings/{safe}" title="Play clip" aria-label="{label}">▶</button>"#

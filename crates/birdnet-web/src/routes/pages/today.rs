@@ -1448,7 +1448,7 @@ fn render_detection_card(
             // The clock as text, not `display::clock`'s markup.
             let label = escape_html(&format!(
                 "Play {shown}, {}",
-                d.time.get(0..5).unwrap_or(&d.time)
+                crate::display::clock_minutes(&d.time).unwrap_or_else(|| d.time.clone())
             ));
             format!(
                 "<button type=\"button\" class=\"x-fplay tdl-play\" data-play-src=\"/api/v2/recordings/{safe}\" \
