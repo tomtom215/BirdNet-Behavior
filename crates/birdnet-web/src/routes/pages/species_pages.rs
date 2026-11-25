@@ -1339,16 +1339,20 @@ async fn species_companions_partial(
                     r#"<p class="spp-muted">No companion species data yet.</p>"#.to_string(),
                 );
             }
+            // Ranked by the share of their days in common, not by how many (UIC-04).
+            let trigger = names.name_of_stored(&companions[0].trigger);
             let mut html = String::from(
-                r"<table data-fits-phone><thead><tr><th>Companion</th><th>Days heard together</th></tr></thead><tbody>",
+                r"<table data-fits-phone><thead><tr><th>Companion</th><th>Heard on the same day</th><th>Share of their days</th></tr></thead><tbody>",
             );
             for c in &companions {
                 let enc = simple_url_encode(&c.companion);
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let share = (c.overlap.clamp(0.0, 1.0) * 100.0).round() as u32;
                 let _ = write!(
                     html,
-                    r#"<tr><td><a href="/species/detail?name={enc}" class="spp-inherit">{name}</a></td><td>{count}</td></tr>"#,
+                    r#"<tr><td><a href="/species/detail?name={enc}" class="spp-inherit">{name}</a></td><td>{days}</td><td>{share}%</td></tr>"#,
                     name = escape_html(names.name_of_stored(&c.companion)),
-                    count = c.shared_days,
+                    days = super::correlation::companion_days_text(c, trigger),
                 );
             }
             html.push_str("</tbody></table>");

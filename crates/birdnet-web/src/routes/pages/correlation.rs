@@ -394,19 +394,25 @@ fn render_companion_table(
             .to_string();
     }
 
-    let max_days = companions.iter().map(|c| c.shared_days).max().unwrap_or(1);
-
-    let mut html = String::from(
-        r"<table>
+    // Ranked by the share of their days the two have in common, not by how many: the commonest
+    // residents share most of anyone's days and were every species' first companion (UIC-04).
+    // The bar is that share itself, not a length relative to the first row.
+    let trigger = companions
+        .first()
+        .map_or("", |c| names.name_of_stored(&c.trigger));
+    let mut html = format!(
+        r#"<p class="co-hint">Ranked by the share of their days the two have in common: the days both were heard, out of the days either was. So a bird heard every day is not first merely for being common: it shares all of {who}'s days, and many more besides.</p>
+<table>
 <thead>
   <tr>
-    <th>Companion Species</th>
-    <th>Days heard together</th>
+    <th>Companion species</th>
+    <th>Heard on the same day</th>
     <th>How sure (average)</th>
-    <th>Against the most</th>
+    <th>Share of their days</th>
   </tr>
 </thead>
-<tbody>",
+<tbody>"#,
+        who = escape_html(trigger),
     );
 
     for c in companions {
@@ -417,7 +423,7 @@ fn render_companion_table(
             clippy::cast_possible_wrap,
             clippy::cast_lossless
         )]
-        let bar_pct = (c.shared_days as f64 / max_days as f64 * 100.0).round() as u64;
+        let share_pct = (c.overlap.clamp(0.0, 1.0) * 100.0).round() as u64;
         #[allow(
             clippy::cast_possible_truncation,
             clippy::cast_sign_loss,
@@ -434,17 +440,29 @@ fn render_companion_table(
   <td>{days}</td>
   <td>{conf}%</td>
   <td>
-    <div class="bar" data-style="width:{bar_pct}%;min-width:4px;"></div>
+    {share_pct}%<div class="bar" data-style="width:{share_pct}%;min-width:4px;"></div>
   </td>
 </tr>"#,
             name = escape_html(names.name_of_stored(&c.companion)),
-            days = c.shared_days,
+            days = companion_days_text(c, trigger),
             conf = conf_pct,
         );
     }
 
     html.push_str("</tbody></table>");
     html
+}
+
+/// "8 of the Nutcracker's 10 days": the shared days, out of the trigger's, in the station's
+/// language and escaped.
+pub(super) fn companion_days_text(c: &birdnet_db::sqlite::FollowOn, trigger_shown: &str) -> String {
+    format!(
+        "{} of the {}’s {} day{}",
+        c.shared_days,
+        escape_html(trigger_shown),
+        c.trigger_days,
+        if c.trigger_days == 1 { "" } else { "s" }
+    )
 }
 
 /// Pre-compute and cache the default 30-day co-occurrence fragments so the
@@ -591,11 +609,23 @@ mod tests {
             trigger: "Robin".into(),
             companion: "Blue Tit".into(),
             shared_days: 8,
+            trigger_days: 10,
+            companion_days: 12,
+            overlap: 8.0 / 14.0,
             avg_confidence: 0.85,
         }];
         let html =
             render_companion_table(&companions, &birdnet_core::i18n::NameLocalizer::english());
         assert!(html.contains("Blue Tit"));
         assert!(html.contains("85%"));
+        // UIC-04: what the rank is made of, said in words: the shared days out of the trigger's,
+        // and the share (8 of the 14 days either was heard), not a length relative to the top row.
+        assert!(html.contains("8 of the Robin’s 10 days"), "{html}");
+        assert!(
+            html.contains("57%<div class=\"bar\" data-style=\"width:57%"),
+            "{html}"
+        );
+        assert!(html.contains("<th>Share of their days</th>"), "{html}");
+        assert!(!html.contains("Against the most"), "{html}");
     }
 }
