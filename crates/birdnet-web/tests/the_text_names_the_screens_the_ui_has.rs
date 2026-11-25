@@ -4,7 +4,7 @@
 //! The top-level section was renamed from "Station" to "Settings" and its
 //! "Settings" tab to "General". The nav, the page titles and most of the
 //! product's own sentences moved with it; the manual did not, and neither did
-//! the sr-only `<h1>` every tab opens with. A reader following "**Station →
+//! the sr-only `<h1>` every tab then opened with (the tabs now open with the shared head). A reader following "**Station →
 //! Capture**" looked for a tab that no longer has that name, and one following
 //! "Settings → Accounts" or "Admin → Settings → MQTT" was sent to places that
 //! were never there. Nothing failed: a sentence cannot fail to compile.
@@ -85,10 +85,23 @@ async fn every_station_tab_names_itself_as_the_nav_does() {
         let html = get(tab).await;
         let section = nav_label(&html);
         let label = &tab_labels(&html)[i];
-        let want = format!("{section} — {label}");
-        let h1 = between(&html, r#"<h1 class="sr-only">"#, "</h1>").unwrap_or("(none)");
-        if h1 != want {
-            wrong.push(format!("{tab}: <h1> is {h1:?}, the nav says {want:?}"));
+        // The shared page head: the section in the eyebrow, the tab in the heading.
+        let eyebrow = between(
+            &html,
+            r#"<div class="bnb-eyebrow pg-eyebrow"><span>"#,
+            "</span>",
+        )
+        .unwrap_or("(none)");
+        let h1 = between(&html, r#"<h1 class="display pg-h1">"#, "</h1>").unwrap_or("(none)");
+        if eyebrow != section || h1 != label {
+            wrong.push(format!(
+                "{tab}: the head says {eyebrow:?} / {h1:?}, the nav says {section:?} / {label:?}"
+            ));
+        }
+        // Closing tags: the help drawer's script names `<h1>` in a comment.
+        let headings = html.matches("</h1>").count();
+        if headings != 1 {
+            wrong.push(format!("{tab}: {headings} <h1> elements"));
         }
     }
     assert!(wrong.is_empty(), "{wrong:#?}");
