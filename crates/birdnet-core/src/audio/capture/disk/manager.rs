@@ -191,6 +191,16 @@ pub struct DiskManagerConfig {
     /// [`FullDiskAction::Keep`] was chosen; `None` publishes nowhere. The
     /// capture supervisor reads it and stops its sources while it is set.
     pub hold_flag: Option<Arc<AtomicBool>>,
+    /// Where to publish that the disk is over the purge threshold and the
+    /// last disk-full purge found nothing it is allowed to delete: every clip
+    /// left is locked, reviewed, at its species floor or excluded, or there
+    /// are none. `None` publishes nowhere.
+    ///
+    /// Not a latch, unlike [`Self::ineffective_flag`]: every pass looks
+    /// again, so a clip that becomes deletable is still purged, and the flag
+    /// clears on the first pass that removes one or the first reading below
+    /// the threshold.
+    pub nothing_purgeable_flag: Option<Arc<AtomicBool>>,
 }
 
 impl Default for DiskManagerConfig {
@@ -212,6 +222,7 @@ impl Default for DiskManagerConfig {
             },
             raw_keep: None,
             hold_flag: None,
+            nothing_purgeable_flag: None,
         }
     }
 }
@@ -272,6 +283,23 @@ pub fn hold_advice(threshold: f64) -> String {
         HOLD_RESUME_MARGIN_PERCENT,
     )
 }
+
+/// What an operator can do when the disk is over the purge threshold and the
+/// purge found nothing it is allowed to delete (N25-01), for the log and the
+/// station-health condition.
+///
+/// It says only what the purge knows: that nothing it may delete was there.
+/// Whether the space is in protected clips or in something else entirely, it
+/// cannot tell, so the advice covers both.
+pub const NOTHING_PURGEABLE_ADVICE: &str = "Every recording left is one the purge keeps: \
+     locked, the audio of a detection someone confirmed, rejected or commented on, one of the \
+     clips a species always keeps (PURGE_SPECIES_FLOOR), or under a path excluded with \
+     BIRDNET_DISK_EXCLUDE; or one it tried and could not delete (the log says which); or \
+     there are no recordings left and the space is in something else. To make room: unlock clips you no longer need, lower PURGE_SPECIES_FLOOR (applies \
+     after a restart), start the station with BIRDNET_RETAIN_REVIEWED_AUDIO=false to let the \
+     purge take reviewed audio, or free or move other data (`du -sh <data dir>/*` shows what \
+     is filling the disk). The purge looks again every minute and deletes what it may as \
+     soon as there is something";
 
 /// Whether a purge pass is worth running, from what the last one achieved
 /// (PR-7).
@@ -340,6 +368,10 @@ impl std::fmt::Debug for DiskManagerConfig {
             .field("purge_policy", &self.purge_policy)
             .field("raw_keep", &self.raw_keep)
             .field("hold_flag", &self.hold_flag.is_some())
+            .field(
+                "nothing_purgeable_flag",
+                &self.nothing_purgeable_flag.is_some(),
+            )
             .finish()
     }
 }
@@ -410,6 +442,7 @@ impl DiskManager {
                 g.should_purge(percent, threshold);
             }
             self.publish_ineffective(false);
+            self.publish_nothing_purgeable(false, percent);
             // A held recording resumes only once usage is clear of the
             // threshold by a margin (see `HOLD_RESUME_MARGIN_PERCENT`).
             if clear_of_threshold(percent, threshold) {
@@ -488,6 +521,11 @@ impl DiskManager {
                     .lock()
                     .is_ok_and(|mut g| g.observe(removed, percent, after));
                 self.publish_ineffective(ineffective);
+                // N25-01: over the threshold and nothing removed is not the
+                // latch above (that needs a removal) and must not become one:
+                // the next pass looks again, so a clip unlocked meanwhile is
+                // still purged.
+                self.publish_nothing_purgeable(removed == 0, percent);
                 if ineffective {
                     tracing::error!(
                         removed,
@@ -545,6 +583,34 @@ impl DiskManager {
     fn publish_ineffective(&self, ineffective: bool) {
         if let Some(flag) = &self.config.ineffective_flag {
             flag.store(ineffective, Ordering::Relaxed);
+        }
+    }
+
+    /// Publish whether the last pass over the threshold found nothing it was
+    /// allowed to delete (N25-01), and say so once per episode, loudly: the
+    /// disk goes on filling and the purge can do nothing about it.
+    fn publish_nothing_purgeable(&self, nothing: bool, percent: f64) {
+        let Some(flag) = &self.config.nothing_purgeable_flag else {
+            return;
+        };
+        if flag.swap(nothing, Ordering::Relaxed) == nothing {
+            return;
+        }
+        if nothing {
+            tracing::error!(
+                used_pct = format!("{percent:.1}"),
+                threshold = self.config.purge_threshold,
+                dir = %self.config.monitored_dir.display(),
+                advice = NOTHING_PURGEABLE_ADVICE,
+                "disk is over the purge threshold and the purge found nothing it is allowed \
+                 to delete; the disk will go on filling"
+            );
+        } else {
+            tracing::info!(
+                used_pct = format!("{percent:.1}"),
+                dir = %self.config.monitored_dir.display(),
+                "the disk purge can reclaim space again, or the disk is below its threshold"
+            );
         }
     }
 
@@ -1314,6 +1380,171 @@ mod tests {
             "the governor itself has seen no pass"
         );
         manager.publish_ineffective(false);
+        assert!(!flag.load(Ordering::Relaxed));
+    }
+
+    /// A full disk whose purge is pointed at `dir` with `policy`, publishing
+    /// "nothing purgeable" to `flag` and the PR-7 latch to `ineffective`, and
+    /// protecting whatever `locked` names when the pass runs.
+    fn full_with_protection(
+        dir: &std::path::Path,
+        policy: PurgePolicy,
+        locked: &Arc<Mutex<Vec<String>>>,
+        flag: &Arc<AtomicBool>,
+        ineffective: &Arc<AtomicBool>,
+    ) -> DiskManager {
+        let view = Arc::clone(locked);
+        DiskManager::new(DiskManagerConfig {
+            monitored_dir: dir.to_path_buf(),
+            purge_threshold: 0,
+            full_disk_action: FullDiskAction::Purge,
+            purge_policy: policy,
+            locked_provider: Some(Arc::new(move || Some(view.lock().unwrap().clone()))),
+            nothing_purgeable_flag: Some(Arc::clone(flag)),
+            ineffective_flag: Some(Arc::clone(ineffective)),
+            ..DiskManagerConfig::default()
+        })
+    }
+
+    fn names(files: &[PathBuf]) -> Vec<String> {
+        files
+            .iter()
+            .map(|f| f.file_name().unwrap().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    /// N25-01. Over the threshold with every clip protected, the purge removes
+    /// nothing. That used to be said only by a warning in the log every
+    /// minute: no flag, no metric, no condition, while the disk filled.
+    #[test]
+    fn a_full_disk_with_nothing_the_purge_may_delete_is_said() {
+        for policy in [
+            PurgePolicy::OldestFirst,
+            PurgePolicy::KeepEverySpecies { floor: 0 },
+        ] {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let files = clips(dir.path(), 6);
+            let locked = Arc::new(Mutex::new(names(&files)));
+            let flag = Arc::new(AtomicBool::new(false));
+            let ineffective = Arc::new(AtomicBool::new(false));
+            let manager = full_with_protection(dir.path(), policy, &locked, &flag, &ineffective);
+
+            assert!(manager.run_cycle());
+            assert!(
+                files.iter().all(|f| f.exists()),
+                "{policy:?}: a locked clip was purged"
+            );
+            assert!(
+                flag.load(Ordering::Relaxed),
+                "{policy:?}: over the threshold with nothing deletable, and nothing said"
+            );
+            // Not the PR-7 latch: that one stops the purge, and this must not.
+            assert!(!ineffective.load(Ordering::Relaxed), "{policy:?}");
+            assert!(!manager.purge_ineffective(), "{policy:?}");
+
+            // The owner unlocks one clip. The very next pass must still look,
+            // find it, delete it and lower the flag.
+            locked.lock().unwrap().remove(0);
+            assert!(manager.run_cycle());
+            assert!(
+                !files[0].exists(),
+                "{policy:?}: the unlocked clip must be purgeable on the next pass"
+            );
+            assert!(
+                files[1..].iter().all(|f| f.exists()),
+                "{policy:?}: a locked clip was purged"
+            );
+            assert!(
+                !flag.load(Ordering::Relaxed),
+                "{policy:?}: a pass that removed a clip found something to delete"
+            );
+        }
+    }
+
+    /// The species floor protects as a lock does, and is said the same way.
+    #[test]
+    fn a_full_disk_held_entirely_by_the_species_floor_is_said() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let files = clips(dir.path(), 4);
+        let locked = Arc::new(Mutex::new(Vec::new()));
+        let flag = Arc::new(AtomicBool::new(false));
+        let ineffective = Arc::new(AtomicBool::new(false));
+        let manager = full_with_protection(
+            dir.path(),
+            PurgePolicy::KeepEverySpecies { floor: 4 },
+            &locked,
+            &flag,
+            &ineffective,
+        );
+        assert!(manager.run_cycle());
+        assert!(files.iter().all(|f| f.exists()));
+        assert!(flag.load(Ordering::Relaxed));
+    }
+
+    /// The counterparts. A pass that removes a clip on a full disk does not
+    /// raise the flag, and a reading below the threshold clears one left
+    /// from before.
+    #[test]
+    fn a_purge_that_deletes_or_a_disk_below_the_threshold_does_not_say_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let files = clips(dir.path(), 6);
+        let locked = Arc::new(Mutex::new(names(&files[1..])));
+        let flag = Arc::new(AtomicBool::new(false));
+        let ineffective = Arc::new(AtomicBool::new(false));
+        let manager = full_with_protection(
+            dir.path(),
+            PurgePolicy::OldestFirst,
+            &locked,
+            &flag,
+            &ineffective,
+        );
+        assert!(manager.run_cycle());
+        assert!(!files[0].exists(), "the fixture must give the purge a clip");
+        assert!(!flag.load(Ordering::Relaxed));
+
+        let below = Arc::new(AtomicBool::new(true));
+        let manager = DiskManager::new(DiskManagerConfig {
+            monitored_dir: dir.path().to_path_buf(),
+            purge_threshold: 100,
+            nothing_purgeable_flag: Some(Arc::clone(&below)),
+            ..DiskManagerConfig::default()
+        });
+        manager.check_and_purge().expect("check");
+        assert!(
+            !below.load(Ordering::Relaxed),
+            "below the threshold the disk is not full"
+        );
+    }
+
+    /// The PR-7 latch is unchanged by the new signal: a pass that removes a
+    /// clip and frees nothing measurable still stops the next one, and the
+    /// refused pass leaves "nothing purgeable" down, because it never looked.
+    #[test]
+    fn the_ineffective_latch_still_stops_the_purge() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let files = clips(dir.path(), 20);
+        let locked = Arc::new(Mutex::new(Vec::new()));
+        let flag = Arc::new(AtomicBool::new(false));
+        let ineffective = Arc::new(AtomicBool::new(false));
+        let manager = full_with_protection(
+            dir.path(),
+            PurgePolicy::OldestFirst,
+            &locked,
+            &flag,
+            &ineffective,
+        );
+        assert!(manager.run_cycle());
+        let left = files.iter().filter(|f| f.exists()).count();
+        assert!(left < 20, "the first pass removes clips");
+        // 44-byte clips move usage by nothing: the latch is set.
+        assert!(manager.purge_ineffective());
+        assert!(ineffective.load(Ordering::Relaxed));
+        assert!(manager.run_cycle());
+        assert_eq!(
+            files.iter().filter(|f| f.exists()).count(),
+            left,
+            "the latched purge must not delete more"
+        );
         assert!(!flag.load(Ordering::Relaxed));
     }
 }

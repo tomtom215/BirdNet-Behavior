@@ -47,6 +47,9 @@
 //!   card is full of something else — the database, the analytics store, the
 //!   backup ring, a log — and would otherwise have gone on deleting until every
 //!   clip was gone with the disk still full;
+//! * a disk over the purge threshold whose purge finds nothing it may delete,
+//!   because every clip left is locked, reviewed, at its species floor or
+//!   excluded, or there are none — the disk goes on filling;
 //! * a source that dies every few minutes and comes back in seconds — a
 //!   marginal USB connection, an under-powered hub, a stream that keeps
 //!   dropping — which every signal built on *consecutive* failure reads as
@@ -675,10 +678,14 @@ fn check_data_volume(state: &AppState, out: &mut Findings) {
     out.extend(data_volume_condition(&volume));
 }
 
-/// A purge that stopped achieving anything (PR-7), and a recording that stopped
-/// because the disk is full and the station is set to keep everything.
+/// A purge that stopped achieving anything (PR-7), a purge that finds nothing
+/// it may delete (N25-01), and a recording that stopped because the disk is
+/// full and the station is set to keep everything.
 fn check_purge(state: &AppState, out: &mut Findings) {
     out.extend(purge_condition(state.metrics().purge_ineffective()));
+    out.extend(nothing_purgeable_condition(
+        state.metrics().nothing_purgeable(),
+    ));
     out.extend(hold_condition(state.metrics().recording_held()));
 }
 
@@ -713,6 +720,24 @@ fn purge_condition(ineffective: bool) -> Option<Condition> {
                Run `du -sh <data dir>/*` to see what is filling the card, and `--doctor` to \
                grade each; free or move it and the purge resumes on its own."
             .to_owned(),
+    })
+}
+
+/// A disk over the purge threshold whose purge found nothing it may delete
+/// (N25-01).
+///
+/// Says only what the purge knows. It cannot tell whether the space is in the
+/// clips it keeps or in something else, so the body names both and claims
+/// neither.
+fn nothing_purgeable_condition(nothing: bool) -> Option<Condition> {
+    nothing.then(|| Condition {
+        key: "purge-nothing-deletable".to_owned(),
+        title: "Disk is over the purge threshold and nothing can be purged".to_owned(),
+        body: format!(
+            "The disk is over the purge threshold and the disk manager's last pass found no \
+             recording it could delete, so usage will go on rising. {}.",
+            birdnet_core::audio::capture::disk::manager::NOTHING_PURGEABLE_ADVICE
+        ),
     })
 }
 
@@ -2835,5 +2860,28 @@ mod tests {
         assert_eq!(c.key, "purge");
         assert!(c.body.contains("du -sh"), "{}", c.body);
         assert!(c.body.contains("stopped deleting"), "{}", c.body);
+    }
+
+    /// N25-01: its own key, beside `purge` and not instead of it, and a body
+    /// that claims nothing the purge cannot know about where the space is.
+    #[test]
+    fn a_purge_with_nothing_deletable_is_a_condition() {
+        assert!(nothing_purgeable_condition(false).is_none());
+        let c = nothing_purgeable_condition(true).expect("a condition");
+        assert_eq!(c.key, "purge-nothing-deletable");
+        assert_ne!(c.key, purge_condition(true).expect("a condition").key);
+        for remedy in [
+            "unlock",
+            "PURGE_SPECIES_FLOOR",
+            "BIRDNET_RETAIN_REVIEWED_AUDIO=false",
+            "du -sh",
+        ] {
+            assert!(c.body.contains(remedy), "{remedy}: {}", c.body);
+        }
+        assert!(
+            !c.body.contains("the space is not in recordings"),
+            "{}",
+            c.body
+        );
     }
 }
