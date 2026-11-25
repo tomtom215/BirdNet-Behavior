@@ -40,6 +40,7 @@ phone bottom bar): **Today**, **Species**, **Patterns**, **Recordings**,
 - [Notifications & Integrations](./admin/notifications.md)
 - [Remote Access & Security](./admin/remote-access.md)
 - [Backups & Recovery](./admin/backups.md)
+  - [If the SD Card Dies](./admin/card-failure.md)
 - [System Health](./admin/system.md)
 
 # Guides
