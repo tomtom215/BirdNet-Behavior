@@ -370,7 +370,14 @@
     if (!count.plate && !count.engraved && !count.art) return;
     var max = parseFloat(el.getAttribute('data-max')) || 0;
     var art = el.getAttribute('data-art') || '';
-    var credits = 'Picture credits: ' + location.host + basePath() + '/system/credits';
+    // On the station itself the kiosk's browser reaches the server at a loopback address, which
+    // leads nowhere from the phone of whoever reads the plate (UIR-31); there the foot says where
+    // the credits are, and anywhere else it gives the address the reader used.
+    var host = location.hostname;
+    var loopback = host === 'localhost' || host === '[::1]' || host === '::1' || /^127\./.test(host);
+    var credits = loopback
+      ? 'Picture credits: at the foot of any page of this station'
+      : 'Picture credits: ' + location.host + basePath() + '/system/credits';
     function fits(text) {
       el.textContent = text;
       if (!max) return true;

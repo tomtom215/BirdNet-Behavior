@@ -1104,6 +1104,135 @@ async function kioskOpensReadable(page) {
   check('kiosk: a wide window is shown the plate', wide === 'none', `mode "${wide}"`);
 }
 
+/** WCAG contrast of two sRGB triples (0..255). */
+function contrastOf(a, b) {
+  const lin = (c) => { c /= 255; return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4; };
+  const lum = ([r, g, b]) => 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** The kiosk's mode and exit links, as a touch display shows them: nobody hovering, nothing
+ * focused. They were `.plate-ui { opacity: 0.35 }` at rest, 1.73:1 on the day paper and 2.03:1
+ * on the night ground, and a wall display has no hover to bring them up (UIR-31). axe cannot
+ * grade this: it reads a colour, and the opacity that fades the text is on an ancestor. So the
+ * painted colour is composited here, every ancestor's opacity multiplied in, over the sheet's
+ * own paper, in both palettes (CLAUDE.md: a page whose palette follows the clock is graded in
+ * whichever palette the clock gives). Counterpart: the same links are still quieter than the
+ * plate's title ink, so the plate is not turned into a toolbar.
+ */
+async function kioskControlsReadableAtRest(page) {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  for (const night of ['0', '1']) {
+    await page.goto(`${BASE}/kiosk?night=${night}`, { waitUntil: 'domcontentloaded' });
+    await page.mouse.move(640, 600);
+    await page.waitForTimeout(800);
+    const got = await page.evaluate(() => {
+      if (document.activeElement && document.activeElement.blur) document.activeElement.blur();
+      const c = document.createElement('canvas'); c.width = c.height = 1;
+      const x = c.getContext('2d', { willReadFrequently: true });
+      const rgb = (css) => { x.clearRect(0, 0, 1, 1); x.fillStyle = '#000'; x.fillStyle = css; x.fillRect(0, 0, 1, 1); const d = x.getImageData(0, 0, 1, 1).data; return [d[0], d[1], d[2], d[3] / 255]; };
+      const pageEl = document.querySelector('.plate-page') || document.body;
+      const paper = rgb(getComputedStyle(pageEl).backgroundColor);
+      const title = document.querySelector('.plate-title');
+      const ink = title ? rgb(getComputedStyle(title).fill) : null;
+      const links = [...document.querySelectorAll('.plate-ui a, a.plate-ui')];
+      return {
+        paper, ink,
+        links: links.map((a) => {
+          let alpha = rgb(getComputedStyle(a).color)[3];
+          for (let n = a; n && n !== document.documentElement; n = n.parentElement) alpha *= parseFloat(getComputedStyle(n).opacity);
+          return { text: a.textContent.trim(), color: rgb(getComputedStyle(a).color), alpha };
+        }),
+      };
+    });
+    check(`kiosk night=${night}: the mode and exit links are on the page`, got.links.length >= 2, `${got.links.length} links`);
+    for (const l of got.links) {
+      const painted = l.color.slice(0, 3).map((v, i) => l.alpha * v + (1 - l.alpha) * got.paper[i]);
+      const ratio = contrastOf(painted, got.paper.slice(0, 3));
+      check(`kiosk night=${night}: "${l.text}" reads at rest`, ratio >= 4.5, `${ratio.toFixed(2)}:1 at opacity ${l.alpha.toFixed(2)}`);
+      if (got.ink) {
+        const inkRatio = contrastOf(got.ink.slice(0, 3), got.paper.slice(0, 3));
+        check(`kiosk night=${night}: "${l.text}" stays quieter than the title ink`, ratio < inkRatio, `${ratio.toFixed(2)}:1 against the title's ${inkRatio.toFixed(2)}:1`);
+      }
+    }
+  }
+}
+
+/** The plate's foot names where the picture credits are. It printed `location.host`, which on a
+ * kiosk browser running on the station itself is `127.0.0.1:8502`, an address that leads nowhere
+ * from the phone of the person reading it (UIR-31). A loopback host is not printed; the foot
+ * says where the credits are instead. Counterpart: opened by a name another device can use, the
+ * foot still gives that address.
+ */
+async function kioskCreditsSayWhereTheyAre(page) {
+  const foot = async (p, url) => {
+    await p.setViewportSize({ width: 1280, height: 900 });
+    await p.goto(url, { waitUntil: 'domcontentloaded' });
+    await p.waitForFunction(() => /credits/i.test((document.getElementById('plate-colophon') || {}).textContent || ''), null, { timeout: 15000 }).catch(() => {});
+    return p.evaluate(() => (document.getElementById('plate-colophon') || {}).textContent || '');
+  };
+  const local = await foot(page, `${BASE}/kiosk?night=0`);
+  check('kiosk: the foot names the picture credits', /credits/i.test(local), `foot: "${local}"`);
+  check('kiosk: the foot prints no loopback address', !/127\.0\.0\.1|localhost|\[::1\]/.test(local), `foot: "${local}"`);
+  const port = new URL(BASE).port;
+  const browser = await chromium.launch({
+    ...(CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {}),
+    args: ['--host-resolver-rules=MAP station.test 127.0.0.1'],
+  });
+  try {
+    const p = await (await browser.newContext()).newPage();
+    const named = await foot(p, `http://station.test:${port}/kiosk?night=0`);
+    check('kiosk: opened by a name, the foot gives that address', named.includes(`station.test:${port}/system/credits`), `foot: "${named}"`);
+  } finally {
+    await browser.close();
+  }
+}
+
+/** Today's sentence is fetched every five minutes. The `<h1>` it sits in was part of what was
+ * swapped, so a screen reader's heading list pointed at a node that the next poll removed
+ * (UIC-13). After a swap, the heading is the same element, it still holds the sentence, and the
+ * line under it was swapped too.
+ */
+async function todayHeadingSurvivesASwap(page) {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
+  await page.waitForLoadState('networkidle', { timeout: 9000 }).catch(() => {});
+  const got = await page.evaluate(async () => {
+    const h1 = document.querySelector('h1');
+    const region = document.getElementById('today-phrase');
+    if (!h1 || !region || !window.htmx) return { error: `h1 ${!!h1}, region ${!!region}, htmx ${!!window.htmx}` };
+    h1.dataset.zqMark = 'before';
+    const sub = document.getElementById('today-sub');
+    if (sub) sub.dataset.zqMark = 'before';
+    const done = new Promise((resolve) => {
+      const t = setTimeout(() => resolve(false), 8000);
+      document.body.addEventListener('htmx:afterSettle', function f(e) {
+        if (e.target !== region) return;
+        document.body.removeEventListener('htmx:afterSettle', f);
+        clearTimeout(t);
+        resolve(true);
+      });
+    });
+    window.htmx.ajax('GET', region.getAttribute('hx-get'), { source: region, target: region, swap: region.getAttribute('hx-swap') || 'innerHTML' });
+    const settled = await done;
+    const now = document.querySelector('h1');
+    const sub2 = document.getElementById('today-sub');
+    return {
+      settled,
+      same: now === h1 && now.dataset.zqMark === 'before',
+      text: now ? now.textContent.trim() : '',
+      count: document.querySelectorAll('h1').length,
+      subSwapped: !!sub2 && sub2.dataset.zqMark !== 'before' && sub2.textContent.trim().length > 0,
+    };
+  });
+  if (got.error) { check('today: heading and region exist', false, got.error); return; }
+  check('today: the sentence was fetched again', got.settled, 'no htmx:afterSettle on #today-phrase in 8 s');
+  check('today: the heading is the same node after the swap', got.same, `h1 now "${got.text}"`);
+  check('today: one heading, holding the sentence', got.count === 1 && got.text.length > 3, `${got.count} h1, "${got.text}"`);
+  check('today: the line under the heading was swapped with it', got.subSwapped, 'the #today-sub line was not replaced');
+}
+
 async function main() {
   const browser = await chromium.launch({
     headless: process.env.HEADED !== '1',
@@ -1147,6 +1276,9 @@ async function main() {
     ['copy button returns to its label', copyButtonReturnsToItsLabel],
     ['live logs connect cleanly', liveLogsConnectCleanly],
     ['kiosk opens readable', kioskOpensReadable],
+    ['kiosk controls readable at rest', kioskControlsReadableAtRest],
+    ['kiosk credits say where they are', kioskCreditsSayWhereTheyAre],
+    ['today heading survives a swap', todayHeadingSurvivesASwap],
   ]) {
     console.log(`\n${name}`);
     const page = await ctx.newPage();
