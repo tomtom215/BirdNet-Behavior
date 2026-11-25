@@ -102,3 +102,127 @@ async fn every_review_form_records_who_gave_the_verdict() {
         ],
     );
 }
+
+/// One form post that answers 200 whatever happened, as the bulk action and
+/// quarantine approval do: what they did is read back from the database.
+async fn post_any(app: &axum::Router, uri: &str, form: &str) {
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri(uri)
+                .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+                .header("host", "localhost")
+                .header("origin", "http://localhost")
+                .header("hx-request", "true")
+                .body(Body::from(form.to_owned()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "{uri}");
+}
+
+/// N24-04: the bulk confirm and reject on Search record who gave each verdict.
+#[tokio::test]
+async fn the_bulk_verdicts_on_search_record_who_gave_them() {
+    let (app, state) = station();
+    let selected = "selected=2026-09-08%7C06%3A00%3A00%7Ca.wav%7CTurdus+merula";
+    post_any(
+        &app,
+        "/pages/search-bulk",
+        &format!("action=confirm&{selected}"),
+    )
+    .await;
+    post_any(
+        &app,
+        "/pages/search-bulk",
+        &format!("action=reject&{selected}"),
+    )
+    .await;
+    assert_eq!(
+        history(&state),
+        [
+            (
+                Some("admin".to_owned()),
+                Some("confirmed".to_owned()),
+                "bulk".to_owned()
+            ),
+            (
+                Some("admin".to_owned()),
+                Some("rejected".to_owned()),
+                "bulk".to_owned()
+            ),
+        ],
+    );
+}
+
+/// N24-04: approving a quarantined detection records who approved it.
+#[tokio::test]
+async fn a_quarantine_approval_records_who_approved_it() {
+    let (app, state) = station();
+    let id: i64 = state.with_db(|conn| {
+        conn.execute(
+            "INSERT INTO quarantine (date, time, sci_name, com_name, confidence, reason, file_name)
+             VALUES (?1, '07:00:00', 'Turdus merula', 'Eurasian Blackbird', 0.4,
+                     'low_confidence', 'b.wav')",
+            [DATE],
+        )
+        .expect("quarantine a detection");
+        conn.last_insert_rowid()
+    });
+    post_any(&app, "/pages/quarantine-approve", &format!("id={id}")).await;
+    assert_eq!(
+        history(&state),
+        [(
+            Some("admin".to_owned()),
+            Some("confirmed".to_owned()),
+            "quarantine".to_owned()
+        )],
+    );
+}
+
+/// N24-04, the API half. A bearer token is not a signed-in person, so no name
+/// is recorded (the audit row names nobody either, for the same reason); what
+/// the history must say is that the verdict came through the API, for the
+/// single endpoint and the batch, rather than "unattributed".
+#[tokio::test]
+async fn an_api_verdict_is_recorded_as_one() {
+    const TOKEN: &str = "0123456789abcdef0123456789abcdef";
+    let (_, state) = station();
+    let state = state.with_api_token(birdnet_web::api_token::ApiToken::new(TOKEN).expect("token"));
+    let app = build_router(state.clone());
+    for (uri, body) in [
+        (
+            "/api/v2/detections/review",
+            r#"{"date":"2026-09-08","time":"06:00:00","sci_name":"Turdus merula","file_name":"a.wav","status":"confirmed"}"#,
+        ),
+        (
+            "/api/v2/detections/batch",
+            r#"{"op":"review","status":"rejected","detections":[{"date":"2026-09-08","time":"06:00:00","sci_name":"Turdus merula","file_name":"a.wav"}]}"#,
+        ),
+    ] {
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method(Method::POST)
+                    .uri(uri)
+                    .header(header::CONTENT_TYPE, "application/json")
+                    .header(header::AUTHORIZATION, format!("Bearer {TOKEN}"))
+                    .body(Body::from(body))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK, "{uri}");
+    }
+    assert_eq!(
+        history(&state),
+        [
+            (None, Some("confirmed".to_owned()), "api".to_owned()),
+            (None, Some("rejected".to_owned()), "api".to_owned()),
+        ],
+    );
+}

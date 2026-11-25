@@ -83,9 +83,9 @@ pub use maintenance::{
 pub use overview::{EngineDetails, TableSize, detection_rate_24h, engine_details, table_sizes};
 pub use quarantine::{
     ALL_QUARANTINE_REASONS, QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow,
-    QuarantineStats, approve_quarantine, count_quarantine, delete_quarantine, get_quarantine,
-    insert_quarantine, list_quarantine, prune_quarantine, quarantine_pending_count,
-    quarantine_stats, reject_quarantine,
+    QuarantineStats, approve_quarantine, approve_quarantine_by, count_quarantine,
+    delete_quarantine, get_quarantine, insert_quarantine, list_quarantine, prune_quarantine,
+    quarantine_pending_count, quarantine_stats, reject_quarantine,
 };
 pub use species::{
     BulkOutcome, SpeciesInterval, SpeciesThreshold, SpeciesUsage, delete_species_detections,

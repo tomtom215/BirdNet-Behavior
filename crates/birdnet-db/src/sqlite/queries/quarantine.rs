@@ -295,6 +295,29 @@ pub fn insert_quarantine(conn: &Connection, record: &QuarantineRecord<'_>) -> Re
 ///
 /// Returns [`DbError`] if the transaction cannot be committed.
 pub fn approve_quarantine(conn: &Connection, id: i64) -> Result<bool, DbError> {
+    approve_quarantine_by(
+        conn,
+        id,
+        &super::Reviewer {
+            user_id: None,
+            name: None,
+            via: "quarantine",
+        },
+    )
+}
+
+/// [`approve_quarantine`], recording `reviewer` against the verdict the
+/// approval gives in the review history (`review_events`), which outlives the
+/// audit log (N24-04).
+///
+/// # Errors
+///
+/// As [`approve_quarantine`].
+pub fn approve_quarantine_by(
+    conn: &Connection,
+    id: i64,
+    reviewer: &super::Reviewer<'_>,
+) -> Result<bool, DbError> {
     let tx = conn.unchecked_transaction()?;
 
     // Copy into detections. The conflict is named rather than left to
@@ -330,16 +353,17 @@ pub fn approve_quarantine(conn: &Connection, id: i64) -> Result<bool, DbError> {
              ON CONFLICT(date, time, sci_name, file_name) WHERE detached IS NULL DO NOTHING",
             params![id],
         )?;
-        // And in the history (migration 64), where every verdict is kept. This
-        // function is not told who approved it, so the event names nobody; the
-        // audit log the caller writes does, for as long as it is kept.
+        // And in the history (migration 64), where every verdict is kept, with
+        // whoever approved it.
         if reviewed > 0 {
             tx.execute(
-                "INSERT INTO review_events (date, time, sci_name, file_name, verdict, via, notes)
-                 SELECT date, time, sci_name, COALESCE(file_name, ''), 'confirmed', 'quarantine',
+                "INSERT INTO review_events
+                    (date, time, sci_name, file_name, verdict, reviewer_user_id, reviewer_name,
+                     via, notes)
+                 SELECT date, time, sci_name, COALESCE(file_name, ''), 'confirmed', ?2, ?3, ?4,
                         'Approved from quarantine'
                    FROM quarantine WHERE id = ?1",
-                params![id],
+                params![id, reviewer.user_id, reviewer.name, reviewer.via],
             )?;
         }
     }

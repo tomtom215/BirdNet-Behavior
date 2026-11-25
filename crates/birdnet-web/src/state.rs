@@ -1514,10 +1514,33 @@ impl AppState {
     /// Returns `DbError` if the `SQLite` approval fails; see
     /// [`Self::delete_detection`] for why a mirror failure is not returned.
     pub fn approve_quarantine(&self, id: i64) -> Result<bool, birdnet_db::sqlite::DbError> {
+        self.approve_quarantine_by(
+            id,
+            &birdnet_db::sqlite::Reviewer {
+                user_id: None,
+                name: None,
+                via: "quarantine",
+            },
+        )
+    }
+
+    /// [`Self::approve_quarantine`], recording `reviewer` against the verdict
+    /// the approval gives in the review history (`review_events`), which
+    /// outlives the audit log (N24-04).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::approve_quarantine`].
+    pub fn approve_quarantine_by(
+        &self,
+        id: i64,
+        reviewer: &birdnet_db::sqlite::Reviewer<'_>,
+    ) -> Result<bool, birdnet_db::sqlite::DbError> {
         // Read the row *before* approving: `approve_quarantine` reports only
         // whether a row moved, and the analytics insert needs its values.
         let row = self.with_read_db(|conn| birdnet_db::sqlite::get_quarantine(conn, id))?;
-        let admitted = self.with_db(|conn| birdnet_db::sqlite::approve_quarantine(conn, id))?;
+        let admitted =
+            self.with_db(|conn| birdnet_db::sqlite::approve_quarantine_by(conn, id, reviewer))?;
         // Read back what migration 32's trigger stamped on the SQLite side, so
         // the mirror carries the same instant rather than a second computation
         // of it.
