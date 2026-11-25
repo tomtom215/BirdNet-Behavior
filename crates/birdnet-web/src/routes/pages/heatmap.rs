@@ -114,7 +114,7 @@ pub(super) fn content(terrain: &str) -> String {
             topic: "Hour by hour",
             title: "Detections by hour",
             action: Some(("/patterns?tab=dawn", "See who sings when →")),
-            note: "Totals for every hour of the day over the chosen range. Dawn (05:00 to 09:00) and dusk (18:00 to 22:00) bars are green; the rest are grey.",
+            note: "Totals for every hour of the day over the chosen range. The darker bars are the hours around today's sunrise and sunset, for a range of up to two weeks at a station with a location, and otherwise fixed morning and evening clock hours; the key under the chart names them.",
             body: "",
         },
         "hourly-totals",
@@ -474,18 +474,19 @@ fn render_hourly_bars(
             .to_string();
     }
     let by_hour = hour_array(totals);
-    // One hue for the hours the page is about (dawn 5-8, dusk 18-21), a neutral for
-    // the rest. It was amber against green, which is the pair a reader who cannot
-    // tell red from green cannot tell apart.
+    // The annotation ink for the hours around sunrise and sunset (by the station's sun when it
+    // is known, by fixed clock hours when it is not: `bars::sun_hour`), a neutral for the rest.
+    // It was amber against green, which is the pair a reader who cannot tell red from green
+    // cannot tell apart, and then the brand green a species owns (N25-06).
     super::viz::bars::hourly(&super::viz::bars::Hourly {
         id: "hourly-totals",
         name: "Detections by hour of the day",
         desc: &format!(
-            "Detections for each hour of the day over the last {window_days} days; dawn and dusk hours are in colour, the rest grey."
+            "Detections for each hour of the day over the last {window_days} days; the hours around sunrise and sunset are in a darker ink, the rest grey."
         ),
         unit: "detections",
         counts: by_hour,
-        fill: super::viz::bars::Fill::DawnDusk,
+        fill: super::viz::bars::Fill::SunHours,
         width: 760.0,
         plot_h: 150.0,
         solar,
