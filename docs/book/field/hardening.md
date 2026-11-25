@@ -33,10 +33,16 @@ puts the dashboard itself behind that sign-in.
   the LAN out of the box. The installer auto-generates an admin password
   (`CADDY_PWD`) on a fresh install, so `/admin` is protected by default; the
   open dashboard exposes only read-only views.
-- **Restrict to this host:** set `BIRDNET_LISTEN=127.0.0.1:8502` (env, the
-  config file, or answer "restrict to this device" in the interactive
-  installer) — then reach it remotely with an SSH tunnel
-  (`ssh -L 8502:localhost:8502 pi@host`) or a VPN.
+- **Restrict to this host:** bind to `127.0.0.1:8502`, then reach the
+  dashboard remotely with an SSH tunnel (`ssh -L 8502:localhost:8502 pi@host`)
+  or a VPN. On a bare-metal install the address is the service's `--listen`,
+  which the installer writes from `BIRDNET_LISTEN`: put
+  `BIRDNET_LISTEN=127.0.0.1:8502` in the config file and run
+  `sudo bash install.sh repair` to rewrite the service with it (the running
+  program does not read that key from the file). Running the binary yourself,
+  pass `--listen 127.0.0.1:8502` or set `BIRDNET_LISTEN` in its environment.
+  The interactive installer does not ask this question, on purpose: a
+  dashboard bound to the Pi alone looks broken from a phone.
 - **Startup guard.** When the server binds to a non-loopback address *and* no
   `CADDY_PWD` is configured (e.g. you cleared it), it logs a prominent warning
   at startup. If you see
@@ -141,13 +147,17 @@ internet-reachable, keep it set (and add TLS off-LAN).
 - **Reverse-proxy auth** (recommended for internet exposure): terminate TLS and
   require a password at the proxy (Caddy `basic_auth`, nginx `auth_basic`), so
   credentials never cross the wire in clear text.
-- **WebSocket caveat.** The live-detection WebSocket (`/api/v2/ws/detections`)
-  and the health endpoint (`/api/v2/health`) are intentionally exempt from the
-  built-in sign-in layer, because a browser cannot attach credentials to a
-  `WebSocket` handshake. (They are read-only and outside the gated router in any
-  case.) The live detection stream is therefore readable by anyone who can reach
-  the port. If that matters, gate access at the network layer (VPN / proxy
-  allow-list) rather than relying on app-level auth.
+- **WebSocket caveat.** The live-detection WebSocket (`/api/v2/ws/detections`),
+  the live-spectrogram WebSocket (`/api/v2/ws/spectrogram`) and the health
+  endpoint (`/api/v2/health`) are served by the public router, beside the
+  dashboard pages, not by the admin router the sign-in guards; the admin gate
+  also lists them as exempt. On a station that is not in private mode they are
+  therefore readable by anyone who can reach the port, exactly as the dashboard
+  is. A browser does send the session cookie with a same-origin `WebSocket`
+  handshake, and that is how [private mode](#private-mode-everything-behind-the-sign-in)
+  closes both sockets (a `401` without a session) while leaving the health
+  endpoint open for the watchdog. If the live streams matter, turn on private
+  mode or gate access at the network layer (VPN / proxy allow-list).
 
 ### Private mode: everything behind the sign-in
 
