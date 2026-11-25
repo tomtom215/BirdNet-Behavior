@@ -138,8 +138,8 @@
    "work_package": "WP-06",
    "phase": 1,
    "source": "01-multi-source-capture.md:37",
-   "status": "in_progress",
-   "evidence": "Not started: needs maintainer decision 1 (cross-source event grouping and its time tolerance, which README says must come from a measurement on a real two-source station)."
+   "status": "open",
+   "evidence": "Decided 2026-11-25 (decisions-2026-11-25.md sections 1 and 2): events are computed at read time, never stored on the row; tolerance a setting defaulting to the model's window plus one second; each source its own site until told otherwise. Not started. Was marked in_progress with nothing built."
   },
   {
    "id": "MSC-03",
@@ -198,8 +198,8 @@
    "work_package": "WP-06",
    "phase": 1,
    "source": "01-multi-source-capture.md:88",
-   "status": "in_progress",
-   "evidence": "Not started: needs maintainer decision 1 (cross-source event grouping and its time tolerance, which README says must come from a measurement on a real two-source station). BirdWeather would post one event per bird once events exist."
+   "status": "open",
+   "evidence": "Decided 2026-11-25 (decisions-2026-11-25.md sections 1 and 2): events are computed at read time, never stored on the row; tolerance a setting defaulting to the model's window plus one second; each source its own site until told otherwise. Not started. Was marked in_progress with nothing built."
   },
   {
    "id": "MSC-08",
@@ -211,7 +211,7 @@
    "phase": 1,
    "source": "01-multi-source-capture.md:97",
    "status": "open",
-   "evidence": ""
+   "evidence": "Decided 2026-11-25: see decisions-2026-11-25.md section 3."
   },
   {
    "id": "MSC-09",
@@ -223,7 +223,7 @@
    "phase": 1,
    "source": "01-multi-source-capture.md:110",
    "status": "in_progress",
-   "evidence": "22ed559: --doctor gains an 'Overlapping windows' warning when OVERLAP is above 0 and DUPLICATE_INTERVAL_SECS is off, with the remedy; a warning, so the configuration stays usable. Gates overlap_without_a_duplicate_interval_is_reported and no_overlap_or_a_duplicate_interval_is_not_reported red before. Remaining, for the maintainer: collapsing rows across overlapping windows or changing the default interval (it changes counts). See N24-06."
+   "evidence": "22ed559: --doctor gains an 'Overlapping windows' warning when OVERLAP is above 0 and DUPLICATE_INTERVAL_SECS is off, with the remedy; a warning, so the configuration stays usable. Gates overlap_without_a_duplicate_interval_is_reported and no_overlap_or_a_duplicate_interval_is_not_reported red before. Remaining, for the maintainer: collapsing rows across overlapping windows or changing the default interval (it changes counts). See N24-06. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decisions 1 and 2 (the event layer): what is left is collapsing rows, which changes counts."
   },
   {
    "id": "MSC-10",
@@ -271,7 +271,7 @@
    "phase": 1,
    "source": "01-multi-source-capture.md:149",
    "status": "in_progress",
-   "evidence": "5be0ece: re-adding a device that matches a removed row reinstates that row under its own id (AudioSourceStore::reinstate). Gate re_adding_a_removed_device_restores_its_source red with reinstatement off (new id). Remaining: editing an existing source's device_id still continues one id across two places; the proposed confirmation and audio_source_history table are not built."
+   "evidence": "5be0ece: re-adding a device that matches a removed row reinstates that row under its own id (AudioSourceStore::reinstate). Gate re_adding_a_removed_device_restores_its_source red with reinstatement off (new id). Remaining: editing an existing source's device_id still continues one id across two places; the proposed confirmation and audio_source_history table are not built. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S-M): write an audio_source_history row on every device change; editing a device stays allowed."
   },
   {
    "id": "MSC-14",
@@ -331,7 +331,7 @@
    "phase": 1,
    "source": "01-multi-source-capture.md:194",
    "status": "in_progress",
-   "evidence": "Not started: per-source location and species lists depend on maintainer decision 2 (whether co-located sources are one station or several sites); a per-source threshold offset alone could be done before it."
+   "evidence": "Not started: per-source location and species lists depend on maintainer decision 2 (whether co-located sources are one station or several sites); a per-source threshold offset alone could be done before it. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 2 (a site per source), which is where a per-site location and species list hang."
   },
   {
    "id": "MSC-19",
@@ -355,7 +355,7 @@
    "phase": 1,
    "source": "01-multi-source-capture.md:212",
    "status": "in_progress",
-   "evidence": "5be0ece: a failed corroboration read renders an inline fault note in place of the card. Gate a_failed_read_of_the_other_sources_is_reported_as_a_failure (crates/birdnet-web/tests/also_heard_by_says_when_it_could_not_check.rs) red with unwrap_or_default restored. Remaining: the window is still a fixed 30 s; deriving it needs MSC-14's measured inter-source skew."
+   "evidence": "5be0ece: a failed corroboration read renders an inline fault note in place of the card. Gate a_failed_read_of_the_other_sources_is_reported_as_a_failure (crates/birdnet-web/tests/also_heard_by_says_when_it_could_not_check.rs) red with unwrap_or_default restored. Remaining: the window is still a fixed 30 s; deriving it needs MSC-14's measured inter-source skew. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 1: the card takes the event tolerance and detected_at_utc in place of a fixed 30 s on local time."
   },
   {
    "id": "MSC-21",
@@ -367,7 +367,7 @@
    "phase": 1,
    "source": "01-multi-source-capture.md:221",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): needs hardware: its first step is a throughput measurement on a Pi with several sources."
   },
   {
    "id": "MMP-01",
@@ -523,7 +523,7 @@
    "phase": 2,
    "source": "02-multi-model-pipeline.md:240",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): needs hardware: Pi timings first; a thread setting must also survive the unit's SystemCallFilter."
   },
   {
    "id": "MMP-14",
@@ -607,7 +607,7 @@
    "phase": 2,
    "source": "02-multi-model-pipeline.md:293",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): licence and source fields per catalogue entry, printed by --install-model list; cite each licence from its source."
   },
   {
    "id": "MMP-21",
@@ -751,7 +751,7 @@
    "phase": 1,
    "source": "03-precision-accuracy.md:208",
    "status": "open",
-   "evidence": ""
+   "evidence": "Decided 2026-11-25: see decisions-2026-11-25.md section 3."
   },
   {
    "id": "ACC-11",
@@ -834,8 +834,8 @@
    "work_package": "WP-07",
    "phase": 1,
    "source": "03-precision-accuracy.md:286",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "Closed 2026-11-25 on reading: the sub-second offset is in the API row (sqlite/types.rs:207) and the CSV (435137c), and colliding clip names get a suffix (extractor.rs:364-384), so the verdict mix-up the finding feared cannot happen. The Time column stays HH:MM:SS for BirdNET-Pi parity; that would change if a consumer needed sub-second Time itself."
   },
   {
    "id": "ACC-18",
@@ -859,7 +859,7 @@
    "phase": 1,
    "source": "03-precision-accuracy.md:302",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 1: an events view; rows stay as BirdNET-Pi parity has them."
   },
   {
    "id": "ACC-20",
@@ -871,7 +871,7 @@
    "phase": 2,
    "source": "03-precision-accuracy.md:310",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for ACC-03's ground-truth study, which the finding itself folds it into."
   },
   {
    "id": "OOB-01",
@@ -883,7 +883,7 @@
    "phase": 3,
    "source": "04-zero-setup-defaults.md:126",
    "status": "open",
-   "evidence": ""
+   "evidence": "Decided 2026-11-25: see decisions-2026-11-25.md section 8."
   },
   {
    "id": "OOB-02",
@@ -955,7 +955,7 @@
    "phase": 3,
    "source": "04-zero-setup-defaults.md:271",
    "status": "in_progress",
-   "evidence": "Not started. Needs the maintainer: the proposal moves the first password from the installer to the browser behind a setup code, which changes the security model. Question: should a fresh install set no password and let the first browser with a printed setup code claim the station? The --reset-admin-password command could be done alone."
+   "evidence": "Not started. Needs the maintainer: the proposal moves the first password from the installer to the browser behind a setup code, which changes the security model. Question: should a fresh install set no password and let the first browser with a printed setup code claim the station? The --reset-admin-password command could be done alone. Decided 2026-11-25: see decisions-2026-11-25.md section 6."
   },
   {
    "id": "OOB-08",
@@ -978,8 +978,8 @@
    "work_package": "WP-15",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:311",
-   "status": "open",
-   "evidence": ""
+   "status": "rejected",
+   "evidence": "Will not be done, decided 2026-11-25 (decisions-2026-11-25.md section 9): no network alias and no port 80: an alias collides on a second station and port 80 means loosening an empty capability set; the QR code removes the typing and the host name belongs to the Imager page (decision 8)."
   },
   {
    "id": "OOB-10",
@@ -1027,7 +1027,7 @@
    "phase": 3,
    "source": "04-zero-setup-defaults.md:381",
    "status": "in_progress",
-   "evidence": "Not started. The audit marks it a maintainer decision. Question: require sign-in for /stream and the spectrogram socket by default, changing what existing stations' listeners can hear?"
+   "evidence": "Not started. The audit marks it a maintainer decision. Question: require sign-in for /stream and the spectrogram socket by default, changing what existing stations' listeners can hear? Decided 2026-11-25: see decisions-2026-11-25.md section 5."
   },
   {
    "id": "OOB-14",
@@ -1087,7 +1087,7 @@
    "phase": 3,
    "source": "04-zero-setup-defaults.md:474",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): the dead-card recovery page, and a health condition for 'no offsite backup'. Will not be done: an eighth wizard card."
   },
   {
    "id": "OOB-19",
@@ -1111,7 +1111,7 @@
    "phase": 3,
    "source": "04-zero-setup-defaults.md:493",
    "status": "in_progress",
-   "evidence": "Not started. (a) installer/test/classifier-default.sh section 6 pins \"a classifier that cannot be installed stops the install\" on purpose; reversing it needs the maintainer. (b) an offline place list bundles ~1 MB of third-party data with its own licence; also the maintainer's."
+   "evidence": "Not started. (a) installer/test/classifier-default.sh section 6 pins \"a classifier that cannot be installed stops the install\" on purpose; reversing it needs the maintainer. (b) an offline place list bundles ~1 MB of third-party data with its own licence; also the maintainer's. Decided 2026-11-25 (decisions-2026-11-25.md section 7) for the download half: bounded retry, then finish with a distinct exit status and a loud summary; a local file is accepted against the same pin; mirror first. The offline place list is not decided."
   },
   {
    "id": "OOB-21",
@@ -1123,7 +1123,7 @@
    "phase": 3,
    "source": "04-zero-setup-defaults.md:509",
    "status": "in_progress",
-   "evidence": "Level target unified in ef5051b (hardware.md now gives -12 to -6 dB). Left: a tested-hardware shopping list, which needs microphones measured on a Pi, and a sound-check card."
+   "evidence": "Level target unified in ef5051b (hardware.md now gives -12 to -6 dB). Left: a tested-hardware shopping list, which needs microphones measured on a Pi, and a sound-check card. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): needs hardware: a tested kit list needs microphones measured on a Pi."
   },
   {
    "id": "OOB-22",
@@ -1135,7 +1135,7 @@
    "phase": 3,
    "source": "04-zero-setup-defaults.md:522",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): publish quickstart.sh and the compose files as release assets and pin them. Will not be done: changing docker group membership for the user, which is root-equivalent."
   },
   {
    "id": "UIR-01",
@@ -1363,7 +1363,7 @@
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:374",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): SVG hour ticks through display::clock_hour."
   },
   {
    "id": "UIR-20",
@@ -1375,7 +1375,7 @@
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:383",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): one display::date for prose; ISO stays in export tables. Not a defect: the browser's own format in date inputs."
   },
   {
    "id": "UIR-21",
@@ -1411,7 +1411,7 @@
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:416",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): neutral ink for 'new to your list' counts, a unit on Today's temperature, 'late Sep (week 39)', a visible caption on the uptime strip. Not a defect: the 'R. Hummingbird' gutter abbreviation."
   },
   {
    "id": "UIR-24",
@@ -1423,7 +1423,7 @@
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:427",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): drop the duplicate pills, 'Daily rhythm' for 'Circadian', and make the two links go to this species."
   },
   {
    "id": "UIR-25",
@@ -1435,7 +1435,7 @@
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:435",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25: the single-chart half will not be done (the growth curve is what a reader without scripts gets; would change if the timeline gained a server-rendered fallback). The labels and the keyboard paragraph need a render before a verdict."
   },
   {
    "id": "UIR-26",
@@ -1447,7 +1447,7 @@
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:444",
    "status": "in_progress",
-   "evidence": "Not started. The species page's seven cards are independent HTMX partials, so one 'Not heard here yet' panel needs the page shell to read the species' count before drawing; a structural change left for a later pass."
+   "evidence": "Not started. The species page's seven cards are independent HTMX partials, so one 'Not heard here yet' panel needs the page shell to read the species' count before drawing; a structural change left for a later pass. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): one 'Not heard here yet' panel for a species with no detections."
   },
   {
    "id": "UIR-27",
@@ -1459,7 +1459,7 @@
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:454",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): Search, Day, Station and admin onto frame::page_head, and the test's route list extended."
   },
   {
    "id": "UIR-28",
@@ -1470,8 +1470,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:464",
-   "status": "open",
-   "evidence": ""
+   "status": "rejected",
+   "evidence": "Will not be done, decided 2026-11-25 (decisions-2026-11-25.md section 9): six surfaces do different jobs, each with its own gates; merging them is a large regression risk for consistency alone. Would change if one missing affordance is confirmed, which is then a small fix of its own."
   },
   {
    "id": "UIR-29",
@@ -1500,14 +1500,14 @@
   {
    "id": "UIR-31",
    "title": "Kiosk details",
-   "severity": "low",
+   "severity": "medium",
    "already_tracked": true,
    "mentions_conjecture": false,
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:497",
    "status": "open",
-   "evidence": ""
+   "evidence": " Triage 2026-11-25: to do (S): the mode and exit links at 4.5:1 at rest (plate.css:97 sets them to 35% opacity, and a touch kiosk has no hover; whether axe reports this as incomplete is unchecked), credits that do not print 127.0.0.1, the common name in the key. Will not be done: the Latin-first plate, a deliberate design. Raised from low for the contrast part."
   },
   {
    "id": "UIR-32",
@@ -1531,7 +1531,7 @@
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:518",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): ck-still after the first animationend; the book scripts set reduced motion."
   },
   {
    "id": "UIR-34",
@@ -1555,7 +1555,7 @@
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:538",
    "status": "in_progress",
-   "evidence": "972c6da: the quarantine introduction says what Reject and Delete do (neither deletes a recording, so the proposed 'Delete recording' label would be untrue). Question for the maintainer: an inbox badge in the header and one review page with two tabs (with UIC-07 and UIC-30)?"
+   "evidence": "972c6da: the quarantine introduction says what Reject and Delete do (neither deletes a recording, so the proposed 'Delete recording' label would be untrue). Question for the maintainer: an inbox badge in the header and one review page with two tabs (with UIC-07 and UIC-30)? Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): the maintainer's: where the review queues live in the navigation."
   },
   {
    "id": "UIR-36",
@@ -1567,7 +1567,7 @@
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:547",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): static facts as caption text, seasons labelled directly."
   },
   {
    "id": "UIR-37",
@@ -1579,7 +1579,7 @@
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:557",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): for a signed-in reader, a link to the always-allowed list with the species filled in."
   },
   {
    "id": "UIC-01",
@@ -1687,7 +1687,7 @@
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:304",
    "status": "in_progress",
-   "evidence": "Not started: depends on UIC-08 (figure links that reproduce their range and tab, WP-17)."
+   "evidence": "Not started: depends on UIC-08 (figure links that reproduce their range and tab, WP-17). Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for UIC-08: a shared figure needs its range and tab in the URL first."
   },
   {
    "id": "UIC-10",
@@ -1735,7 +1735,7 @@
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:348",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): a static h1 outside the swapped region; no aria-label on a generic div."
   },
   {
    "id": "UIC-14",
@@ -1795,7 +1795,7 @@
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:409",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S-M): one polar, one clock, History's month through viz::heat::calendar."
   },
   {
    "id": "UIC-19",
@@ -1806,8 +1806,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:424",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Triage 2026-11-25: fixed in substance by b0c4a03. Left: the doc comment at viz/mod.rs:16-17 still says charts take species_color."
   },
   {
    "id": "UIC-20",
@@ -1842,8 +1842,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:451",
-   "status": "open",
-   "evidence": ""
+   "status": "rejected",
+   "evidence": "Will not be done, decided 2026-11-25 (decisions-2026-11-25.md section 9): the text 'Loading…' is honest and accessible; skeletons buy only layout stability. Would change if cls.mjs measures a shift on one of the thirteen cards."
   },
   {
    "id": "UIC-23",
@@ -1855,7 +1855,7 @@
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:458",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): 'as of HH:MM' on cached figures."
   },
   {
    "id": "UIC-24",
@@ -1891,7 +1891,7 @@
    "phase": 2,
    "source": "06-ui-code-charts-ia.md:502",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): name the clock hours without 'dawn' and 'dusk', and make quality.rs agree with bars.rs."
   },
   {
    "id": "UIC-27",
@@ -1927,7 +1927,7 @@
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:535",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S), probe first: focus after a swap that removes the focused element's parent."
   },
   {
    "id": "UIC-30",
@@ -1950,8 +1950,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:564",
-   "status": "open",
-   "evidence": ""
+   "status": "rejected",
+   "evidence": "Will not be done, decided 2026-11-25 (decisions-2026-11-25.md section 9): a structural escaping type across about 640 call sites with no defect found, and the class is held by the CSP, dom-sinks.mjs, inline_style_guard.rs and the markup-echo sweep. Would change on the first escaping bug."
   },
   {
    "id": "UIC-32",
@@ -1963,7 +1963,7 @@
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:581",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): needs hardware: whether the polls cost anything is a measurement on a Pi."
   },
   {
    "id": "UIC-33",
@@ -1975,7 +1975,7 @@
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:591",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): a second classified sweep, for per-day and listening claims."
   },
   {
    "id": "UIC-34",
@@ -2035,7 +2035,7 @@
    "phase": 2,
    "source": "07-research-grade.md:217",
    "status": "open",
-   "evidence": ""
+   "evidence": "Decided 2026-11-25: see decisions-2026-11-25.md section 4."
   },
   {
    "id": "RES-05",
@@ -2202,8 +2202,8 @@
    "work_package": "WP-06",
    "phase": 1,
    "source": "07-research-grade.md:463",
-   "status": "in_progress",
-   "evidence": "Not started: needs maintainer decision 1 (cross-source event grouping and its time tolerance, which README says must come from a measurement on a real two-source station)."
+   "status": "open",
+   "evidence": "Decided 2026-11-25 (decisions-2026-11-25.md sections 1 and 2): events are computed at read time, never stored on the row; tolerance a setting defaulting to the model's window plus one second; each source its own site until told otherwise. Not started. Was marked in_progress with nothing built."
   },
   {
    "id": "RES-19",
@@ -2263,7 +2263,7 @@
    "phase": 2,
    "source": "07-research-grade.md:534",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): a SHA-256 per clip, verified on export. Will not be done: coordinates embedded in clips by default, which leaks the home location through a shared clip."
   },
   {
    "id": "RES-24",
@@ -2275,7 +2275,7 @@
    "phase": 2,
    "source": "07-research-grade.md:544",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): the researcher chapter and a methods endpoint, saying what is not validated. The maintainer's: the licence of exported data."
   },
   {
    "id": "RES-25",
@@ -2292,14 +2292,14 @@
   {
    "id": "RES-26",
    "title": "A \"listened\" day needs only 60 s of recording",
-   "severity": "low",
+   "severity": "medium",
    "already_tracked": false,
    "mentions_conjecture": false,
    "work_package": "WP-05",
    "phase": 1,
    "source": "07-research-grade.md:562",
    "status": "open",
-   "evidence": ""
+   "evidence": " Raised from low on 2026-11-25: two definitions of a listened day (60 s in listening.rs:28, a share of the typical day in reporting.rs) make one station's figures disagree."
   },
   {
    "id": "RES-27",
@@ -2335,7 +2335,7 @@
    "phase": 2,
    "source": "07-research-grade.md:593",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): reviewed and locked clips offsite with a SHA-256 manifest. Will not be done: raw audio offsite."
   },
   {
    "id": "RES-30",
@@ -2347,7 +2347,7 @@
    "phase": 2,
    "source": "07-research-grade.md:603",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for RES-07 (calibration). Interim, to do (S): one sentence that confidence is a model score, and the settings text that calls V3's scores calibrated."
   },
   {
    "id": "RES-31",
@@ -2359,7 +2359,7 @@
    "phase": 2,
    "source": "07-research-grade.md:607",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): same file twice gives the same rows, as a gate; versions in analytics JSON. Needs hardware: aarch64 against x86."
   },
   {
    "id": "RES-32",
@@ -2371,7 +2371,7 @@
    "phase": 2,
    "source": "07-research-grade.md:620",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): a label-file hash to taxonomy-edition table in the catalogue, with MMP-20."
   },
   {
    "id": "MMP-23",
@@ -2503,7 +2503,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-06.md",
    "status": "open",
-   "evidence": "Found while implementing WP-06; not re-checked beyond the finder's reading."
+   "evidence": "Found while implementing WP-06; not re-checked beyond the finder's reading. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 2: pooling is right for one site and wrong across sites."
   },
   {
    "id": "N05-01",
@@ -2527,7 +2527,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-05.md",
    "status": "open",
-   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since."
+   "evidence": "Recorded by the session behind the closed duplicate pull request #302 while it implemented WP-05; a reading by that session, not re-checked against main since. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): a robust onset in place of MIN(Date)."
   },
   {
    "id": "N05-03",
@@ -2611,7 +2611,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
    "status": "open",
-   "evidence": "Left by caae3e3 (N14-03): the amixer path is fixed, the Pulse path is not. One source, so nothing masks it, and 0% already warns."
+   "evidence": "Left by caae3e3 (N14-03): the amixer path is fixed, the Pulse path is not. One source, so nothing masks it, and 0% already warns. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): PulseAudio's '-inf dB' maps to negative infinity, with a test."
   },
   {
    "id": "N24-06",
@@ -2623,7 +2623,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
    "status": "open",
-   "evidence": "22ed559 (MSC-09): daemon::config::resolve_i64_with_default is pub(super), so the check restates the rule and the two can drift; Perch's 5 s windows are not considered in the row count it prints."
+   "evidence": "22ed559 (MSC-09): daemon::config::resolve_i64_with_default is pub(super), so the check restates the rule and the two can drift; Perch's 5 s windows are not considered in the row count it prints. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): the doctor calls the daemon's resolver and the configured model's window."
   },
   {
    "id": "N24-07",
@@ -2635,19 +2635,19 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
    "status": "open",
-   "evidence": "Reported by the lane D session of 2026-11-24 (a398610). The second half was there before."
+   "evidence": "Reported by the lane D session of 2026-11-24 (a398610). The second half was there before. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): the fit check on every route's tables, and scroll before reading."
   },
   {
    "id": "N24-08",
    "title": "Migration's per-species weekly index is not corrected for listening time",
-   "severity": "low",
+   "severity": "medium",
    "already_tracked": false,
    "mentions_conjecture": false,
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
    "status": "open",
-   "evidence": "Noticed by the lane C session of 2026-11-24 in seasonal_ratio (routes/pages/migration.rs) while fixing N05-03. A reading."
+   "evidence": "Noticed by the lane C session of 2026-11-24 in seasonal_ratio (routes/pages/migration.rs) while fixing N05-03. A reading. Raised from low on 2026-11-25: raw weekly counts decide which species are drawn as migrants."
   },
   {
    "id": "N24-09",
@@ -2659,7 +2659,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-24.md",
    "status": "open",
-   "evidence": "Read from the log of job 138833156312 (run 45503657894, Tests (x86_64), 46m37s): the step the workflow comment calls near-instant printed 'Finished test profile ... in 6m 34s' for a test that ran in 0.90s, because -p birdnet-behavioral --features analytics resolves to other build units than --workspace --all-features. Also 'unused workspace dependency ndarray' (Cargo.toml:179) and 'package.homepage is redundant with package.documentation' (Cargo.toml:338). Only the last 5000 of 25193 log lines were readable; whether the cache was hit was not seen. A fix needs a trial run and a guard that the named test ran."
+   "evidence": "Read from the log of job 138833156312 (run 45503657894, Tests (x86_64), 46m37s): the step the workflow comment calls near-instant printed 'Finished test profile ... in 6m 34s' for a test that ran in 0.90s, because -p birdnet-behavioral --features analytics resolves to other build units than --workspace --all-features. Also 'unused workspace dependency ndarray' (Cargo.toml:179) and 'package.homepage is redundant with package.documentation' (Cargo.toml:338). Only the last 5000 of 25193 log lines were readable; whether the cache was hit was not seen. A fix needs a trial run and a guard that the named test ran. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): the rebuild is fixed (c981bf5). To do (S): the two manifest warnings; the comment on the ndarray entry is untrue, an unused workspace entry constrains nothing."
   },
   {
    "id": "CHT-01",
@@ -2779,7 +2779,7 @@
    "phase": 4,
    "source": "09-chart-review.md:235",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for CHT-17, which computes its summary sentence."
   },
   {
    "id": "CHT-11",
@@ -2887,7 +2887,7 @@
    "phase": 4,
    "source": "09-chart-review.md:359",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): visit length and visits per day per species; the query and the effort ledger exist."
   },
   {
    "id": "CHT-18",
@@ -2899,7 +2899,7 @@
    "phase": 4,
    "source": "09-chart-review.md:371",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for CHT-24: its honesty rule is a null expectation."
   },
   {
    "id": "CHT-19",
@@ -2911,7 +2911,7 @@
    "phase": 4,
    "source": "09-chart-review.md:382",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): the maintainer's (which species are triggers), and behind CHT-24."
   },
   {
    "id": "CHT-20",
@@ -2923,7 +2923,7 @@
    "phase": 4,
    "source": "09-chart-review.md:396",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): song onset against sunrise, hidden without coordinates."
   },
   {
    "id": "CHT-21",
@@ -2935,7 +2935,7 @@
    "phase": 4,
    "source": "09-chart-review.md:408",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for weather in the analytics copy."
   },
   {
    "id": "CHT-22",
@@ -2947,7 +2947,7 @@
    "phase": 4,
    "source": "09-chart-review.md:419",
    "status": "open",
-   "evidence": ""
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for a station with three years of data."
   },
   {
    "id": "N25-02",
@@ -2971,7 +2971,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
    "status": "open",
-   "evidence": "Read, 2026-11-25: crates/birdnet-behavioral/src/phenology/abundance.rs:337 against connection/mod.rs ('ALTER TABLE detections ADD COLUMN Source'). Whether the rate should then be formed per source is the open question behind the sentence."
+   "evidence": "Read, 2026-11-25: crates/birdnet-behavioral/src/phenology/abundance.rs:337 against connection/mod.rs ('ALTER TABLE detections ADD COLUMN Source'). Whether the rate should then be formed per source is the open question behind the sentence. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): rewrite the sentence; pooled by choice until decision 2."
   },
   {
    "id": "N25-04",
@@ -2995,7 +2995,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
    "status": "open",
-   "evidence": "Read, 2026-11-25: docs/book/admin/backups.md:45, docs/book/admin/recording.md:52 and docs/book/getting-started/configuration.md:171 say the disk manager purges 'the oldest recordings'. The default policy takes the most-recorded species first, lowest confidence then oldest, never below PURGE_SPECIES_FLOOR; configuration.md:85 and migration.md:163 say so correctly."
+   "evidence": "Read, 2026-11-25: docs/book/admin/backups.md:45, docs/book/admin/recording.md:52 and docs/book/getting-started/configuration.md:171 say the disk manager purges 'the oldest recordings'. The default policy takes the most-recorded species first, lowest confidence then oldest, never below PURGE_SPECIES_FLOOR; configuration.md:85 and migration.md:163 say so correctly. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): three untrue sentences; configuration.md:85 has the wording."
   },
   {
    "id": "N25-06",
@@ -3007,7 +3007,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
    "status": "open",
-   "evidence": "After UIR-01: the temperature line (ck-c5), the dawn and dusk hour bars and the spring season (ck-c1) and the autumn season (ck-c5) reuse owned colours; in Today's songs and Seasons two unowned species can sit as adjacent grey bands with nothing between them. Also untested: whether a cached fragment and the colour assignment can disagree for up to ten minutes after midnight."
+   "evidence": "After UIR-01: the temperature line (ck-c5), the dawn and dusk hour bars and the spring season (ck-c1) and the autumn season (ck-c5) reuse owned colours; in Today's songs and Seasons two unowned species can sit as adjacent grey bands with nothing between them. Also untested: whether a cached fragment and the colour assignment can disagree for up to ten minutes after midnight. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): annotation and neutral tokens for marks that are not species, and a seam between unowned bands."
   },
   {
    "id": "N25-07",
@@ -3031,7 +3031,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
    "status": "open",
-   "evidence": "Reported by the evidence lane, 2026-11-25; app.css was another lane's file in that batch."
+   "evidence": "Reported by the evidence lane, 2026-11-25; app.css was another lane's file in that batch. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): delete both."
   },
   {
    "id": "N25-09",
@@ -3043,7 +3043,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
    "status": "open",
-   "evidence": "Noticed while rewriting the README (pull request 308), from reading; not probed."
+   "evidence": "Noticed while rewriting the README (pull request 308), from reading; not probed. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): describe both install paths."
   },
   {
    "id": "N25-01",
@@ -3080,6 +3080,54 @@
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
    "status": "open",
    "evidence": "Read, 2026-11-25, not probed: in that configuration the only disk manager is the stream one, which runs OldestFirst with a provider listing only in-flight segments. backups.md:47 says locked recordings are never purged. Needs a probe before anything is built on it."
+  },
+  {
+   "id": "N25-12",
+   "title": "hardening.md describes an installer prompt that does not exist and gives a wrong reason for the open sockets",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/decisions-2026-11-25.md",
+   "status": "open",
+   "evidence": "Read by the access analysis, 2026-11-25: docs/book/field/hardening.md:36-38 says to answer 'restrict to this device', a question installer/lib/70-station.sh:394-400 deliberately does not ask; :144-150 says a browser cannot attach credentials to a WebSocket handshake, while private mode gates both sockets with the session cookie and the real reason is the admin gate's exclusion list (auth_middleware.rs:500-502, opened by this session)."
+  },
+  {
+   "id": "N25-13",
+   "title": "SECURITY.md points to a threat model that is not in the file it names",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/decisions-2026-11-25.md",
+   "status": "open",
+   "evidence": "Read by the access analysis, 2026-11-25: SECURITY.md:94-98 names docs/architecture/12-risks.md as covering trust boundaries; that file has none, and nothing on the LAN, live audio or speech. Decisions 5 and 6 need one written."
+  },
+  {
+   "id": "N25-14",
+   "title": "The sign-in page's forgotten-password hint prints a stale password after a change in the browser",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/decisions-2026-11-25.md",
+   "status": "open",
+   "evidence": "Read by the access analysis, 2026-11-25: templates/login.html:134-141 tells the reader to grep CADDY_PWD; once the password is changed on the Accounts page the station ignores that value (src/helpers/auth.rs:122-135, 236-245). Fixed with decision 6."
+  },
+  {
+   "id": "N25-15",
+   "title": "README says the Docker quick-start runs v0.17.1, and an old audit says every segment is zero-padded",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/decisions-2026-11-25.md",
+   "status": "open",
+   "evidence": "Read 2026-11-25: README.md:117 against CHANGELOG (0.19.0 released 2026-10-31), with OOB-22; docs/UNATTENDED_DEPLOYMENT_AUDIT.md:603, written when the 4.5 s model was the default."
   }
  ]
 }

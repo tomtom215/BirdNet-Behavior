@@ -138,6 +138,13 @@ count events instead of rows. WP-03 (the discard ledger) is the base for WP-09 a
 These change what gets built. Each has a recommendation, and none should be decided by a coding
 session on its own.
 
+**On 2026-11-25 the maintainer left the open ones to the session, to be made from analysis.** What was
+decided, on what evidence, and what would reverse each is in `decisions-2026-11-25.md`, which supersedes
+the recommendations below where they differ: events are computed when read and not stored on the row
+(item 1), each source is its own site until told otherwise (2), a three-tier store replaces the single
+summary table (4), no image for now (5), and analysis stays per file by default because the premise of
+item 6 no longer held at the shipped settings.
+
 1. **Cross-source grouping (WP-06).** Recommended: keep every row, add an event id that groups rows
    of one species from different sources whose windows overlap in time, count events by default and
    offer rows as the other view. Never delete or merge rows. The time tolerance is the open number:
