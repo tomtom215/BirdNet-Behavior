@@ -375,8 +375,10 @@ pub fn clear_detection_review(conn: &Connection, key: &DetectionKey<'_>) -> Resu
 /// The detection returns to the unreviewed queue. The withdrawal is appended to the history (a
 /// `review_events` row with no verdict); the verdicts before it stay there.
 ///
-/// Returns `true` if there was a verdict, or a mirrored one, to remove. When
-/// there was none, nothing is recorded.
+/// Returns whether `key` named anything: `true` when a detection (or an
+/// attached verdict) has that key, whether or not there was a verdict to
+/// withdraw (withdrawing none is not an error, and records nothing); `false`
+/// when nothing has it and nothing was done.
 ///
 /// # Errors
 ///

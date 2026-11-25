@@ -1721,6 +1721,7 @@ impl AppState {
 
     /// Clear a verdict in `SQLite` **and** the analytics copy. A detection that
     /// has no verdict is left as it is, and that is `Done`: undo is idempotent.
+    /// A key that names no detection is `NoSuchDetection`.
     ///
     /// Named and refused the way [`Self::set_detection_review`] is.
     ///
@@ -1750,12 +1751,19 @@ impl AppState {
                 Ok(clip) => clip,
                 Err(refused) => return Ok(Err(refused)),
             };
-            birdnet_db::sqlite::clear_detection_review_by(
+            // `false` is "no detection has that key", and a withdrawal about
+            // nothing is not done: a client holding a stale clip name is told,
+            // as for a verdict (N24-03). A detection with no verdict is `true`.
+            let exists = birdnet_db::sqlite::clear_detection_review_by(
                 conn,
                 &row.key_with(clip.as_deref()),
                 reviewer,
             )?;
-            Ok(Ok(clip))
+            Ok(if exists {
+                Ok(clip)
+            } else {
+                Err(ReviewOutcome::NoSuchDetection)
+            })
         })?;
         let clip = match target {
             Ok(clip) => clip,
