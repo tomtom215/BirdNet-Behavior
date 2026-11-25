@@ -645,29 +645,56 @@ async fn species_detail_page(
 
     let com_name = name.clone();
     let names = state.names_handle();
-    let sci_name = tokio::task::spawn_blocking(move || {
-        state.with_read_db(|conn| {
-            // Raw `detections` on purpose. This resolves a display name, not a
-            // number: a species whose every detection has been rejected is gone
-            // from the species list and every aggregate, but a link to its page
-            // may still exist. Reading the analytic view here would render that
-            // page nameless rather than empty-but-explained.
-            conn.query_row(
-                "SELECT Sci_Name FROM detections WHERE Com_Name = ?1 LIMIT 1",
-                [&com_name],
-                |row| row.get::<_, String>(0),
-            )
-            .unwrap_or_default()
+    let signed_in = crate::session::looks_signed_in(&headers);
+    // Raw `detections` on purpose. This resolves a display name, not a number: a species whose
+    // every detection has been rejected is gone from the species list and every aggregate, but a
+    // link to its page may still exist. Reading the analytic view here would render that page
+    // nameless rather than empty-but-explained. No row at all is a bird this station has no
+    // record of, which gets one panel instead of seven empty cards (UIR-26); a read that failed
+    // is neither, and says so, because a fault drawn as "not heard here yet" would be a claim
+    // about the station's data that nothing had checked.
+    let looked_up = state
+        .run_blocking(move |state| {
+            let sci = state.with_read_db(|conn| {
+                rusqlite::OptionalExtension::optional(conn.query_row(
+                    "SELECT Sci_Name FROM detections WHERE Com_Name = ?1 LIMIT 1",
+                    [&com_name],
+                    |row| row.get::<_, String>(0),
+                ))
+            })?;
+            let panel = if sci.is_none() {
+                let shown = state.names_handle().name("", &com_name).to_owned();
+                Some(super::occurrence_page::unheard_panel(
+                    state, &com_name, signed_in, &shown,
+                ))
+            } else {
+                None
+            };
+            Ok::<_, rusqlite::Error>((sci, panel))
         })
-    })
-    .await
-    .unwrap_or_default();
+        .await;
+    let (sci_name, unheard) = match looked_up {
+        Ok((sci, panel)) => (sci.unwrap_or_default(), panel),
+        Err(e) => {
+            tracing::warn!(error = %e, "species page: the species could not be looked up");
+            return super::render_page_for_request(
+                "Species",
+                &super::error_states::could_not_load("this species"),
+                "species",
+                &headers,
+            );
+        }
+    };
 
     // The URL, the htmx fragments' `?name=` and the search link carry the name
     // as stored; the heading and the tab title are in the station's language.
     let shown = names.name(&sci_name, &name).to_owned();
     let encoded = simple_url_encode(&name);
-    let content = SPECIES_DETAIL_HTML
+    let template = unheard.as_ref().map_or_else(
+        || SPECIES_DETAIL_HTML.replace("{{unheard_panel}}", ""),
+        |panel| without_marked(&SPECIES_DETAIL_HTML, "heard").replace("{{unheard_panel}}", panel),
+    );
+    let content = template
         .replace("{{species_name}}", &escape_html(&shown))
         .replace("{{scientific_name}}", &escape_html(&sci_name))
         .replace("{{species_encoded}}", &encoded)
@@ -679,6 +706,22 @@ async fn species_detail_page(
         .replace("{{skel_trend}}", super::skeletons::trend_line())
         .replace("{{skel_detections}}", &super::skeletons::list_rows(5));
     super::render_page_for_request(&shown, &content, "species", &headers)
+}
+
+/// `html` without every span from `<!--{marker}-->` to `<!--/{marker}-->`, the markers included.
+fn without_marked(html: &str, marker: &str) -> String {
+    let (open, close) = (format!("<!--{marker}-->"), format!("<!--/{marker}-->"));
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(start) = rest.find(&open) {
+        out.push_str(&rest[..start]);
+        match rest[start..].find(&close) {
+            Some(end) => rest = &rest[start + end + close.len()..],
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 async fn species_summary_partial(
@@ -1147,8 +1190,10 @@ fn ebird_link(code: Option<&str>, shown_name: &str) -> String {
     )
 }
 
-/// HTMX partial: status pills (detection count, first/last heard, mean
-/// confidence) shown under the species headline on the detail page.
+/// HTMX partial: the pill row under the species headline on the detail page.
+///
+/// It carries only what the tiles under it do not: the range filter's "held back" link. It
+/// repeated the tiles' count, first and last day and mean confidence (UIR-24).
 async fn species_status_partial(
     State(state): State<AppState>,
     Query(query): Query<SpeciesQuery>,
@@ -1178,18 +1223,7 @@ async fn species_status_partial(
         .await;
 
     let html = match result {
-        (Ok(Some(s)), held_back) => {
-            let conf_pct = s.avg_confidence * 100.0;
-            format!(
-                r#"<span class="bnb-pill moss"><span class="bnb-dot"></span> {count} detections</span>
-<span class="bnb-pill">First heard {first}</span>
-<span class="bnb-pill">Last heard {last}</span>
-<span class="bnb-pill">avg {conf_pct:.0}% confidence</span>{held_back}"#,
-                count = super::group_thousands(s.count),
-                first = escape_html(&s.first_seen),
-                last = escape_html(&s.last_seen),
-            )
-        }
+        (Ok(Some(_)), held_back) => held_back,
         (Ok(None), _) => r#"<span class="bnb-pill">No detections yet</span>"#.to_string(),
         _ => String::new(),
     };

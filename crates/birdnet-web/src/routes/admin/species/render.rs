@@ -71,13 +71,24 @@ pub(crate) fn species_lists_body(
     whitelist: &[String],
     names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
+    species_lists_body_filled(exclude, include, whitelist, names, None)
+}
+
+/// [`species_lists_body`] with the Always allowed field filled in (the Capture tab's `?allow=`).
+pub(crate) fn species_lists_body_filled(
+    exclude: &[String],
+    include: &[String],
+    whitelist: &[String],
+    names: &birdnet_core::i18n::NameLocalizer,
+    whitelist_prefill: Option<&str>,
+) -> String {
     format!(
         r#"<div class="spl-scope">{SPECIES_LISTS_STYLE}
 
   <div id="species-lists">
     {inner}
   </div></div>"#,
-        inner = render_species_partial(exclude, include, whitelist, names)
+        inner = species_partial(exclude, include, whitelist, names, whitelist_prefill)
     )
 }
 
@@ -89,6 +100,16 @@ pub fn render_species_partial(
     whitelist: &[String],
     names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
+    species_partial(exclude, include, whitelist, names, None)
+}
+
+fn species_partial(
+    exclude: &[String],
+    include: &[String],
+    whitelist: &[String],
+    names: &birdnet_core::i18n::NameLocalizer,
+    whitelist_prefill: Option<&str>,
+) -> String {
     let mut out = String::with_capacity(4096);
     render_list_card(
         &mut out,
@@ -98,6 +119,7 @@ pub fn render_species_partial(
         "Species that will <strong>never</strong> be saved or notified.",
         "exclude",
         names,
+        None,
     );
     render_list_card(
         &mut out,
@@ -107,6 +129,7 @@ pub fn render_species_partial(
         "When non-empty, <strong>only</strong> these species are saved or notified.",
         "include",
         names,
+        None,
     );
     render_list_card(
         &mut out,
@@ -119,6 +142,7 @@ pub fn render_species_partial(
          non-empty allow-list stays out.",
         "whitelist",
         names,
+        whitelist_prefill,
     );
     // Per-species thresholds section (loaded via HTMX)
     out.push_str(
@@ -143,6 +167,7 @@ fn render_list_card(
     description: &str,
     kind: &str,
     names: &birdnet_core::i18n::NameLocalizer,
+    prefill: Option<&str>,
 ) {
     let _ = write!(
         out,
@@ -186,11 +211,12 @@ fn render_list_card(
         out,
         r##"</div>
   <form hx-post="/admin/species/{kind}/add" hx-target="#species-lists" hx-swap="innerHTML" class="add-row">
-    <input type="text" name="name" placeholder="Common or scientific name" class="grow">
+    <input type="text" name="name"{value} placeholder="Common or scientific name" class="grow">
     <button type="submit" class="btn btn-primary">Add</button>
   </form>
   <p class="hint">Either name form works. Changes apply within about half a minute — no restart needed.</p>
-</div>"##
+</div>"##,
+        value = prefill.map_or_else(String::new, |p| format!(r#" value="{}""#, escape_html(p))),
     );
 }
 

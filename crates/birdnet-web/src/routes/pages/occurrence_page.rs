@@ -155,7 +155,10 @@ async fn occurrence_page(
             "This process is not running the detection daemon, so there is no range filter to ask.",
         ),
         Some(source) => {
-            let report = state.run_blocking(move |_| source.report(week)).await;
+            let (report, may_manage) = state
+                .run_blocking(move |state| (source.report(week), open_station(state)))
+                .await;
+            let may_manage = may_manage || crate::session::looks_signed_in(&headers);
             match report {
                 Err(reason) => unavailable_for(&reason),
                 Ok(report) => {
@@ -168,7 +171,15 @@ async fn occurrence_page(
                         super::name_search::also_species(&names, query.as_deref())
                             .into_iter()
                             .collect();
-                    results(&report, query.as_deref(), offset, &names, &also, &notes)
+                    results(
+                        &report,
+                        query.as_deref(),
+                        offset,
+                        &names,
+                        &also,
+                        &notes,
+                        may_manage,
+                    )
                 }
             }
         }
@@ -251,7 +262,8 @@ fn unavailable_for(reason: &Unavailable) -> String {
     }
 }
 
-/// The answer and the list, for a report that exists.
+/// The answer and the list, for a report that exists. `may_manage`: the reader can change the
+/// station's species lists (see [`allow_link`]).
 fn results(
     report: &OccurrenceReport,
     query: Option<&str>,
@@ -259,6 +271,7 @@ fn results(
     names: &birdnet_core::i18n::NameLocalizer,
     also: &std::collections::HashSet<String>,
     notes: &[String],
+    may_manage: bool,
 ) -> String {
     let mut out = String::new();
     for note in notes {
@@ -307,7 +320,7 @@ fn results(
             );
         } else {
             for score in picked.species.iter().take(MOST_ANSWERS) {
-                out.push_str(&answer_card(score, report, names));
+                out.push_str(&answer_card(score, report, names, may_manage));
             }
             if picked.matched > MOST_ANSWERS {
                 let _ = write!(
@@ -324,11 +337,13 @@ fn results(
     out
 }
 
-/// One species' answer: its names, whether it is allowed, and why, in a sentence.
+/// One species' answer: its names, whether it is allowed, and why, in a sentence; and, for a
+/// reader who can change the lists, the way to the one that would let it in.
 fn answer_card(
     score: &birdnet_core::inference::species_filter::OccurrenceScore,
     report: &OccurrenceReport,
     names: &birdnet_core::i18n::NameLocalizer,
+    may_manage: bool,
 ) -> String {
     let verdict = Verdict::of(score, report.threshold);
     let (pill, pill_class) = if verdict.is_admitted() {
@@ -341,13 +356,103 @@ fn answer_card(
   <div class="occ-card-head"><h3 class="occ-name">{name}</h3><span class="{pill_class}">{pill}</span></div>
   <p class="bnb-meta occ-sci"><i>{sci}</i></p>
   <p class="occ-why">{why}</p>
-  <dl class="occ-facts"><div><dt>Range model, this week</dt><dd>{chance}</dd></div><div><dt>Station admits at</dt><dd>{threshold}</dd></div></dl>
+  <dl class="occ-facts"><div><dt>Range model, this week</dt><dd>{chance}</dd></div><div><dt>Station admits at</dt><dd>{threshold}</dd></div></dl>{allow}
 </article>"#,
         name = escape_html(names.name(&score.scientific_name, &score.common_name)),
         sci = escape_html(&score.scientific_name),
         why = escape_html(&sentence(score, report)),
         chance = percent_text(score.probability),
         threshold = percent_text(report.threshold),
+        allow = allow_link(score, report, names, may_manage),
+    )
+}
+
+/// Whether anyone who reaches this station may change its species lists: it has no admin
+/// password, so its owner never signs in. Blocking (it reads the accounts table).
+fn open_station(state: &AppState) -> bool {
+    !crate::auth_middleware::admin_password_configured(state)
+}
+
+/// A link to the Always allowed list on the Capture tab with this species filled in, where that
+/// list is the answer: a bird the range model holds back (the list does not override the include
+/// and exclude lists, so it is not offered for a bird they keep out). Only for a reader who can
+/// change the list. A link and not a button: the change is made on the page that says what the
+/// list does and lets it be undone (UIR-37).
+fn allow_link(
+    score: &birdnet_core::inference::species_filter::OccurrenceScore,
+    report: &OccurrenceReport,
+    names: &birdnet_core::i18n::NameLocalizer,
+    may_manage: bool,
+) -> String {
+    if !may_manage || Verdict::of(score, report.threshold) != Verdict::HeldBackByRange {
+        return String::new();
+    }
+    format!(
+        r#"
+  <p class="occ-allow"><a href="/station/capture?allow={}#species">Let {} in anyway: add it to the Always allowed list →</a></p>"#,
+        simple_url_encode(&score.scientific_name),
+        escape_html(names.name(&score.scientific_name, &score.common_name)),
+    )
+}
+
+/// The range filter's score for one species this week, by common or scientific name, and the
+/// report it is from; `None` where the filter cannot answer or does not score the species.
+///
+/// Blocking (it may run the model): call it from `run_blocking`.
+fn score_for(
+    state: &AppState,
+    name: &str,
+) -> Option<(
+    birdnet_core::inference::species_filter::OccurrenceScore,
+    std::sync::Arc<OccurrenceReport>,
+)> {
+    let source = state.occurrence_source()?;
+    let report = source
+        .report(crate::routes::species::current_model_week())
+        .ok()?;
+    let wanted = name.trim().to_lowercase();
+    let score = report
+        .species
+        .iter()
+        .find(|s| {
+            s.common_name.to_lowercase() == wanted || s.scientific_name.to_lowercase() == wanted
+        })?
+        .clone();
+    Some((score, report))
+}
+
+/// The panel a species page is for a bird this station has no record of: that it has not been
+/// heard, said once, with the range filter's answer for this week where the filter scores it,
+/// and the way to the Always allowed list where that is the answer (UIR-26). Where the filter
+/// cannot say, the panel claims nothing about why.
+///
+/// Blocking (it may run the model and reads the accounts table): call it from `run_blocking`.
+pub fn unheard_panel(state: &AppState, name: &str, signed_in: bool, shown: &str) -> String {
+    let names = state.names_handle();
+    let may_manage = signed_in || open_station(state);
+    let answer = score_for(state, name).map_or_else(
+        || {
+            format!(
+                r#"<p class="bnb-meta">The range filter has no answer for it this week: see <a href="{PATH}?q={}">why a bird is not heard here</a>.</p>"#,
+                simple_url_encode(name)
+            )
+        },
+        |(score, report)| {
+            format!(
+                r#"<p class="occ-why">{why} <a href="{PATH}?q={q}">How the range filter decides</a>.</p>{allow}"#,
+                why = escape_html(&sentence(&score, &report)),
+                allow = allow_link(&score, &report, &names, may_manage),
+                q = simple_url_encode(&score.scientific_name),
+            )
+        },
+    );
+    format!(
+        r#"<section class="bnb-card pad sd-unheard" aria-labelledby="sd-unheard-h">
+  <h2 class="sh-h" id="sd-unheard-h">Not heard here yet</h2>
+  <p class="sd-unheard-lede">This station has no detection of {}.</p>
+  {answer}
+</section>"#,
+        escape_html(shown)
     )
 }
 
@@ -469,19 +574,10 @@ fn admitted_list(
 ///
 /// Blocking (it may run the model): call it from `run_blocking`.
 pub fn held_back_pill(state: &AppState, common_name: &str) -> String {
-    let Some(source) = state.occurrence_source() else {
+    let Some((score, report)) = score_for(state, common_name) else {
         return String::new();
     };
-    let Ok(report) = source.report(crate::routes::species::current_model_week()) else {
-        return String::new();
-    };
-    let wanted = common_name.trim().to_lowercase();
-    let Some(score) = report.species.iter().find(|s| {
-        s.common_name.to_lowercase() == wanted || s.scientific_name.to_lowercase() == wanted
-    }) else {
-        return String::new();
-    };
-    if Verdict::of(score, report.threshold).is_admitted() {
+    if Verdict::of(&score, report.threshold).is_admitted() {
         return String::new();
     }
     format!(

@@ -722,13 +722,15 @@ pub fn configured_species_lists(
 /// Shared with the Station **Capture** tab
 /// (`crate::routes::pages::homes::station_tabs`), which renders the same
 /// include/exclude UI in the main shell.
-pub(crate) fn species_body(state: &AppState) -> String {
+/// `whitelist_prefill` fills the Always allowed field (a name the caller has validated).
+pub(crate) fn species_body(state: &AppState, whitelist_prefill: Option<&str>) -> String {
     match try_species_lists(state) {
-        Ok(lists) => super::render::species_lists_body(
+        Ok(lists) => super::render::species_lists_body_filled(
             &lists.exclude,
             &lists.include,
             &lists.whitelist,
             state.names(),
+            whitelist_prefill,
         ),
         Err(e) => {
             tracing::warn!(error = %e, "species lists could not be read");

@@ -3858,6 +3858,8 @@ a.spp-inherit    { color: inherit; }
 .occ-facts div { display: flex; flex-direction: column; gap: var(--space-2); }
 .occ-facts dt { font-size: var(--fs-xs); letter-spacing: var(--track-caps); text-transform: uppercase; color: var(--fg-3); }
 .occ-facts dd { margin: 0; font-variant-numeric: tabular-nums; font-size: var(--fs-lg); }
+/* The way from "Held back" to the Always allowed list, for whoever can change it (UIR-37). */
+.occ-allow { margin: var(--space-10) 0 0; }
 .occ-count { margin: 0; }
 /* Name and number a column apart read as two lists; columns keep each pair
    together and use the width a desktop has. */

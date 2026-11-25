@@ -82,20 +82,47 @@ fn page(content: &str, headers: &HeaderMap) -> Html<String> {
 // Capture · "what am I recording?"
 // ───────────────────────────────────────────────────────────────────────────
 
+/// `?allow=` on the Capture tab: a bird's name to fill into the Always allowed field, from the
+/// range filter's "Held back" answer (UIR-37).
+#[derive(serde::Deserialize)]
+struct CaptureQuery {
+    allow: Option<String>,
+}
+
+/// The name a link may put into the Always allowed field: letters, spaces and the marks bird
+/// names use (hyphen, apostrophe, full stop), at most 80 characters. Anything else is not filled
+/// in at all, rather than filled in escaped: nothing a link carries should reach the form unless
+/// it could be a name.
+fn allow_prefill(raw: Option<&str>) -> Option<String> {
+    let name = raw?.trim();
+    let is_name = !name.is_empty()
+        && name.chars().count() <= 80
+        && name
+            .chars()
+            .all(|c| c.is_alphabetic() || matches!(c, ' ' | '-' | '\'' | '’' | '.'));
+    is_name.then(|| name.to_owned())
+}
+
 async fn capture_page(
     State(state): State<AppState>,
     user: crate::auth_middleware::RequestUser,
+    axum::extract::Query(q): axum::extract::Query<CaptureQuery>,
     headers: HeaderMap,
 ) -> Html<String> {
+    let allow = allow_prefill(q.allow.as_deref());
     let content = built(
         "capture",
         "the Capture tab",
-        tokio::task::spawn_blocking(move || build_capture(&state, &user)).await,
+        tokio::task::spawn_blocking(move || build_capture(&state, &user, allow.as_deref())).await,
     );
     page(&content, &headers)
 }
 
-fn build_capture(state: &AppState, user: &crate::auth_middleware::RequestUser) -> String {
+fn build_capture(
+    state: &AppState,
+    user: &crate::auth_middleware::RequestUser,
+    allow: Option<&str>,
+) -> String {
     let settings = crate::routes::admin::settings::handler::load_settings_for(state, Some(user));
     let section_form = |sections: &[Section]| {
         settings.as_ref().map_or_else(
@@ -120,7 +147,7 @@ fn build_capture(state: &AppState, user: &crate::auth_middleware::RequestUser) -
         classifier = crate::routes::admin::classifier::host_html(state, user.is_admin()),
         sources = crate::routes::admin::audio::sources_body(state, user.is_admin()),
         folder_note = crate::watch_folder::capture_note(state.watch_dir().as_deref()),
-        species = crate::routes::admin::species::handler::species_body(state),
+        species = crate::routes::admin::species::handler::species_body(state, allow),
         settings_css = SETTINGS_FORM_CSS,
         form = section_form(&[
             Section::Audio,
@@ -365,7 +392,7 @@ mod tests {
     #[test]
     fn capture_folds_sources_species_and_the_detection_threshold() {
         let state = test_state();
-        let html = build_capture(&state, &admin(&state));
+        let html = build_capture(&state, &admin(&state), None);
         assert!(html.contains(r#"class="bnb-subtab active""#));
         assert!(html.contains(r#"href="/station/capture""#));
         // The detection threshold's single canonical home is here.
