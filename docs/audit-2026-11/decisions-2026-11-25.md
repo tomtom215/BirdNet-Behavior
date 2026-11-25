@@ -81,6 +81,26 @@ multiple of the step, or corroboration on. So, in order:
    length of the overlap from the previous file on disk, guarded by the clip extractor's existing "these two
    files join" check, falling back to per file.
 
+**Step 1 shipped and step 2 measured, 2026-11-25** (`d011dbc`, `b59b837`; the probe was a scratch test and is
+not in the tree). BirdNET V2.4 FP32 (sha256 equal to the catalogue pin), threshold 0.70, sensitivity 1.25, one
+1.2 s magpie call from `Pica_pica_30s.wav` placed at 300 positions 0.1 s apart across a 45 s stream, analysed as
+three 15 s files and as one file. No species, occurrence, privacy or corroboration filter was applied.
+
+| Call | Overlap | Lost within 1.5 s of a seam, per file / continuous (of 62) | Lost elsewhere (of 238) | Positions that differ |
+|---|---|---|---|---|
+| full strength, on the recording's own background | 0 | 0 / 0 | 0 / 0 | 0 |
+| full strength | 1.5 | 0 / 0 (lowest score 0.844 / 0.881) | 0 / 0 | 32 |
+| full strength | 2.0 | 0 / 0 (lowest score 0.844 / 0.895) | 0 / 0 | 45 |
+| weak (0.2 of the clip added to the background; 0.765 centred alone) | 0 | 22 / 22 | 88 / 88 | 0 |
+| weak | 1.5 | 18 / 12 | 49 / 48 | 27 |
+| weak | 2.0 | 15 / 6 | 23 / 24 | 44 |
+
+The prediction was not falsified: at overlap 0 the two are the same at every position, and with overlap the
+per-file analysis loses more only at the seam. This is one clip, and the weak call's level was chosen to sit
+near the threshold, so the table shows the mechanism and is not a recall figure. It supports the decision:
+nothing to gain at the defaults, and a real cost at the seam for a station that sets an overlap, which is what
+step 3's opt-in would address. Step 3 is not started.
+
 **Against it:** a code path whose benefit exists only off the defaults, resting on whole-second file stamps.
 **Unmeasured:** how often the join check refuses a real join, and the Pi cost.
 
