@@ -11,6 +11,9 @@
 //      fill (1.4.3), the key's text 4.5:1 on the card, and the three tiers
 //      are told apart from each other. The scale never uses the alert hue.
 //   2. Chart palette (`--chart-*`): see the second half of this file.
+//   3. The retention heat table (Patterns › Visits): each step's cell is filled,
+//      with the colour of its swatch in the key, and its percentage reads at
+//      4.5:1 on that fill, in both themes (UIR-03).
 //
 // Usage:  BASE=http://127.0.0.1:8611 CHROMIUM_PATH=... node tokens.mjs
 //         MUTATE='--conf-low=oklch(68% 0.12 60)' node tokens.mjs   (self-test:
@@ -337,6 +340,60 @@ for (const theme of ['light', 'dark']) {
   // A gate that found no field graded nothing.
   if (graded < 5) { failures.push(`${theme}: only ${graded} placeholder style(s) found on the fixture's pages`); rows.push(`FAIL  ${theme} placeholders found: ${graded}`); }
   await ctx4.close();
+
+  // The retention table (Patterns › Visits, "Who keeps coming back") is a heat table: each
+  // cell is filled from the seven-step moss key drawn under it. `.rt-table td { background:
+  // none }` (0,1,1) beat `.rt-cell { background: var(--c) }` (0,1,0), so every cell painted
+  // transparent under a key for a colour scale nothing used (UIR-03). Graded as painted:
+  // each step's cell fill is not transparent, is the colour of its own swatch in the key,
+  // and the percentage written on it reads at 4.5:1 (1.4.3) on that fill.
+  const ctx5 = await browser.newContext({ viewport: { width: 1280, height: 900 }, colorScheme: theme });
+  await ctx5.addInitScript((t) => { try { localStorage.setItem('theme', t); } catch (e) {} }, theme);
+  const p5 = await ctx5.newPage();
+  await p5.goto(`${BASE}/patterns?tab=behavior`, { waitUntil: 'domcontentloaded' });
+  await p5.waitForSelector('td.rt-cell', { timeout: 15000 }).catch(() => {});
+  await resolver(p5);
+  const rt = await p5.evaluate(() => {
+    const opaqueUnder = (el) => {
+      for (let n = el.parentElement; n; n = n.parentElement) {
+        const b = getComputedStyle(n).backgroundColor;
+        if (b && b !== 'transparent' && !/rgba\(.*,\s*0\)$/.test(b)) return b;
+      }
+      return getComputedStyle(document.body).backgroundColor;
+    };
+    const steps = {};
+    for (const td of document.querySelectorAll('td.rt-cell')) {
+      const m = [...td.classList].find((c) => /^ck-m\d$/.test(c));
+      if (!m || steps[m]) continue;
+      const cs = getComputedStyle(td);
+      const sw = document.querySelector(`.rt-key .ck-sw.${m}`);
+      steps[m] = {
+        bg: cs.backgroundColor,
+        fg: cs.color,
+        under: opaqueUnder(td),
+        swatch: sw ? getComputedStyle(sw).backgroundColor : null,
+        text: td.textContent.trim(),
+      };
+    }
+    return steps;
+  });
+  const alphaOf = (css) => { const m = /rgba?\(([^)]*)\)/.exec(css); if (!m) return 1; const p = m[1].split(/[\s,/]+/).filter(Boolean); return p.length > 3 ? parseFloat(p[3]) : 1; };
+  if (!rt['ck-m7']) { failures.push(`${theme}: no .rt-cell.ck-m7 on /patterns?tab=behavior, so the retention fill was not graded`); rows.push(`FAIL  ${theme} retention: no ck-m7 cell found`); }
+  for (const [step, c] of Object.entries(rt).sort()) {
+    const painted = alphaOf(c.bg) > 0.5;
+    rows.push(`${painted ? 'PASS' : 'FAIL'}  ${`${theme} retention ${step} cell is filled`.padEnd(58)} ${c.bg}`);
+    if (!painted) { failures.push(`${theme}: retention cell .rt-cell.${step} ("${c.text}") paints ${c.bg}, the key says it is filled`); continue; }
+    const under = await rgbOn(p5, c.under);
+    const fill = await over(c.bg, under, p5);
+    if (c.swatch) {
+      const sw = await over(c.swatch, under, p5);
+      const d = Math.hypot(...fill.map((v, i) => v - sw[i]));
+      rows.push(`${d <= 3 ? 'PASS' : 'FAIL'}  ${`${theme} retention ${step} cell is its key swatch`.padEnd(58)} sRGB distance ${d.toFixed(0)} (<= 3)`);
+      if (d > 3) failures.push(`${theme}: retention cell ${step} is rgb(${fill}), its key swatch rgb(${sw})`);
+    }
+    check(`${theme} retention ${step} text on its fill (1.4.3)`, contrast(await over(c.fg, fill, p5), fill), 4.5, `"${c.text}"`);
+  }
+  await ctx5.close();
 }
 
 await browser.close();

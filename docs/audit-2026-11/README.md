@@ -41,6 +41,7 @@ RTSP streams.
 | `06-ui-code-charts-ia.md` | Routes, charts, copy, states | UIC |
 | `07-research-grade.md` | Provenance, effort, verification, exports | RES |
 | `08-existing-backlog-reconciled.md` | The older backlogs, re-checked | (table rows) |
+| `09-chart-review.md` | Every chart: keep, refine, rebuild, replace or remove; missing figures; rendering technology; methods from ornithology (added 2026-11-24, from reading code, nothing rendered) | CHT |
 | `work-packages.md` | Every finding, grouped into work packages | generated |
 | `checklist.json` | The same, machine-readable, with a `status` field | generated |
 

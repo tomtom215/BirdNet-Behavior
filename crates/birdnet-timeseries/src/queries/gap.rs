@@ -64,16 +64,23 @@ ORDER BY gap_start"
     }
 }
 
-/// Days with fewer than N detections (quiet days).
+/// Days the station listened to and heard at most N detections (quiet days).
 ///
-/// Useful for identifying equipment outages, bad weather or genuine
-/// low-activity periods.
+/// A day the station did not listen to is not a quiet day: it is left out,
+/// judged by the `recording_effort` ledger as the trend queries judge a day
+/// ([`super::trend::EFFORT_FLOOR_SHARE`] of the station's typical day; a day
+/// the ledger says nothing about counts as listened). An outage used to be
+/// returned here as a run of zero-detection days; outages are the ledger's to
+/// report, not this query's (RES-14).
 #[derive(Debug, Clone)]
 pub struct QuietDays {
     /// Maximum detections threshold (days at or below this are returned; default: 5).
     pub max_detections: u32,
     /// Look back this many days (default: 90).
     pub lookback_days: u32,
+    /// Whether the store has a `recording_effort` table to read. `false`
+    /// judges every day as listened; the executor sets it from the catalog.
+    pub has_effort_ledger: bool,
 }
 
 impl Default for QuietDays {
@@ -81,6 +88,7 @@ impl Default for QuietDays {
         Self {
             max_detections: 5,
             lookback_days: 90,
+            has_effort_ledger: false,
         }
     }
 }
@@ -89,8 +97,12 @@ impl QueryPlan for QuietDays {
     fn sql(&self) -> String {
         let max_d = self.max_detections;
         let days = self.lookback_days;
+        let effort = super::trend::effort_ctes(self.has_effort_ledger);
+        let seconds = super::trend::effort_seconds("s.detection_date");
+        let listened = super::trend::listened(&seconds, "l.typical");
         format!(
-            "WITH counts AS (
+            "WITH {effort}
+counts AS (
     SELECT detection_date, COUNT(*) AS n, COUNT(DISTINCT Com_Name) AS species
     FROM detections_ts
     WHERE detection_date >= CURRENT_DATE - INTERVAL {days} DAYS
@@ -109,8 +121,12 @@ SELECT
     strftime(s.detection_date, '%Y-%m-%d') AS date,
     COALESCE(c.n, 0)       AS detection_count,
     COALESCE(c.species, 0) AS species_count
-FROM spine s LEFT JOIN counts c USING (detection_date)
+FROM spine s
+LEFT JOIN counts c USING (detection_date)
+LEFT JOIN effort e ON e.day = s.detection_date
+CROSS JOIN ledger l
 WHERE COALESCE(c.n, 0) <= {max_d}
+  AND {listened}
 ORDER BY s.detection_date"
         )
     }
@@ -259,6 +275,7 @@ mod tests {
         let q = QuietDays {
             max_detections: 3,
             lookback_days: 14,
+            has_effort_ledger: false,
         };
         let sql = q.sql();
         // Against the zero-filled count, so a silent day qualifies (ANA13).

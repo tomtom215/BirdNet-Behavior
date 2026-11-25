@@ -34,6 +34,12 @@
 //! cannot be told, so [`list`] returns it on each of them, and
 //! [`DetectionComment::file_name`] being `None` is what a reader shows as
 //! "may be about another source's detection".
+//!
+//! When a detection is relabelled its comments follow it (migration 65, the
+//! `detections_relabel_carries_comments` trigger): a comment is about what was
+//! heard in the clip, and is often why it was relabelled. `sci_name` is the
+//! one column a comment's row may change, and only to the name a detection at
+//! its date, time and clip now has; a legacy comment with no clip is not moved.
 
 use std::fmt;
 

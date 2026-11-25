@@ -17,11 +17,11 @@
 //! one model run and one decision function with the `filter_species` the daemon
 //! calls (`the_scores_an_operator_is_shown_are_the_decision_the_station_makes`
 //! holds that on the real models), so the answer is the station's own decision,
-//! not a second opinion — for the primary classifier's species. It is built
-//! from the primary's labels alone, so species only another classifier knows
-//! are not in it, and an include list naming only such species, which the
-//! daemon applies to the primary too (MMP-03), is read here as matching
-//! nothing and ignored (MMP-25).
+//! not a second opinion. It is told every classifier the station runs, as the
+//! daemon's filter is (`know_vocabulary`): each other classifier's species
+//! are listed with the verdict `filter_species_of` gives them, and an include
+//! list naming only such species binds on the primary here as it does in the
+//! daemon (MMP-03, MMP-25).
 //!
 //! The alternative — sharing the daemon's filter behind a lock — would put a
 //! mutex into the per-file hot path of the detection loop for the sake of a
@@ -84,6 +84,8 @@ enum Load {
     Ready {
         filter: Box<SpeciesFilter>,
         classifier: Arc<LabelSet>,
+        /// The other classifiers' ids, as the filter knows them.
+        others: Vec<String>,
     },
     Failed(String),
 }
@@ -96,6 +98,10 @@ pub(super) struct DaemonOccurrence {
     model: Option<RangeModelFiles>,
     /// The classifier's label file: the vocabulary the model is aligned to.
     classifier_labels: PathBuf,
+    /// The primary classifier's id, as the daemon registers it.
+    primary_id: String,
+    /// Every other classifier's id and label file.
+    other_classifiers: Vec<(String, PathBuf)>,
     /// The daemon's own filter configuration (threshold and the lists as of
     /// start).
     config: SpeciesFilterConfig,
@@ -130,12 +136,26 @@ impl DaemonOccurrence {
             location,
             model,
             classifier_labels,
+            primary_id: String::new(),
+            other_classifiers: Vec::new(),
             config,
             lists,
             keep_for: KEEP_FOR,
             load: Mutex::new(Load::NotTried),
             kept: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The same source, told every classifier the station runs: the primary's
+    /// id, and each other classifier's id and label file.
+    pub(super) fn with_classifiers(
+        mut self,
+        primary_id: &str,
+        others: Vec<(String, PathBuf)>,
+    ) -> Self {
+        primary_id.clone_into(&mut self.primary_id);
+        self.other_classifiers = others;
+        self
     }
 
     /// The same source, reusing an answer for `keep_for` instead of
@@ -163,6 +183,14 @@ impl DaemonOccurrence {
             .map_or_else(HashMap::new, |text| {
                 birdnet_core::inference::vocabulary::parse_alias_file(&text).0
             });
+        // Every other classifier's labels, read as the registry reads them.
+        let mut others = Vec::with_capacity(self.other_classifiers.len());
+        for (id, path) in &self.other_classifiers {
+            match LabelSet::load(path) {
+                Ok(labels) => others.push((id.clone(), labels)),
+                Err(e) => return Load::Failed(format!("labels of classifier `{id}`: {e}")),
+            }
+        }
         match SpeciesFilter::load_with_vocabulary(
             &files.model,
             meta,
@@ -170,10 +198,20 @@ impl DaemonOccurrence {
             &aliases,
             self.config.clone(),
         ) {
-            Ok(filter) => Load::Ready {
-                filter: Box::new(filter),
-                classifier,
-            },
+            Ok(mut filter) => {
+                // Told about every classifier, as the daemon's filter is on
+                // its first file: an include list is then read against the
+                // whole station, and the others' species can be scored.
+                filter.know_vocabulary(&self.primary_id, &classifier);
+                for (id, labels) in &others {
+                    filter.know_vocabulary(id, labels);
+                }
+                Load::Ready {
+                    filter: Box::new(filter),
+                    classifier,
+                    others: others.into_iter().map(|(id, _)| id).collect(),
+                }
+            }
             Err(e) => Load::Failed(e.to_string()),
         }
     }
@@ -204,18 +242,44 @@ impl OccurrenceSource for DaemonOccurrence {
         if matches!(*load, Load::NotTried) {
             *load = self.load(files);
         }
-        let (filter, classifier) = match &mut *load {
-            Load::Ready { filter, classifier } => (filter, Arc::clone(classifier)),
+        let (filter, classifier, others) = match &mut *load {
+            Load::Ready {
+                filter,
+                classifier,
+                others,
+            } => (filter, Arc::clone(classifier), others.clone()),
             Load::Failed(why) => return Err(Unavailable::Failed(why.clone())),
             Load::NotTried => return Err(Unavailable::NoModel),
         };
         // The lists as they are now, as the daemon's loop re-reads them.
         filter.set_lists(self.lists.get());
-        let scores = filter
+        let mut scores = filter
             .occurrence_scores(location, week, &classifier)
             .map_err(|e| Unavailable::Failed(e.to_string()))?
             .ok_or(Unavailable::NoModel)?;
+        // Each other classifier's species the primary does not know, with the
+        // verdict the daemon gives them (MMP-25). A species two classifiers
+        // share is listed once, under the primary's names.
+        for id in &others {
+            let theirs = filter
+                .occurrence_scores_of(id, location, week)
+                .map_err(|e| Unavailable::Failed(e.to_string()))?
+                .unwrap_or_default();
+            for score in theirs {
+                if !scores
+                    .iter()
+                    .any(|s| s.scientific_name == score.scientific_name)
+                {
+                    scores.push(score);
+                }
+            }
+        }
         drop(load);
+        scores.sort_by(|a, b| {
+            b.probability
+                .total_cmp(&a.probability)
+                .then_with(|| a.scientific_name.cmp(&b.scientific_name))
+        });
 
         let report = Arc::new(OccurrenceReport {
             latitude: location.0,
@@ -646,6 +710,115 @@ mod tests {
             first,
             "the load was tried again"
         );
+    }
+
+    // ── more than one classifier (MMP-25) ──────────────────────────────
+
+    /// The 291-byte geomodel whose scores are fixed whatever the place and
+    /// week: `sigmoid` of 2.2, -2.2, 1.4, -3.0 and 0.85 for its five species
+    /// in the order of [`TINY_META_LABELS`], so at a threshold of 0.5 the
+    /// magpie, the raven and the robin pass.
+    const TINY_META: &[u8] =
+        include_bytes!("../../crates/birdnet-core/src/testdata/tiny_meta_test.onnx");
+    const TINY_META_LABELS: &str = "Pica pica_Eurasian Magpie\nParus major_Great Tit\n\
+        Corvus corax_Common Raven\nTurdus merula_Eurasian Blackbird\n\
+        Erithacus rubecula_European Robin\n";
+    /// The primary classifier's species.
+    const PRIMARY_LABELS: &str = "Turdus merula_Eurasian Blackbird\n\
+        Erithacus rubecula_European Robin\nParus major_Great Tit\nHomo sapiens_Human\n";
+    /// A second classifier's: two species the primary does not know.
+    const SECOND_LABELS: &str = "Pica pica_Eurasian Magpie\nCorvus corax_Common Raven\n";
+
+    /// A source on the tiny geomodel, with the lists given, for a station
+    /// that runs the primary alone (`second` false) or a second classifier
+    /// beside it, as the binary installs it.
+    fn tiny(dir: &std::path::Path, include: &[&str], second: bool) -> DaemonOccurrence {
+        let write = |name: &str, bytes: &[u8]| {
+            let path = dir.join(name);
+            std::fs::write(&path, bytes).expect("write fixture");
+            path
+        };
+        let include: Vec<String> = include.iter().map(|s| (*s).to_owned()).collect();
+        let source = DaemonOccurrence::new(
+            Some(BERLIN),
+            Some(RangeModelFiles {
+                model: write("meta.onnx", TINY_META),
+                labels: Some(write("meta_labels.txt", TINY_META_LABELS.as_bytes())),
+                aliases: None,
+            }),
+            write("primary.txt", PRIMARY_LABELS.as_bytes()),
+            SpeciesFilterConfig {
+                sf_thresh: 0.5,
+                ..SpeciesFilterConfig::default()
+            },
+            SpeciesListsProvider::new(move || SpeciesLists {
+                include: include.clone(),
+                ..SpeciesLists::default()
+            }),
+        );
+        let others = if second {
+            vec![(
+                "second".to_owned(),
+                write("second.txt", SECOND_LABELS.as_bytes()),
+            )]
+        } else {
+            Vec::new()
+        };
+        source.with_classifiers("birdnet", others)
+    }
+
+    /// Each species the report lists, with its verdict, sorted by name.
+    fn verdicts(report: &OccurrenceReport) -> Vec<(String, bool)> {
+        let mut out: Vec<_> = report
+            .species
+            .iter()
+            .map(|s| (s.scientific_name.clone(), s.admitted))
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// MMP-25: with a second classifier, the page answers for its species too,
+    /// and an include list naming only one of them binds on the primary, as it
+    /// does in the daemon (MMP-03): the robin, which the primary would admit
+    /// on its score, is held back by the list, and the raven is admitted.
+    #[test]
+    fn a_second_classifiers_species_are_explained_and_its_include_list_binds() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let report = tiny(dir.path(), &["Corvus corax"], true)
+            .report(JUNE)
+            .expect("the tiny geomodel answers");
+        assert_eq!(
+            verdicts(&report),
+            [
+                ("Corvus corax".to_owned(), true),
+                ("Erithacus rubecula".to_owned(), false),
+                ("Parus major".to_owned(), false),
+                ("Pica pica".to_owned(), false),
+                ("Turdus merula".to_owned(), false),
+            ],
+            "what the page says is not what the station decides"
+        );
+    }
+
+    /// The counterpart: a station that runs the primary alone is answered as
+    /// before. Its species only, the threshold's verdict on them, and an
+    /// include list naming no species it can emit read as a typo and ignored,
+    /// which is what the daemon does on that station.
+    #[test]
+    fn a_primary_only_station_is_explained_as_before() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let expected = [
+            ("Erithacus rubecula".to_owned(), true),
+            ("Parus major".to_owned(), false),
+            ("Turdus merula".to_owned(), false),
+        ];
+        for include in [&[][..], &["Corvus corax"][..]] {
+            let report = tiny(dir.path(), include, false)
+                .report(JUNE)
+                .expect("the tiny geomodel answers");
+            assert_eq!(verdicts(&report), expected, "include {include:?}");
+        }
     }
 
     /// Each way of not being able to answer is its own answer, and "no model"

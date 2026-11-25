@@ -244,7 +244,9 @@ mod tests {
     fn the_stored_trigger_is_the_one_selected() {
         for (stored, row) in [
             ("each", "each"),
-            ("", "each"),
+            // N14-01: a value that names no rule runs on the default mode, so
+            // that is the row shown. It used to be "each".
+            ("", "new-species"),
             ("new_species", "new-species"),
             ("new-species-daily", "new-species-daily"),
             (

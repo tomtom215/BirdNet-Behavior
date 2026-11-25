@@ -1544,10 +1544,12 @@ impl AppState {
                     confidence: row.confidence,
                     lat: row.lat,
                     lon: row.lon,
-                    cutoff: None,
+                    // What `approve_quarantine` copies into SQLite, so the
+                    // two stores hold the same row (N06-01).
+                    cutoff: row.cutoff,
                     week: row.week,
-                    sens: None,
-                    overlap: None,
+                    sens: row.sensitivity,
+                    overlap: row.overlap,
                     file_name: row.file_name.as_deref().unwrap_or(""),
                     // A quarantined row is back-dated: it carries the wall
                     // clock of when it was *heard*, which may be days ago and
@@ -1557,10 +1559,10 @@ impl AppState {
                     // side — rather than from the offset in force now.
                     detected_at_utc: instant,
                     run_id: row.run_id,
-                    // `approve_quarantine` writes no `Source` (the quarantine
-                    // table has none), so neither does the mirror: the two
-                    // stores agree on NULL.
-                    source: None,
+                    // The source `approve_quarantine` copies (migration 61);
+                    // NULL for a row quarantined before it was recorded, in
+                    // both stores.
+                    source: row.source.as_deref(),
                 })
             })
         {
@@ -1619,17 +1621,42 @@ impl AppState {
         status: birdnet_db::sqlite::ReviewStatus,
         notes: Option<&str>,
     ) -> Result<ReviewOutcome, birdnet_db::sqlite::DbError> {
+        self.set_detection_review_by(
+            row,
+            com_name,
+            status,
+            notes,
+            &birdnet_db::sqlite::Reviewer::UNATTRIBUTED,
+        )
+    }
+
+    /// [`Self::set_detection_review`], recording `reviewer` against the
+    /// verdict in the review history (`review_events`), which outlives the
+    /// audit log.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::set_detection_review`].
+    pub fn set_detection_review_by(
+        &self,
+        row: &RowRef,
+        com_name: &str,
+        status: birdnet_db::sqlite::ReviewStatus,
+        notes: Option<&str>,
+        reviewer: &birdnet_db::sqlite::Reviewer<'_>,
+    ) -> Result<ReviewOutcome, birdnet_db::sqlite::DbError> {
         let target = self.with_db(|conn| -> Result<_, birdnet_db::sqlite::DbError> {
             let clip = match review_clip(conn, row)? {
                 Ok(clip) => clip,
                 Err(refused) => return Ok(Err(refused)),
             };
-            let recorded = birdnet_db::sqlite::set_detection_review(
+            let recorded = birdnet_db::sqlite::set_detection_review_by(
                 conn,
                 &row.key_with(clip.as_deref()),
                 com_name,
                 status,
                 notes,
+                reviewer,
             )?;
             Ok(if recorded {
                 Ok(clip)
@@ -1670,12 +1697,30 @@ impl AppState {
         &self,
         row: &RowRef,
     ) -> Result<ReviewOutcome, birdnet_db::sqlite::DbError> {
+        self.clear_detection_review_by(row, &birdnet_db::sqlite::Reviewer::UNATTRIBUTED)
+    }
+
+    /// [`Self::clear_detection_review`], recording who withdrew the verdict
+    /// in the review history.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::clear_detection_review`].
+    pub fn clear_detection_review_by(
+        &self,
+        row: &RowRef,
+        reviewer: &birdnet_db::sqlite::Reviewer<'_>,
+    ) -> Result<ReviewOutcome, birdnet_db::sqlite::DbError> {
         let target = self.with_db(|conn| -> Result<_, birdnet_db::sqlite::DbError> {
             let clip = match review_clip(conn, row)? {
                 Ok(clip) => clip,
                 Err(refused) => return Ok(Err(refused)),
             };
-            birdnet_db::sqlite::clear_detection_review(conn, &row.key_with(clip.as_deref()))?;
+            birdnet_db::sqlite::clear_detection_review_by(
+                conn,
+                &row.key_with(clip.as_deref()),
+                reviewer,
+            )?;
             Ok(Ok(clip))
         })?;
         let clip = match target {

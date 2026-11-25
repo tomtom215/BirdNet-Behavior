@@ -257,8 +257,8 @@ pub struct TriggerSet {
 /// Notification trigger modes controlling when notifications are sent.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TriggerMode {
-    /// Send on every detection. Also what an unrecognised word parses as; the
-    /// station's default when nothing is set is
+    /// Send on every detection. The station's default when nothing is set,
+    /// and what a value naming no rule falls back to, is
     /// `birdnet_core::config::DEFAULT_NOTIFY_TRIGGER` (`new-species`).
     EachDetection,
     /// Send when a species has fewer than 5 detections this week.
@@ -283,10 +283,23 @@ impl TriggerMode {
     ///
     /// Accepts one rule — `"each"`, `"new-species"`, `"new-species-daily"` —
     /// or several separated by commas (`"each,new-species"`), or `"off"` for
-    /// none. Unknown values fall back to `EachDetection`, as they always have;
-    /// in a list, a word that names no rule is skipped and the rest are used.
+    /// none. In a list, a word that names no rule is skipped and the rest are
+    /// used. A value with no word that names a rule (a typo, or nothing at
+    /// all) is the station's default,
+    /// [`birdnet_core::config::DEFAULT_NOTIFY_TRIGGER`]. It used to be
+    /// `EachDetection`, so a misspelt quiet mode became the chattiest one.
+    /// The caller reports such words: see
+    /// [`birdnet_core::config::validate::unknown_trigger_words`].
     #[must_use]
     pub fn parse(s: &str) -> Self {
+        Self::parse_words(s).unwrap_or_else(|| {
+            Self::parse_words(birdnet_core::config::DEFAULT_NOTIFY_TRIGGER)
+                .unwrap_or(Self::NewSpecies)
+        })
+    }
+
+    /// The mode `s` names, or `None` when no word in it names a rule.
+    fn parse_words(s: &str) -> Option<Self> {
         let mut set = TriggerSet::default();
         let mut recognised = false;
         for word in s.split([',', '+', ' ', ';']).filter(|w| !w.is_empty()) {
@@ -299,10 +312,7 @@ impl TriggerMode {
             }
             recognised = true;
         }
-        if !recognised {
-            return Self::EachDetection;
-        }
-        Self::from_set(set)
+        recognised.then(|| Self::from_set(set))
     }
 
     /// The mode for a set of rules, in its plainest form.
@@ -824,7 +834,21 @@ mod tests {
             TriggerMode::parse("new_species_daily"),
             TriggerMode::NewSpeciesDaily
         );
-        assert_eq!(TriggerMode::parse("unknown"), TriggerMode::EachDetection);
+        // N14-01: a word that names no rule was `EachDetection`; it is the
+        // station's default now (see the test above).
+        assert_eq!(TriggerMode::parse("unknown"), TriggerMode::NewSpecies);
+    }
+
+    /// N14-01: a word that names no rule is a typo, not a request for the
+    /// chattiest mode. It falls back to the station's documented default,
+    /// the one a station that sets nothing runs on.
+    #[test]
+    fn an_unrecognised_trigger_falls_back_to_the_default_not_each() {
+        let default = TriggerMode::parse(birdnet_core::config::DEFAULT_NOTIFY_TRIGGER);
+        assert_eq!(default, TriggerMode::NewSpecies);
+        for raw in ["unknown", "nw-species", "bogus,worse", "eech", ""] {
+            assert_eq!(TriggerMode::parse(raw), default, "{raw:?}");
+        }
     }
 
     /// A list of rules, in any order and spelling `parse` already took, is the
@@ -853,16 +877,13 @@ mod tests {
         // One rule named twice is still one rule, in its plain form.
         assert_eq!(TriggerMode::parse("each,each"), TriggerMode::EachDetection);
         // A word that is no rule is skipped among words that are; all unknown
-        // is the old fallback.
+        // is the station's default (N14-01: it was `EachDetection`).
         assert_eq!(
             TriggerMode::parse("new-species,bogus"),
             TriggerMode::NewSpecies
         );
-        assert_eq!(
-            TriggerMode::parse("bogus,worse"),
-            TriggerMode::EachDetection
-        );
-        assert_eq!(TriggerMode::parse(""), TriggerMode::EachDetection);
+        assert_eq!(TriggerMode::parse("bogus,worse"), TriggerMode::NewSpecies);
+        assert_eq!(TriggerMode::parse(""), TriggerMode::NewSpecies);
     }
 
     /// `off` is a real answer: `BirdNET-Pi` with all three switches at 0 sends

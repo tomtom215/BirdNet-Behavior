@@ -25,6 +25,16 @@
 //!    awaiting a verdict.
 //! 4. **Undo** — [`clear_detection_review`] removes a verdict.
 //!
+//! # History: who said what, and when
+//!
+//! `detection_reviews` holds a detection's **current** verdict, one row per
+//! detection. Every verdict given and every withdrawal is also appended to
+//! `review_events` (migration 64) with the reviewer's account and name, and
+//! that table is never rewritten and not pruned with the audit log
+//! ([`review_history`]). The current verdict is the latest event's: the write
+//! paths update both in one transaction. Callers with a signed-in person use
+//! the `_by` writers ([`set_detection_review_by`], [`clear_detection_review_by`]).
+//!
 //! # Verdicts attached to no detection: `detached`
 //!
 //! A verdict can outlive the detection it was about, and is kept, not
@@ -170,6 +180,88 @@ pub struct UnreviewedDetection {
     pub file_name: Option<String>,
 }
 
+/// Who gave a verdict, for the append-only history (`review_events`,
+/// migration 64).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reviewer<'a> {
+    /// The signed-in account, if there was one.
+    pub user_id: Option<i64>,
+    /// The account's name as it is now; kept as written, so the event stays
+    /// readable after the account is renamed or deleted. `None` for a path
+    /// with no person behind it (an API token, an import).
+    pub name: Option<&'a str>,
+    /// The path that wrote it: `review`, `detection`, `api`, `bulk`,
+    /// `quarantine`, or `unattributed`.
+    pub via: &'a str,
+}
+
+impl Reviewer<'static> {
+    /// A verdict written by a caller that names nobody (see
+    /// [`set_detection_review`]).
+    pub const UNATTRIBUTED: Self = Self {
+        user_id: None,
+        name: None,
+        via: "unattributed",
+    };
+}
+
+/// One verdict given or withdrawn, as the history records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReviewEvent {
+    /// Row id; the order events were written in.
+    pub id: i64,
+    /// Detection date (YYYY-MM-DD).
+    pub date: String,
+    /// Detection time (HH:MM:SS).
+    pub time: String,
+    /// The scientific name the detection had when the verdict was given.
+    pub sci_name: String,
+    /// The detection's clip; `""` for one with none.
+    pub file_name: String,
+    /// `confirmed` or `rejected`; `None` when the event withdrew the verdict.
+    pub verdict: Option<String>,
+    /// The reviewer's account id, if there was a signed-in account.
+    pub reviewer_user_id: Option<i64>,
+    /// The reviewer's name as it was when the verdict was given; `None` when
+    /// no person was named (an API token, or a verdict recorded before the
+    /// history existed, whose reviewer was never stored).
+    pub reviewer_name: Option<String>,
+    /// The path that wrote it (see [`Reviewer::via`]); `before-history` for a
+    /// verdict copied in by migration 64.
+    pub via: String,
+    /// The note given with the verdict, if any.
+    pub notes: Option<String>,
+    /// When, as `datetime('now')` (UTC, whole seconds).
+    pub at: String,
+}
+
+/// Append one event to the history, inside the caller's transaction.
+fn record_event(
+    tx: &Connection,
+    key: &DetectionKey<'_>,
+    verdict: Option<ReviewStatus>,
+    notes: Option<&str>,
+    reviewer: &Reviewer<'_>,
+) -> Result<(), DbError> {
+    tx.execute(
+        "INSERT INTO review_events
+            (date, time, sci_name, file_name, verdict, reviewer_user_id, reviewer_name, via, notes)
+         VALUES (?1, ?2, ?3, COALESCE(?4, ''), ?5, ?6, ?7, ?8, ?9)",
+        params![
+            key.date,
+            key.time,
+            key.sci_name,
+            key.file_name,
+            verdict.map(ReviewStatus::as_str),
+            reviewer.user_id,
+            reviewer.name,
+            reviewer.via,
+            notes
+        ],
+    )?;
+    Ok(())
+}
+
 /// The columns [`map_review`] reads, in its order.
 const REVIEW_COLS: &str =
     "id, date, time, sci_name, file_name, com_name, status, notes, reviewed_at, detached";
@@ -178,12 +270,10 @@ const REVIEW_COLS: &str =
 // Write operations
 // ---------------------------------------------------------------------------
 
-/// Record (or update) a verdict for the one detection `key` names. Idempotent:
-/// re-reviewing the same detection replaces the prior verdict via `ON CONFLICT`.
+/// [`set_detection_review_by`] for a caller that names no reviewer.
 ///
-/// Returns `false`, writing nothing, when no detection has that key: a verdict
-/// about nothing is not recorded, and a caller that holds a stale link is told
-/// so instead of being thanked.
+/// The event is recorded with no name and `via = 'unattributed'`. A path with a signed-in
+/// person behind it passes them to [`set_detection_review_by`] instead.
 ///
 /// # Errors
 ///
@@ -194,6 +284,31 @@ pub fn set_detection_review(
     com_name: &str,
     status: ReviewStatus,
     notes: Option<&str>,
+) -> Result<bool, DbError> {
+    set_detection_review_by(conn, key, com_name, status, notes, &Reviewer::UNATTRIBUTED)
+}
+
+/// Record a verdict for the one detection `key` names, by `reviewer`.
+///
+/// The verdict is appended to the history (`review_events`), and becomes the
+/// detection's current verdict: the latest one wins, so re-reviewing the same
+/// detection replaces the current verdict via `ON CONFLICT` and leaves the
+/// earlier one, and who gave it, in the history.
+///
+/// Returns `false`, writing nothing, when no detection has that key: a verdict
+/// about nothing is not recorded, and a caller that holds a stale link is told
+/// so instead of being thanked.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on write failure.
+pub fn set_detection_review_by(
+    conn: &Connection,
+    key: &DetectionKey<'_>,
+    com_name: &str,
+    status: ReviewStatus,
+    notes: Option<&str>,
+    reviewer: &Reviewer<'_>,
 ) -> Result<bool, DbError> {
     // One transaction: a verdict whose mirror failed would show as reviewed in
     // the queue while every analytic still counted the detection (DB8).
@@ -236,20 +351,47 @@ pub fn set_detection_review(
             notes
         ],
     )?;
+    record_event(&tx, key, Some(status), notes, reviewer)?;
     tx.commit()?;
     Ok(true)
 }
 
-/// Remove the verdict on the one detection `key` names, returning it to the
-/// unreviewed queue.
-///
-/// Returns `true` if there was a verdict, or a mirrored one, to remove.
+/// [`clear_detection_review_by`] for a caller that names no reviewer.
 ///
 /// # Errors
 ///
 /// Returns [`DbError`] on write failure.
 pub fn clear_detection_review(conn: &Connection, key: &DetectionKey<'_>) -> Result<bool, DbError> {
+    clear_detection_review_by(conn, key, &Reviewer::UNATTRIBUTED)
+}
+
+/// Withdraw the verdict on the one detection `key` names.
+///
+/// The detection returns to the unreviewed queue. The withdrawal is appended to the history (a
+/// `review_events` row with no verdict); the verdicts before it stay there.
+///
+/// Returns `true` if there was a verdict, or a mirrored one, to remove. When
+/// there was none, nothing is recorded.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on write failure.
+pub fn clear_detection_review_by(
+    conn: &Connection,
+    key: &DetectionKey<'_>,
+    reviewer: &Reviewer<'_>,
+) -> Result<bool, DbError> {
     let tx = conn.unchecked_transaction()?;
+    // Whether the detection carried a mirrored verdict: `UPDATE` below counts
+    // every row it matches, verdict or none, and a withdrawal of nothing is
+    // not an event.
+    let mirrored: i64 = tx.query_row(
+        &format!(
+            "SELECT COUNT(*) FROM detections WHERE {KEY_WHERE} AND review_verdict IS NOT NULL"
+        ),
+        params![key.date, key.time, key.sci_name, key.file_name],
+        |r| r.get(0),
+    )?;
     let removed = tx.execute(
         "DELETE FROM detection_reviews
           WHERE date = ?1 AND time = ?2 AND sci_name = ?3
@@ -262,6 +404,9 @@ pub fn clear_detection_review(conn: &Connection, key: &DetectionKey<'_>) -> Resu
         &format!("UPDATE detections SET review_verdict = NULL WHERE {KEY_WHERE}"),
         params![key.date, key.time, key.sci_name, key.file_name],
     )?;
+    if removed > 0 || mirrored > 0 {
+        record_event(&tx, key, None, None, reviewer)?;
+    }
     tx.commit()?;
     Ok(removed > 0 || cleared > 0)
 }
@@ -541,6 +686,51 @@ pub fn unreviewed_recent_detections(
         out.push(r?);
     }
     Ok(out)
+}
+
+/// Every verdict given on the one detection `key` names, and every
+/// withdrawal, oldest first, with who gave it and when.
+///
+/// The history is append-only and is not pruned with the audit log. Its last
+/// event is the detection's current verdict ("the latest wins"): a verdict,
+/// or `None` for a withdrawal, which leaves it unreviewed. Events written
+/// while the detection had another name stay under that name.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on query failure.
+pub fn review_history(
+    conn: &Connection,
+    key: &DetectionKey<'_>,
+) -> Result<Vec<ReviewEvent>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT id, date, time, sci_name, file_name, verdict, reviewer_user_id,
+                reviewer_name, via, notes, at
+           FROM review_events
+          WHERE date = ?1 AND time = ?2 AND sci_name = ?3 AND file_name = COALESCE(?4, '')
+          ORDER BY id",
+    )?;
+    let rows = stmt
+        .query_map(
+            params![key.date, key.time, key.sci_name, key.file_name],
+            |row| {
+                Ok(ReviewEvent {
+                    id: row.get(0)?,
+                    date: row.get(1)?,
+                    time: row.get(2)?,
+                    sci_name: row.get(3)?,
+                    file_name: row.get(4)?,
+                    verdict: row.get(5)?,
+                    reviewer_user_id: row.get(6)?,
+                    reviewer_name: row.get(7)?,
+                    via: row.get(8)?,
+                    notes: row.get(9)?,
+                    at: row.get(10)?,
+                })
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
 }
 
 fn map_review(row: &rusqlite::Row<'_>) -> rusqlite::Result<DetectionReview> {

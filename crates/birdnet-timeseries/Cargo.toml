@@ -38,6 +38,8 @@ duckdb.workspace = true
 # The effort gates write the station's own `SQLite` ledger and mirror it with
 # `AnalyticsDb::sync_recording_effort`, the copy the application makes.
 rusqlite.workspace = true
+# The richness gates read the rows as the API serialises them.
+serde_json.workspace = true
 tempfile.workspace = true
 
 [lints]

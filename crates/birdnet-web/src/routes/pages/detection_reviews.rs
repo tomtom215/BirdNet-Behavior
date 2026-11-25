@@ -499,6 +499,19 @@ fn row_of(
     }
 }
 
+/// The signed-in person giving a verdict, for the review history, which keeps
+/// their name after the audit log that also names them is pruned (RES-06).
+fn reviewer<'a>(
+    request_user: &'a crate::auth_middleware::RequestUser,
+    via: &'a str,
+) -> birdnet_db::sqlite::Reviewer<'a> {
+    birdnet_db::sqlite::Reviewer {
+        user_id: Some(request_user.user.id),
+        name: Some(&request_user.user.username),
+        via,
+    }
+}
+
 /// The clip for the audit row: what the form said, `-` when it did not.
 fn clip_for_audit(row: &crate::state::RowRef) -> &str {
     row.file_name.as_deref().unwrap_or("-")
@@ -522,7 +535,13 @@ async fn detection_review_set(
         );
         let com_name = form.com_name;
         let result = tokio::task::spawn_blocking(move || {
-            let result = state.set_detection_review(&row, &com_name, status, None);
+            let result = state.set_detection_review_by(
+                &row,
+                &com_name,
+                status,
+                None,
+                &reviewer(&request_user, "review"),
+            );
             // A rejection withdraws a detection from every count and every
             // share link; a verdict nobody can attribute is a detection that
             // vanished with no one having done it.
@@ -616,7 +635,7 @@ async fn detection_review_clear(
         form.file_name.as_ref(),
     );
     let result = tokio::task::spawn_blocking(move || {
-        let result = state.clear_detection_review(&row);
+        let result = state.clear_detection_review_by(&row, &reviewer(&request_user, "review"));
         if matches!(result, Ok(crate::state::ReviewOutcome::Done)) {
             crate::audit::audit(
                 &state,
@@ -687,7 +706,13 @@ async fn detection_review_inline(
         let com = form.com_name.clone();
         // Paired write — see `detection_review_set`.
         let result = tokio::task::spawn_blocking(move || {
-            let result = state.set_detection_review(&row, &com, status, None);
+            let result = state.set_detection_review_by(
+                &row,
+                &com,
+                status,
+                None,
+                &reviewer(&request_user, "detection"),
+            );
             if matches!(result, Ok(crate::state::ReviewOutcome::Done)) {
                 crate::audit::audit(
                     &state,

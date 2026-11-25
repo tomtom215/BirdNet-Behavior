@@ -213,7 +213,7 @@ type Family = fn(&Cli, Option<&Config>) -> Vec<Check>;
 /// away, turns a test red instead of silently dropping out of the report.
 /// The adapters exist only to give the families one signature; none of them
 /// decides anything.
-const CHECK_FAMILIES: [(&str, Family); 30] = [
+const CHECK_FAMILIES: [(&str, Family); 31] = [
     ("environment::check_runtime_environment", |_, _| {
         environment::check_runtime_environment()
     }),
@@ -251,6 +251,11 @@ const CHECK_FAMILIES: [(&str, Family); 30] = [
     }),
     ("config::check_confirmation_filter", |cli, cfg| {
         vec![config::check_confirmation_filter(cli, cfg)]
+    }),
+    ("config::check_overlap_duplicates", |cli, cfg| {
+        config::check_overlap_duplicates(cli, cfg)
+            .into_iter()
+            .collect()
     }),
     ("config::check_listen_address", |cli, _| {
         vec![config::check_listen_address(cli)]
@@ -433,6 +438,81 @@ mod tests {
             "two rows name the same family"
         );
         assert!(in_source.len() >= 20, "the scan found only {in_source:?}");
+    }
+
+    /// A config file with `lines`, whose database is a path that does not
+    /// exist, so the rest of the report reads nothing of this machine's.
+    fn overlap_config(lines: &str) -> birdnet_core::config::Config {
+        let absent = std::env::temp_dir().join("bnb-doctor-overlap-tests-no-such.db");
+        birdnet_core::config::Config::parse(&format!("DB_PATH={}\n{lines}", absent.display()))
+            .unwrap()
+    }
+
+    /// The overlap finding (MSC-09) as the report prints it, if it does.
+    fn overlap_finding(
+        cli: &crate::cli::Cli,
+        config: Option<&birdnet_core::config::Config>,
+    ) -> Option<Check> {
+        super::collect(cli, config)
+            .into_iter()
+            .find(|c| c.name == "Overlapping windows")
+    }
+
+    /// MSC-09: with OVERLAP above zero each call is heard in several windows,
+    /// each window that hears it is its own row, and nothing merges them
+    /// unless the duplicate interval is set. The report says so and names the
+    /// remedy, whether the overlap comes from the flag or the config file.
+    #[test]
+    fn overlap_without_a_duplicate_interval_is_reported() {
+        use crate::cli::Cli;
+        use clap::Parser as _;
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.overlap = 1.5;
+        let check = overlap_finding(&cli, None)
+            .expect("the report says nothing about overlap without a duplicate interval");
+        assert_eq!(check.status, Status::Warn, "{check:?}");
+        assert!(
+            check.message.contains("several detections"),
+            "{}",
+            check.message
+        );
+        let fix = check.remediation.expect("a remedy");
+        assert!(fix.contains("DUPLICATE_INTERVAL_SECS"), "{fix}");
+
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let config = overlap_config("OVERLAP=1.5");
+        assert!(
+            overlap_finding(&cli, Some(&config)).is_some(),
+            "OVERLAP from the config file"
+        );
+    }
+
+    /// The counterparts: no overlap, or a duplicate interval set (by flag or by
+    /// the config file), and there is nothing to report. A negative interval
+    /// is off, as the daemon's gate reads it.
+    #[test]
+    fn no_overlap_or_a_duplicate_interval_is_not_reported() {
+        use crate::cli::Cli;
+        use clap::Parser as _;
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        assert!(overlap_finding(&cli, None).is_none(), "no overlap");
+
+        let mut cli = Cli::parse_from(["birdnet-behavior"]);
+        cli.overlap = 1.5;
+        cli.duplicate_interval_secs = 3;
+        assert!(overlap_finding(&cli, None).is_none(), "interval by flag");
+
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let config = overlap_config("OVERLAP=1.5\nDUPLICATE_INTERVAL_SECS=3");
+        assert!(
+            overlap_finding(&cli, Some(&config)).is_none(),
+            "interval in the config file"
+        );
+        let config = overlap_config("OVERLAP=1.5\nDUPLICATE_INTERVAL_SECS=-30");
+        assert!(
+            overlap_finding(&cli, Some(&config)).is_some(),
+            "a negative interval is off"
+        );
     }
 
     /// The report itself, not only the table, names the data-volume check, and
