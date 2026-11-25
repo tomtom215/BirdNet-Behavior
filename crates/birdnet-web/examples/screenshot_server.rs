@@ -687,17 +687,17 @@ fn seed(conn: &Connection, today_days: i64) {
         }
 
         // What the station listened to that day. A day with no row is a day it was
-        // off; a day with a row and no detections was a quiet one.
+        // off; a day with a row and no detections was a quiet one. Every source
+        // that has detections that day has listening that day: the ledger once
+        // credited RTSP_1 with none and RTSP_2 with its last 120 days only, so a
+        // rate per listened time fell in the recent weeks and the Migration page
+        // drew three residents as passage birds (N24-08).
         if listening > 0.0 {
             let secs = 86_400.0 * listening;
-            let _ = tx.execute(
-                "INSERT OR REPLACE INTO recording_effort (date, source, seconds) VALUES (?1, 'local', ?2)",
-                params![date, secs],
-            );
-            if days_ago < 120 {
+            for (source, share) in [("local", 1.0), ("RTSP_1", 0.95), ("RTSP_2", 0.9)] {
                 let _ = tx.execute(
-                    "INSERT OR REPLACE INTO recording_effort (date, source, seconds) VALUES (?1, 'RTSP_2', ?2)",
-                    params![date, secs * 0.9],
+                    "INSERT OR REPLACE INTO recording_effort (date, source, seconds) VALUES (?1, ?2, ?3)",
+                    params![date, source, secs * share],
                 );
             }
         }

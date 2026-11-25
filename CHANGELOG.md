@@ -26,6 +26,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A classifier that will not download no longer stops the install (OOB-20).** The download is tried three
+  times, 30 and then 90 seconds apart (`BIRDNET_MODEL_RETRY_WAITS`). If it still fails the install finishes, ends
+  on a boxed warning that the station is not detecting birds and how to fix it, and exits with status **75**.
+  The container starts without the model and says so in its log. A V2.4 station is then offered the install on
+  the dashboard (Settings → Capture) as well.
+- **Installing the classifier from a file.** `install.sh --local-model PATH` (`BIRDNET_LOCAL_MODEL`) and
+  `birdnet-behavior --install-model ID --from-file PATH`, held to the same size and sha256 as a download.
+- **The project's own copy of the V2.4 files is tried first.** `--install-model` fetches the model and its range
+  filter from the `models-v2.4` release and falls back to the upstream address, each against the same pins.
+- **What each classifier is, and under what licence (MMP-20, RES-32).** `--install-model list` prints each
+  entry's source, its licence and where the licence was read, and the taxonomy its labels follow where that is
+  recorded (Perch: iNaturalist 2024; the BirdNET label sets name none).
+- **`--doctor` checks the segment length (MSC-08).** It warns when the end of every recording is never analysed
+  or ends on a window padded with silence, says how much, and names the segment length or overlap that avoids
+  it. The defaults raise nothing.
+- **"If the SD Card Dies" (OOB-18).** A manual page: what each backup holds and does not, what to keep off the
+  device, and how to rebuild a station on a new card.
+- **Cached figures say when they were worked out (UIC-23).** Patterns' streamgraph, grid and hours and the four
+  correlation figures carry "As of HH:MM". The time-series dashboard, Migration and the terrain table do not yet.
+- **Trust boundaries (N25-13).** `docs/architecture/12-risks.md` has the section `SECURITY.md` pointed to: what
+  is reachable without signing in, what the admin gate covers, and what is stored in plain text.
 - **How often a species is heard, through the year (CHT-16).** The species page has a new card: for each quarter
   of each month, the share of the days the station listened on which the bird was heard, as a dot with its 95%
   Wilson interval. Fewer than three listened days is drawn as a ring and says "too few to say"; a part of the
@@ -163,6 +184,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **One rule for a listened day (RES-26).** A day counts as listened when the station recorded at least half its
+  typical day, on every page. Some pages used 60 seconds, so the same station could show two different counts
+  of listened days. Totals that divide by listened days can move by a day or two.
+- **Migration picks its birds by rate per listened time (N24-08).** A week is detections per seven typical days
+  of listening; a week with fewer than three listened days is unknown, not zero. A resident on a station whose
+  listening hours changed is no longer drawn as a passage bird. The ridges themselves still draw counts.
+- **"Earliest vs last year" uses the phenology onset (N05-02).** The 5th percentile of the year's detection
+  days, compared with last year up to the same calendar date, so one stray early record no longer sets it.
+- **Marks that are not a species are never in a species' colour (N25-06).** The temperature line, the hours
+  around sunrise and sunset, one-series bars, the life list and the migration seasons are drawn in a neutral
+  ink, and Today's stacked hour columns have a seam between bands.
+- **The hours around the sun follow the station's sun (UIC-26).** With a location and a range of 14 days or
+  less, the emphasised hours are the hour before sunrise and the three after, and the three before sunset and
+  the hour after; otherwise 05:00 to 09:00 and 18:00 to 22:00, named as clock hours.
+- **Chart hour ticks follow the 12/24-hour setting (UIR-19)** on the dawn rings, day strips, bursts and running
+  order.
+- **History's month uses the kit's square-root heat steps (UIC-18).**
+- **Page heads (UIR-27, UIC-13).** Search, the Day page and the six Settings tabs open with the shared head.
+  Today's heading no longer changes under a screen reader every five minutes; only its sentence does.
+- **The species page says each number once (UIR-24, UIR-26, UIR-37).** A bird the station has never heard gets
+  one panel, not seven empty cards. "Held back" links to the Always allowed list with the bird filled in.
+- **Kiosk (UIR-31).** The mode and exit links are readable without a hover (6.6:1 by day, 7.6:1 by night; they
+  were 1.72:1 and 2.03:1). The key names each bird in both Latin and the common name. On the station's own
+  screen the foot no longer prints a loopback address for the credits.
+- **The peak-week tile names a time of year (UIR-23)**: "late Oct" over "week 43 · 14 species", not "w43".
 - **One colour per species, on every chart (UIR-01).** A species' colour was its rank within each chart, so one
   bird was painted in up to five colours across the pages. The station's eight most-heard species over the 90
   days to yesterday now own one colour each everywhere, and every other species is drawn in the neutral.
@@ -259,6 +305,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A station whose classifier download failed is offered the install button (OOB-20).** The installers always
+  write `MODEL_PATH`, and the page read a configured path with no file as the operator's own model: no button,
+  and advice to put the file there by hand.
+- **The doctor's overlap and repeat-confirmation checks use the installed classifier's window (N24-06)**: 5 s
+  for Perch, 4.5 s for the V3.0 preview. They assumed 3 s.
+- **`--confirmation-level` help and the manual (ACC-10)** no longer say every level needs overlap.
+- **A station started with `--watch-dir` equal to the recordings directory is told what that does (N25-11).**
+  Every clip is deleted once older than `STREAM_RETENTION_SECS`, locked or not. It is logged as an error at
+  start. The behaviour is unchanged; neither installer sets the directories equal.
+- **A PulseAudio source at "-inf dB" is graded silent (N24-05)**, as ALSA's minus infinity was.
+- **Resizing the window no longer replays chart entrances (UIR-33).**
+- **Focus follows a swap that removed the focused control's container (UIC-29)**, on the review queue's filters
+  and pager; it fell to the page body.
+- **Small encodings (UIR-23).** A count of new species is not painted in the fault red; Today's temperatures
+  carry their unit; the uptime strip on Health says "last 24 h, each bar 30 min" in words.
+- **Migration's scope pills looked like filters, and its lede named seasons by colour (UIR-36).** Now a caption.
+- **The manual no longer says** that full backups include the configuration, that `--decrypt-backup` asks for
+  the passphrase, that the disk-full purge takes the oldest recordings (N25-05), that the installer asks to
+  restrict the station to this device (N25-12), or that there is always a setup wizard (N25-09). The settings
+  page no longer calls V3.0 scores calibrated (RES-30).
+- **Two cargo warnings from the manifest are gone (N24-09).**
 - **A full disk whose purge finds nothing it may delete now says so (N25-01).** With every clip left locked,
   reviewed, at its species floor or excluded, the disk filled to 100% with only a warning in the log. It now
   raises the `purge-nothing-deletable` health condition and the `birdnet_purge_nothing_deletable` gauge, and
