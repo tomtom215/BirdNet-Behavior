@@ -154,7 +154,7 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   decision first: whether a probe that can never answer is "unchecked" or simply "not
   applicable here", and how the API says which.
 
-## TD-9 A relabelled detection's comments follow it (decided by a batch, not by the maintainer)
+## TD-9 A relabelled detection's comments follow it; they do not say what they were written under
 
 * **Where:** `crates/birdnet-db/src/migration.rs`, migration 65 (`detections_relabel_carries_comments`),
   and `crates/birdnet-db/src/detection_comments.rs`.
@@ -162,10 +162,11 @@ Rows are labelled the way the rest of the repository labels claims: **PROVEN**
   when the detection's `Sci_Name` changes, so the relabelled detection's page shows its thread. Before, the
   thread stayed under the old name and was on no detection's page. Gate:
   `a_comment_follows_its_detection_through_a_relabel`, seen failing first.
-* **Why it is still listed:** this entry used to say that whether a comment follows the new name, stays as
-  history, or is shown on both "is a decision about meaning, not a key change". The batch of 2026-11-24
-  took the first option without that decision. Reviews do the opposite on a relabel
-  (`detections_relabel_detaches_review`, migration 59). To reverse it, drop the migration-65 trigger in a
-  new migration.
+* **The decision:** this entry used to say that whether a comment follows the new name, stays as history,
+  or is shown on both "is a decision about meaning, not a key change". The batch of 2026-11-24 took the
+  first option, and the maintainer, asked afterwards, left the choice to it: a comment is a note on one
+  recording, keyed by its date, time and clip, so it stays beside that recording. Reviews do the opposite
+  on a relabel (`detections_relabel_detaches_review`, migration 59) because a verdict is a claim about the
+  species. To reverse it, drop the migration-65 trigger in a new migration.
 * **What remains:** a comment with no clip (`file_name` NULL, written before migration 62) is not moved,
   and a moved comment does not record the species it was written under.
