@@ -636,6 +636,15 @@ Options:
           [env: BIRDNET_CLIP_RETENTION_DAYS=]
           [default: 0]
 
+      --retain-reviewed-audio <RETAIN_REVIEWED_AUDIO>
+          Keep the audio of every detection someone has reviewed or commented on (`true`, the default), or let `--clip-retention-days`, `--max-files-per-species` and the disk-full purge reclaim it like any other clip (`false`).
+
+          A confirmed or rejected detection, or one with a comment, is a record somebody judged by listening, and its clip is the evidence a second reviewer needs to check that judgement. Locked clips are kept either way.
+
+          [env: BIRDNET_RETAIN_REVIEWED_AUDIO=]
+          [default: true]
+          [possible values: true, false]
+
       --disk-purge-threshold <DISK_PURGE_THRESHOLD>
           Disk-usage percentage at which recordings start being purged.
 
