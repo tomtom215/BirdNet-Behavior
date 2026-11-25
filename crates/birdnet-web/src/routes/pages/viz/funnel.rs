@@ -28,6 +28,7 @@
 
 use std::fmt::Write as _;
 
+use super::kit::clock_of_secs as clock;
 use super::kit::{SpeciesSlots, tip};
 use super::{EMPTY, svg_a11y};
 use crate::routes::pages::escape_html;
@@ -229,11 +230,6 @@ pub struct Voice {
 pub struct Morning {
     pub date: String,
     pub times: Vec<u32>,
-}
-
-/// `06:23` for seconds after midnight.
-fn clock(secs: u32) -> String {
-    format!("{:02}:{:02}", secs / 3600 % 24, secs % 3600 / 60)
 }
 
 /// A steady, repeatable offset in `-1.0..=1.0` for the `i`th morning, so a morning's dots sit
@@ -517,6 +513,26 @@ mod tests {
             date: date.into(),
             times: t.to_vec(),
         }
+    }
+
+    /// The running order drawn from one fixed input, reduced to its length and hash: taken before
+    /// its private `clock` was replaced by the kit's (UIC-18).
+    #[test]
+    fn the_running_order_is_pinned() {
+        let m = [
+            morning(
+                "2026-10-21",
+                &[6 * 3600 + 1, 6 * 3600 + 14 * 60 + 59, 7 * 3600 + 40 * 60],
+            ),
+            morning("2026-10-20", &[5 * 3600 + 47 * 60 + 30, 6 * 3600 + 2 * 60]),
+            morning("2026-10-19", &[4 * 3600 + 59 * 60 + 59]),
+        ];
+        let svg = morning_order(&voices(), &m, (4, 8), &SpeciesSlots::default());
+        assert_eq!(
+            super::super::kit::pin("running-order", &svg),
+            (5198, 9_814_355_112_052_969_163),
+            "the running order changed"
+        );
     }
 
     #[test]

@@ -1107,7 +1107,7 @@ mod tests {
         let svg = day_strip(&hourly, &top, None, &temps, Some((6.0, 19.5)), 13.0);
         assert!(svg.contains("<svg"));
         // The labelled solar markers carry real clock times.
-        assert!(svg.contains("sunrise 6:00"), "{svg}");
+        assert!(svg.contains("sunrise 06:00"), "{svg}");
         assert!(svg.contains("sunset 19:30"), "{svg}");
         // Temperature has its own strip, labelled, and the now marker is drawn.
         assert!(svg.contains(">Temperature<"), "{svg}");
@@ -1157,13 +1157,13 @@ mod tests {
             );
         }
         assert!(
-            wide.contains("sunrise 6:00") && wide.contains("of daylight"),
+            wide.contains("sunrise 06:00") && wide.contains("of daylight"),
             "{wide}"
         );
         assert!(
             !narrow.contains("sunrise")
                 && !narrow.contains("of daylight")
-                && narrow.contains(">6:00<"),
+                && narrow.contains(">06:00<"),
             "the phone's rail is bare times: {narrow}"
         );
         let vb = |s: &str| -> (f64, f64) {

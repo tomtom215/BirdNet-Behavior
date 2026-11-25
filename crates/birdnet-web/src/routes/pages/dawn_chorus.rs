@@ -42,7 +42,8 @@ use axum::{Router, routing::get};
 use crate::state::AppState;
 
 use super::escape_html;
-use super::viz::kit::SpeciesSlots;
+use super::viz::kit::{SpeciesSlots, clock_of_hours};
+use super::viz::radial;
 use super::viz::svg_a11y;
 
 static PAGE_HTML: crate::seal::Sealed =
@@ -286,7 +287,7 @@ fn polar_figure(
             r#"<button type="button" class="ck-leg dc-leg" data-ck-s="{i}" aria-pressed="false"><span class="viz-swatch ck-sw {slot}"></span><span class="dc-leg-name">{n}</span><span class="bnb-meta mono dc-leg-peak">peaks {p}</span></button>"#,
             slot = slots.class(&ribbons[i].name),
             n = escape_html(names.name_of_stored(&ribbon.name)),
-            p = crate::display::clock(&fmt_hour(f64::from(ribbon.peak_hour))),
+            p = crate::display::clock(&clock_of_hours(f64::from(ribbon.peak_hour))),
         );
     }
     out.push_str("</div>");
@@ -304,7 +305,7 @@ fn sun_key(s: Sky) -> String {
         let _ = write!(
             out,
             r#"<li><i class="dc-sw {class}"></i>{label} <span class="mono">{t}</span></li>"#,
-            t = crate::display::clock(&fmt_hour(h)),
+            t = crate::display::clock(&clock_of_hours(h)),
         );
     };
     if let Some(h) = s.dawn {
@@ -388,11 +389,11 @@ fn ring_edges(base_r: f64, amp: f64, v: f64) -> (f64, f64) {
 fn ring_outline(base_r: f64, amp: f64, samples: &[(f64, f64)]) -> String {
     let mut d = String::with_capacity(samples.len() * 24);
     for (j, &(t, v)) in samples.iter().enumerate() {
-        let (x, y) = polar(CX, CY, hour_to_angle(t), ring_edges(base_r, amp, v).0);
+        let (x, y) = radial::polar(CX, CY, ring_edges(base_r, amp, v).0, hour_to_angle(t));
         let _ = write!(d, "{}{x:.1},{y:.1}", if j == 0 { "M" } else { " L" });
     }
     for &(t, v) in samples.iter().rev() {
-        let (x, y) = polar(CX, CY, hour_to_angle(t), ring_edges(base_r, amp, v).1);
+        let (x, y) = radial::polar(CX, CY, ring_edges(base_r, amp, v).1, hour_to_angle(t));
         let _ = write!(d, " L{x:.1},{y:.1}");
     }
     d.push_str(" Z");
@@ -435,8 +436,8 @@ fn render_polar_svg(
     let sun_attrs = sky.map_or_else(String::new, |k| {
         format!(
             r#" data-sunrise="{}" data-sunset="{}""#,
-            fmt_hour(k.rise),
-            fmt_hour(k.set)
+            clock_of_hours(k.rise),
+            clock_of_hours(k.set)
         )
     });
     let _ = write!(
@@ -454,8 +455,8 @@ fn render_polar_svg(
     if let Some(k) = sky {
         let (a1, a2) = clock_arc(k.set, k.rise);
         let r_outer = SKY_OUT;
-        let (x1, y1) = polar(CX, CY, a1, r_outer);
-        let (x2, y2) = polar(CX, CY, a2, r_outer);
+        let (x1, y1) = radial::polar(CX, CY, r_outer, a1);
+        let (x2, y2) = radial::polar(CX, CY, r_outer, a2);
         let large = i32::from((a2 - a1) > PI);
         let _ = write!(
             s,
@@ -499,8 +500,8 @@ fn render_polar_svg(
     // still shows where its ring is.
     for h in (0..24).step_by(3) {
         let a = hour_to_angle(f64::from(h));
-        let (x1, y1) = polar(CX, CY, a, RING_MIN - 8.0);
-        let (x2, y2) = polar(CX, CY, a, RING_MAX + 2.0);
+        let (x1, y1) = radial::polar(CX, CY, RING_MIN - 8.0, a);
+        let (x2, y2) = radial::polar(CX, CY, RING_MAX + 2.0, a);
         let _ = write!(
             s,
             r#"<line class="ck-grid" x1="{x1:.1}" y1="{y1:.1}" x2="{x2:.1}" y2="{y2:.1}"/>"#
@@ -518,8 +519,8 @@ fn render_polar_svg(
     for h in 0..24 {
         let a = hour_to_angle(f64::from(h));
         let big = h % 6 == 0;
-        let (x1, y1) = polar(CX, CY, a, SKY_OUT + 3.0);
-        let (x2, y2) = polar(CX, CY, a, SKY_OUT + if big { 11.0 } else { 7.0 });
+        let (x1, y1) = radial::polar(CX, CY, SKY_OUT + 3.0, a);
+        let (x2, y2) = radial::polar(CX, CY, SKY_OUT + if big { 11.0 } else { 7.0 }, a);
         let _ = write!(
             s,
             r#"<line class="{c}" x1="{x1:.2}" y1="{y1:.2}" x2="{x2:.2}" y2="{y2:.2}"/>"#,
@@ -527,7 +528,7 @@ fn render_polar_svg(
         );
     }
     for h in [0, 3, 6, 9, 12, 15, 18, 21] {
-        let (lx, ly) = polar(CX, CY, hour_to_angle(f64::from(h)), LABEL_R);
+        let (lx, ly) = radial::polar(CX, CY, LABEL_R, hour_to_angle(f64::from(h)));
         let label = match h {
             0 => "12a".to_string(),
             12 => "12p".to_string(),
@@ -546,11 +547,11 @@ fn render_polar_svg(
             (k.rise, "dc-sun dc-sun-rise", "Sunrise"),
             (k.set, "dc-sun dc-sun-set", "Sunset"),
         ] {
-            let (x, y) = polar(CX, CY, hour_to_angle(h), (SKY_IN + SKY_OUT) / 2.0);
+            let (x, y) = radial::polar(CX, CY, (SKY_IN + SKY_OUT) / 2.0, hour_to_angle(h));
             let _ = write!(
                 s,
                 r#"<circle class="{class}" cx="{x:.2}" cy="{y:.2}" r="5.5"><title>{label} {t}</title></circle>"#,
-                t = fmt_hour(h),
+                t = clock_of_hours(h),
             );
         }
     }
@@ -563,7 +564,7 @@ fn render_polar_svg(
             r#"<path class="dc-ring {slot}" d="{d}" data-ck-s="{i}" data-style="--i:{i}"><title>{name} — peaks {p}</title></path>"#,
             slot = slots.class(&ribbons[i].name),
             d = ring_outline(base_of(i), amp, &samples[i]),
-            p = fmt_hour(f64::from(ribbon.peak_hour)),
+            p = clock_of_hours(f64::from(ribbon.peak_hour)),
         );
     }
 
@@ -582,8 +583,8 @@ fn render_polar_svg(
             let share = f64::from(count) / f64::from(total);
             let when = format!(
                 "{} to {}",
-                fmt_hour(h as f64),
-                fmt_hour(h as f64 + 1.0 - 1.0 / 60.0)
+                clock_of_hours(h as f64),
+                clock_of_hours(h as f64 + 1.0 - 1.0 / 60.0)
             );
             let data_tip = super::viz::kit::tip(
                 name,
@@ -602,7 +603,7 @@ fn render_polar_svg(
                         "Its busiest hour",
                         &format!(
                             "{} ({})",
-                            fmt_hour(f64::from(ribbon.peak_hour)),
+                            clock_of_hours(f64::from(ribbon.peak_hour)),
                             super::viz::kit::thousands(peak.round() as i64)
                         ),
                         None,
@@ -663,8 +664,8 @@ fn render_polar_svg(
         ),
     ];
     for (card, center, seg, label) in centers {
-        let (sx, sy) = polar(CX, CY, center - half_span, r_moon);
-        let (ex, ey) = polar(CX, CY, center + half_span, r_moon);
+        let (sx, sy) = radial::polar(CX, CY, r_moon, center - half_span);
+        let (ex, ey) = radial::polar(CX, CY, r_moon, center + half_span);
         let is_active = card == active;
         // The current phase carries a width the others do not (3 against 1.6) and the one
         // title; the dial is a decoration for everyone else.
@@ -683,7 +684,7 @@ fn render_polar_svg(
         );
     }
     let now_h = super::now_hour_local();
-    let now_clock = fmt_hour(now_h);
+    let now_clock = clock_of_hours(now_h);
     let _ = write!(
         s,
         r#"<text x="{CX}" y="{y1:.1}" text-anchor="middle" class="dc-ctr-k">NOW</text><text x="{CX}" y="{y2:.1}" text-anchor="middle" class="mono dc-ctr-t" {clk}>{now_clock}</text><text x="{CX}" y="{y3:.1}" text-anchor="middle" class="dc-ctr-s">{WINDOW_DAYS} days</text>"#,
@@ -698,8 +699,8 @@ fn render_polar_svg(
     // hairline in the annotation ink over a halo, so it reads across every ring colour; it was
     // a dotted black line that vanished into the dark rings.
     let a = hour_to_angle(now_h);
-    let (hx1, hy1) = polar(CX, CY, a, RING_MIN - 8.0);
-    let (hx2, hy2) = polar(CX, CY, a, SKY_OUT + 1.0);
+    let (hx1, hy1) = radial::polar(CX, CY, RING_MIN - 8.0, a);
+    let (hx2, hy2) = radial::polar(CX, CY, SKY_OUT + 1.0, a);
     let _ = write!(
         s,
         r#"<line class="dc-now-halo" x1="{hx1:.2}" y1="{hy1:.2}" x2="{hx2:.2}" y2="{hy2:.2}"/><line class="dc-now" x1="{hx1:.2}" y1="{hy1:.2}" x2="{hx2:.2}" y2="{hy2:.2}"><title>Now, {now_clock}</title></line><circle class="dc-now-dot" cx="{hx2:.2}" cy="{hy2:.2}" r="4"/>"#,
@@ -814,7 +815,7 @@ fn day_strips(
                     s,
                     r#"<line class="dc-sun-line" x1="{x:.1}" y1="{y0:.1}" x2="{x:.1}" y2="{y1:.1}"><title>{label} {t}</title></line>"#,
                     x = x_of(hr),
-                    t = fmt_hour(hr),
+                    t = clock_of_hours(hr),
                 );
             }
         }
@@ -839,7 +840,7 @@ fn day_strips(
             ny = top + 13.0,
             rx = W - 8.0,
             shown = escape_html(&shown),
-            p = fmt_hour(f64::from(ribbon.peak_hour)),
+            p = clock_of_hours(f64::from(ribbon.peak_hour)),
             off = if off_chorus { " · off-chorus" } else { "" },
         );
         let max = ribbon
@@ -863,8 +864,8 @@ fn day_strips(
                     (
                         &format!(
                             "{} to {}",
-                            fmt_hour(hr as f64),
-                            fmt_hour(hr as f64 + 1.0 - 1.0 / 60.0)
+                            clock_of_hours(hr as f64),
+                            clock_of_hours(hr as f64 + 1.0 - 1.0 / 60.0)
                         ),
                         &super::viz::kit::thousands(count.round() as i64),
                         Some(&ribbon_key(&ribbons[i], slots)),
@@ -924,7 +925,7 @@ fn day_table(ribbons: &[ChorusRibbon], names: &birdnet_core::i18n::NameLocalizer
             t,
             r#"<tr><th scope="row">{name}</th><td class="num">{peak}</td><td class="num">{dawn_pct:.0}%</td><td class="num">{total}</td>"#,
             name = escape_html(names.name_of_stored(&ribbon.name)),
-            peak = crate::display::clock(&fmt_hour(f64::from(ribbon.peak_hour))),
+            peak = crate::display::clock(&clock_of_hours(f64::from(ribbon.peak_hour))),
             dawn_pct = f64::from(dawn) / f64::from(total.max(1.0)) * 100.0,
             total = ribbon.total,
         );
@@ -943,17 +944,6 @@ fn day_table(ribbons: &[ChorusRibbon], names: &birdnet_core::i18n::NameLocalizer
 
 fn hour_to_angle(h: f64) -> f64 {
     (h / 24.0) * 2.0 * PI - PI / 2.0
-}
-
-fn polar(cx: f64, cy: f64, angle: f64, r: f64) -> (f64, f64) {
-    (cx + r * angle.cos(), cy + r * angle.sin())
-}
-
-fn fmt_hour(h: f64) -> String {
-    let total_minutes = (h * 60.0).round() as i32;
-    let hh = (total_minutes / 60).rem_euclid(24);
-    let mm = total_minutes.rem_euclid(60);
-    format!("{hh:02}:{mm:02}")
 }
 
 fn ok_html(body: String) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
@@ -984,10 +974,10 @@ mod tests {
         assert!((hour_to_angle(12.0) - (PI / 2.0)).abs() < 1e-9);
     }
     #[test]
-    fn fmt_hour_basic() {
-        assert_eq!(fmt_hour(5.5), "05:30");
-        assert_eq!(fmt_hour(20.13), "20:08");
-        assert_eq!(fmt_hour(0.0), "00:00");
+    fn clock_of_hours_basic() {
+        assert_eq!(clock_of_hours(5.5), "05:30");
+        assert_eq!(clock_of_hours(20.13), "20:08");
+        assert_eq!(clock_of_hours(0.0), "00:00");
     }
 
     /// The sun markers come from the station's *configured* location, through
@@ -1161,6 +1151,48 @@ mod tests {
             h[i] = v;
         }
         ribbon(name, h)
+    }
+
+    /// The rings and the day strips, drawn from one fixed input, reduced to their length and
+    /// hash. Taken on the tree before this file's private `polar` (angle before radius) and
+    /// `fmt_hour` were replaced by `radial::polar` (radius before angle) and the kit's clock
+    /// (UIC-18), so a swapped argument or a changed rounding shows here as a changed picture.
+    /// The polar figure is cut before the moon and the "now" hand, which follow the real clock.
+    #[test]
+    fn the_rings_and_strips_are_pinned() {
+        let mut evening = [0.0_f32; 24];
+        for (i, v) in [(17, 4.0), (18, 9.0), (19, 14.5), (20, 6.0), (4, 1.0)] {
+            evening[i] = v;
+        }
+        let ribbons = [
+            morning_singer("American Robin"),
+            ribbon("Song Sparrow", evening),
+            morning_singer("Northern Cardinal"),
+        ];
+        let slots = SpeciesSlots::new([
+            ("American Robin", "Turdus migratorius", "American Robin"),
+            ("Song Sparrow", "Melospiza melodia", "Song Sparrow"),
+        ]);
+        let k = Sky {
+            rise: 6.37,
+            set: 19.81,
+            dawn: Some(5.9),
+            dusk: Some(20.3),
+        };
+        let polar = render_polar_svg(&ribbons, Some(k), &english(), &slots);
+        let cut = polar.find("class=\"dc-moon").expect("the moon is drawn");
+        let strips = day_strips(&ribbons, Some(k), &english(), &slots);
+        assert_eq!(
+            (
+                crate::routes::pages::viz::kit::pin("dawn-rings", &polar[..cut]),
+                crate::routes::pages::viz::kit::pin("dawn-strips", &strips)
+            ),
+            (
+                (40650, 12_278_785_045_523_209_542),
+                (24812, 9_668_514_204_813_496_225)
+            ),
+            "the rings or the strips changed"
+        );
     }
 
     /// A ring swells where the bird was heard, not half an hour before it.

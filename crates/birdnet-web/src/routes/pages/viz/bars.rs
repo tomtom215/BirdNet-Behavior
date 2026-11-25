@@ -107,23 +107,13 @@ pub const HOURLY_AXIS_SOLAR: f64 = 64.0;
 pub const HOURLY_TEMP: f64 = 58.0;
 
 fn clock(h: usize) -> String {
-    format!("{h:02}:00")
+    kit::clock_of_hours(h as f64)
 }
 
 /// `10.4` hours as `10 h 24 min`.
 fn daylight_text(hours: f64) -> String {
     let total = (hours * 60.0).round().max(0.0) as u32;
     format!("{} h {:02} min of daylight", total / 60, total % 60)
-}
-
-/// `19.5` → `19:30`.
-pub fn fmt_clock(h: f64) -> String {
-    let total_min = (h * 60.0).round();
-    format!(
-        "{:.0}:{:02.0}",
-        (total_min / 60.0).floor() % 24.0,
-        total_min % 60.0
-    )
 }
 
 /// An hour-of-day column chart.
@@ -379,9 +369,9 @@ pub fn hourly(o: &Hourly<'_>) -> String {
         let mut last_end = f64::NEG_INFINITY;
         for (word, at, x) in [("sunrise", rise, xr), ("sunset", set, xs)] {
             let label = if o.compact {
-                fmt_clock(at)
+                kit::clock_of_hours(at)
             } else {
-                format!("{word} {}", fmt_clock(at))
+                format!("{word} {}", kit::clock_of_hours(at))
             };
             let tw = kit::text_width(&label, 10.0);
             // Centred under its disc, kept inside the plot's edges.
@@ -531,9 +521,9 @@ pub fn hourly(o: &Hourly<'_>) -> String {
             let solar_note = o.solar.and_then(|(rise, set)| {
                 let within = |t: f64| t >= h as f64 && t < (h + 1) as f64;
                 if within(rise) {
-                    Some(format!("Sunrise {}", fmt_clock(rise)))
+                    Some(format!("Sunrise {}", kit::clock_of_hours(rise)))
                 } else if within(set) {
-                    Some(format!("Sunset {}", fmt_clock(set)))
+                    Some(format!("Sunset {}", kit::clock_of_hours(set)))
                 } else {
                     None
                 }
@@ -1038,6 +1028,33 @@ mod tests {
         c
     }
 
+    /// An hour chart with a sky, a "now", a note and a temperature strip, from one fixed input,
+    /// reduced to its length and hash. Taken before `clock` and `fmt_clock` moved to the kit
+    /// (UIC-18), so a changed time or rounding shows here as a changed picture. The one change
+    /// the move made on purpose: the sun's captions print the hour with two digits, as every
+    /// other time on the page does ("sunrise 06:22", was "sunrise 6:22"; the caption's `x`
+    /// moves with its width). Before it: `(13276, 4_905_990_690_813_501_481)`.
+    #[test]
+    fn the_hour_chart_is_pinned() {
+        let temps = [
+            (0.0, 4.2),
+            (6.5, 3.1),
+            (12.0, 11.8),
+            (18.25, 9.4),
+            (23.5, 6.0),
+        ];
+        let mut o = opts(sample());
+        o.solar = Some((6.37, 19.81));
+        o.now_h = Some(14.53);
+        o.temps = &temps;
+        let svg = hourly(&o);
+        assert_eq!(
+            super::super::kit::pin("hour-chart", &svg),
+            (13278, 16_920_649_687_254_706_049),
+            "the hour chart changed"
+        );
+    }
+
     fn opts(counts: [i64; 24]) -> Hourly<'static> {
         Hourly {
             id: "t",
@@ -1236,7 +1253,7 @@ mod tests {
         o.solar = Some((6.7, 18.0));
         let svg = hourly(&o);
         assert!(
-            svg.contains("sunrise 6:42") && svg.contains("sunset 18:00"),
+            svg.contains("sunrise 06:42") && svg.contains("sunset 18:00"),
             "{svg}"
         );
         // The night is the sky: a gradient across the plot, dark until first light, bright by day.
@@ -1253,7 +1270,7 @@ mod tests {
             "no location, no sky"
         );
         assert!(
-            svg.contains("Sunrise 6:42"),
+            svg.contains("Sunrise 06:42"),
             "the hour it happens says so: {svg}"
         );
         o.solar = Some((12.0, 12.2));

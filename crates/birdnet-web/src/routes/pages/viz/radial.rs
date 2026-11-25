@@ -37,6 +37,7 @@ use std::f64::consts::{PI, TAU};
 use std::fmt::Write as _;
 
 use super::cograph::{CoGraph, Link, chord_order, share_step};
+pub use super::kit::pct;
 use super::kit::{text_width, tip};
 use super::{EMPTY, svg_a11y};
 use crate::routes::pages::escape_html;
@@ -148,17 +149,6 @@ fn fit_name(name: &str) -> String {
     } else {
         let head: String = name.chars().take(NAME_CHARS - 1).collect();
         format!("{}…", head.trim_end())
-    }
-}
-
-/// `v` in `0..=1` as a percentage for a reading: whole numbers, and "<1%" for what rounds to
-/// nothing but is not nothing.
-pub fn pct(v: f64) -> String {
-    let p = v * 100.0;
-    if p > 0.0 && p < 1.0 {
-        "<1%".to_owned()
-    } else {
-        format!("{:.0}%", p.round())
     }
 }
 
@@ -462,6 +452,21 @@ mod tests {
             }
         }
         graph(n, &pairs)
+    }
+
+    /// The chord from one fixed input, reduced to its length and hash: taken before `pct` moved
+    /// to the kit (UIC-18).
+    #[test]
+    fn the_chord_is_pinned() {
+        let mut g = complete(6);
+        g.share[0][1] = 0.004;
+        g.share[1][0] = 0.004;
+        let svg = chord_diagram(&g, 12);
+        assert_eq!(
+            super::super::kit::pin("chord", &svg),
+            (11481, 17_950_049_609_762_854_192),
+            "the chord changed"
+        );
     }
 
     #[test]

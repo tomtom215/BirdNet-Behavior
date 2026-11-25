@@ -606,6 +606,6 @@ mod tests {
         let svg = render_hourly_bars(&totals, Some((6.5, 18.5)), 7);
         assert!(svg.contains("<svg"));
         assert!(svg.contains("Detections&#9;20"), "{svg}");
-        assert!(svg.contains("sunrise 6:30"), "{svg}");
+        assert!(svg.contains("sunrise 06:30"), "{svg}");
     }
 }

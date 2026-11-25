@@ -24,6 +24,7 @@
 
 use std::fmt::Write as _;
 
+use super::kit::clock_of_secs as clock;
 use super::kit::{SpeciesSlots, bar_path, tip};
 use super::{EMPTY, svg_a11y};
 use crate::routes::pages::escape_html;
@@ -77,11 +78,6 @@ pub fn duration_text(secs: u32) -> String {
     } else {
         format!("{s}s")
     }
-}
-
-/// `06:23` for seconds after midnight.
-fn clock(secs: u32) -> String {
-    format!("{:02}:{:02}", secs / 3600 % 24, secs % 3600 / 60)
 }
 
 /// The weekday and day of `date` (`Wed 21 Oct`), or the date as given if it does not parse.
@@ -310,6 +306,53 @@ mod tests {
         // Spans that merely touch with no gap do not fit side by side.
         assert_eq!(pack_lanes(&[(0.0, 10.0), (10.0, 20.0)], 2.0), vec![0, 1]);
         assert_eq!(pack_lanes(&[(0.0, 10.0), (12.0, 20.0)], 2.0), vec![0, 0]);
+    }
+
+    /// The timeline drawn from one fixed input, reduced to its length and hash: taken before its
+    /// private `clock` was replaced by the kit's (UIC-18), so a changed time shows as a changed
+    /// picture.
+    #[test]
+    fn the_timeline_is_pinned() {
+        let b = [
+            burst(
+                "American Robin",
+                0,
+                "2026-10-21",
+                6 * 3600 + 23 * 60 + 41,
+                7 * 3600 + 2 * 60,
+            ),
+            burst(
+                "Song Sparrow",
+                1,
+                "2026-10-21",
+                6 * 3600 + 30 * 60,
+                6 * 3600 + 51 * 60 + 59,
+            ),
+            burst(
+                "American Robin",
+                0,
+                "2026-10-20",
+                17 * 3600 + 5 * 60,
+                18 * 3600 + 44 * 60 + 30,
+            ),
+            burst(
+                "Song Sparrow",
+                1,
+                "2026-10-19",
+                23 * 3600 + 10 * 60,
+                23 * 3600 + 59 * 60 + 59,
+            ),
+        ];
+        let legend = [
+            ("American Robin".to_owned(), 0),
+            ("Song Sparrow".to_owned(), 1),
+        ];
+        let svg = burst_timeline(&b, &legend, 7, &slots());
+        assert_eq!(
+            super::super::kit::pin("bursts", &svg),
+            (3110, 2_507_182_675_635_988_869),
+            "the timeline changed"
+        );
     }
 
     #[test]
