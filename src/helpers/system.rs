@@ -194,6 +194,15 @@ pub fn start_disk_manager(
                 purge_policy: PurgePolicy::OldestFirst,
                 raw_keep,
                 hold_flag: None,
+                // Not the recordings manager's "nothing deletable" signal
+                // (N25-01): what this manager protects is only the segments
+                // being read this minute, so finding nothing to delete here is
+                // momentary and the advice the signal carries (unlock, the
+                // species floor, reviewed audio) is not about this directory.
+                // A second writer would also overwrite the recordings
+                // manager's verdict every cycle, as this directory is usually
+                // a RAM disk far below the threshold.
+                nothing_purgeable_flag: None,
             },
             "stream",
         ));
@@ -249,6 +258,7 @@ pub fn start_disk_manager(
                     raw_keep: None,
                     stream_max_bytes: 0,
                     hold_flag: Some(state.metrics().recording_held_flag()),
+                    nothing_purgeable_flag: Some(state.metrics().nothing_purgeable_flag()),
                 },
                 "recordings",
             ));
