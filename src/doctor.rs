@@ -213,7 +213,7 @@ type Family = fn(&Cli, Option<&Config>) -> Vec<Check>;
 /// away, turns a test red instead of silently dropping out of the report.
 /// The adapters exist only to give the families one signature; none of them
 /// decides anything.
-const CHECK_FAMILIES: [(&str, Family); 31] = [
+const CHECK_FAMILIES: [(&str, Family); 30] = [
     ("environment::check_runtime_environment", |_, _| {
         environment::check_runtime_environment()
     }),
@@ -249,14 +249,7 @@ const CHECK_FAMILIES: [(&str, Family); 31] = [
     ("config::check_species_names", |cli, cfg| {
         vec![config::check_species_names(cli, cfg)]
     }),
-    ("config::check_confirmation_filter", |cli, cfg| {
-        vec![config::check_confirmation_filter(cli, cfg)]
-    }),
-    ("config::check_overlap_duplicates", |cli, cfg| {
-        config::check_overlap_duplicates(cli, cfg)
-            .into_iter()
-            .collect()
-    }),
+    ("config::check_windows", config::check_windows),
     ("config::check_listen_address", |cli, _| {
         vec![config::check_listen_address(cli)]
     }),
@@ -513,6 +506,175 @@ mod tests {
             overlap_finding(&cli, Some(&config)).is_some(),
             "a negative interval is off"
         );
+    }
+
+    /// A station whose classifier is `model` (one of the tiny test models,
+    /// with eleven labels), configured by `lines`, in `dir`.
+    fn model_station(
+        dir: &std::path::Path,
+        model: &[u8],
+        lines: &str,
+    ) -> birdnet_core::config::Config {
+        std::fs::write(dir.join("model.onnx"), model).unwrap();
+        let labels: Vec<String> = (0..11).map(|i| format!("Species_{i}_Bird {i}")).collect();
+        std::fs::write(dir.join("labels.txt"), labels.join("\n")).unwrap();
+        birdnet_core::config::Config::parse(&format!(
+            "MODEL_PATH={d}/model.onnx\nLABELS_PATH={d}/labels.txt\nDB_PATH={d}/absent.db\n{lines}",
+            d = dir.display()
+        ))
+        .unwrap()
+    }
+
+    /// `[1, 144000]`: BirdNET V2.4's shape, a 3 s window at 48 kHz.
+    const TINY_V24: &[u8] =
+        include_bytes!("../crates/birdnet-core/src/testdata/tiny_v24_test.onnx");
+    /// The settings that make [`TINY_V24`]'s 144 000 samples the V3.0
+    /// preview's window: 144 000 samples at a declared 32 kHz, 4.5 s.
+    const AT_32_KHZ: &str = "MODEL_SAMPLE_RATE=32000";
+    /// `[1, 160000]`: Perch's shape, a 5 s window at 32 kHz.
+    const TINY_PERCH: &[u8] =
+        include_bytes!("../crates/birdnet-core/src/testdata/tiny_perch_test.onnx");
+
+    /// The finding named `name` in the report, if there is one.
+    fn finding(
+        cli: &crate::cli::Cli,
+        config: Option<&birdnet_core::config::Config>,
+        name: &str,
+    ) -> Option<Check> {
+        super::collect(cli, config)
+            .into_iter()
+            .find(|c| c.name == name)
+    }
+
+    /// MSC-08, the counterpart: the shipped settings (15 s segments, BirdNET
+    /// V2.4's 3 s windows, no overlap) cut five whole windows from every
+    /// segment, so the segment-length check has nothing to say, with or
+    /// without a model configured.
+    #[test]
+    fn the_default_segment_length_raises_nothing() {
+        use clap::Parser as _;
+        let cli = crate::cli::Cli::parse_from(["birdnet-behavior"]);
+        assert!(finding(&cli, None, "Segment length").is_none());
+        let dir = tempfile::tempdir().unwrap();
+        let config = model_station(dir.path(), TINY_V24, "SEGMENT_DURATION=15");
+        let none = finding(&cli, Some(&config), "Segment length");
+        assert!(none.is_none(), "{none:?}");
+        // The fixture did reach the classifier: the model checks loaded it.
+        let integrity = finding(&cli, Some(&config), "Model integrity").unwrap();
+        assert_eq!(integrity.status, Status::Pass, "{integrity:?}");
+    }
+
+    /// MSC-08 (a): a segment that is not a whole number of 3 s steps ends on a
+    /// remainder under the 1.5 s minimum, which no window ever hears. 10 s and
+    /// 16 s each lose their last second. A warning, never an error: an error
+    /// finding fails `--doctor-gate`'s report and reads as a broken station.
+    #[test]
+    fn a_segment_that_is_not_whole_steps_reports_the_audio_never_analysed() {
+        use clap::Parser as _;
+        let cli = crate::cli::Cli::parse_from(["birdnet-behavior"]);
+        for secs in [10, 16] {
+            let config = overlap_config(&format!("SEGMENT_DURATION={secs}"));
+            let check = finding(&cli, Some(&config), "Segment length")
+                .unwrap_or_else(|| panic!("{secs} s raised nothing"));
+            assert_eq!(check.status, Status::Warn, "{check:?}");
+            assert!(
+                check.message.contains("last 1.0 s of every")
+                    && check.message.contains("never analysed"),
+                "{}",
+                check.message
+            );
+            let fix = check.remediation.unwrap();
+            assert!(fix.contains("SEGMENT_DURATION"), "{fix}");
+        }
+    }
+
+    /// MSC-08 (b): with OVERLAP 1.5 the walk adds a window at 13.5 s that
+    /// holds 1.5 s of audio and 1.5 s of padding; and a 4.5 s window at 15 s
+    /// ends on a window of 1.5 s of audio and 3 s of padding. The second is
+    /// read from the classifier's own window, which the old 3 s assumption
+    /// would have called clean.
+    #[test]
+    fn a_padded_last_window_is_reported_from_the_classifiers_own_window() {
+        use clap::Parser as _;
+        let cli = crate::cli::Cli::parse_from(["birdnet-behavior"]);
+        let config = overlap_config("OVERLAP=1.5");
+        let check = finding(&cli, Some(&config), "Segment length").expect("overlap 1.5");
+        assert_eq!(check.status, Status::Warn, "{check:?}");
+        assert!(
+            check.message.contains("starts at 13.5 s")
+                && check
+                    .message
+                    .contains("1.5 s of audio and 1.5 s of silence"),
+            "{}",
+            check.message
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = model_station(dir.path(), TINY_V24, AT_32_KHZ);
+        let check = finding(&cli, Some(&config), "Segment length").expect("4.5 s at 15 s");
+        assert_eq!(check.status, Status::Warn, "{check:?}");
+        assert!(
+            check
+                .message
+                .contains("1.5 s of audio and 3.0 s of silence"),
+            "{}",
+            check.message
+        );
+        assert!(!check.message.contains("assuming"), "{}", check.message);
+    }
+
+    /// N24-06: the overlap finding's count and remedy are the configured
+    /// classifier's window, not an assumed 3 s. Perch's window is 5 s, so the
+    /// duplicate interval that keeps one row per call is at least 5 s.
+    #[test]
+    fn the_overlap_finding_uses_the_classifiers_window() {
+        use clap::Parser as _;
+        let cli = crate::cli::Cli::parse_from(["birdnet-behavior"]);
+        let dir = tempfile::tempdir().unwrap();
+        // Perch's rate is declared, as the catalogue's install writes it: its
+        // shape alone does not say 32 kHz.
+        let config = model_station(
+            dir.path(),
+            TINY_PERCH,
+            "OVERLAP=1.5\nMODEL_SAMPLE_RATE=32000",
+        );
+        let check = overlap_finding(&cli, Some(&config)).expect("overlap 1.5");
+        let fix = check.remediation.unwrap();
+        assert!(fix.contains("the window length, 5s"), "{fix}");
+
+        // The counterpart: a 3 s classifier still gets 3 s.
+        let dir = tempfile::tempdir().unwrap();
+        let config = model_station(dir.path(), TINY_V24, "OVERLAP=1.5");
+        let fix = overlap_finding(&cli, Some(&config))
+            .expect("overlap 1.5")
+            .remediation
+            .unwrap();
+        assert!(fix.contains("the window length, 3s"), "{fix}");
+    }
+
+    /// N24-06, the same assumption in the confirmation check: with the 4.5 s
+    /// window and no overlap, a window's six-second neighbourhood is itself
+    /// alone, so `balanced` rejects nothing, as the daemon's own startup
+    /// warning (which reads the fitted chunk) says. At 3 s it asks for 2 of 3.
+    #[test]
+    fn the_confirmation_check_uses_the_classifiers_window() {
+        use clap::Parser as _;
+        let cli = crate::cli::Cli::parse_from(["birdnet-behavior"]);
+        let name = "Repeat-confirmation filter";
+        let dir = tempfile::tempdir().unwrap();
+        let config = model_station(
+            dir.path(),
+            TINY_V24,
+            &format!("CONFIRMATION_LEVEL=balanced\n{AT_32_KHZ}"),
+        );
+        let check = finding(&cli, Some(&config), name).unwrap();
+        assert_eq!(check.status, Status::Warn, "{check:?}");
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = model_station(dir.path(), TINY_V24, "CONFIRMATION_LEVEL=balanced");
+        let check = finding(&cli, Some(&config), name).unwrap();
+        assert_eq!(check.status, Status::Pass, "{check:?}");
+        assert!(check.message.contains("heard in 2 of"), "{}", check.message);
     }
 
     /// The report itself, not only the table, names the data-volume check, and

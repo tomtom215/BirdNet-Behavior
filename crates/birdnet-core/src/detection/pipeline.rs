@@ -265,6 +265,70 @@ fn chunk_starts(len: usize, step: usize, min_tail: usize) -> Vec<usize> {
     starts
 }
 
+/// How a recording of a given length is cut into chunks: the starts
+/// [`process_file`] walks, and what that leaves unheard or padded.
+///
+/// Built by [`chunk_layout`] from the same config -> step -> minimum tail ->
+/// starts arithmetic `process_file` runs, so a diagnostic that asks "what does
+/// a 10 s segment lose?" reads the answer the pipeline acts on rather than a
+/// copy of it (MSC-08).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChunkLayout {
+    /// The recording's length, in samples at the target rate.
+    pub len: usize,
+    /// Each chunk's length, in samples at the target rate.
+    pub chunk_samples: usize,
+    /// How far apart consecutive chunks start, in samples.
+    pub step: usize,
+    /// The shortest remainder that still gets a chunk of its own, in samples.
+    pub min_tail: usize,
+    /// Where each chunk starts, in samples.
+    pub starts: Vec<usize>,
+}
+
+impl ChunkLayout {
+    /// Samples at the end of the recording that no chunk contains: the tail
+    /// the walk stopped short of because it was under [`Self::min_tail`].
+    #[must_use]
+    pub fn unanalysed_tail(&self) -> usize {
+        self.starts.last().map_or(self.len, |&last| {
+            self.len
+                .saturating_sub(last.saturating_add(self.chunk_samples))
+        })
+    }
+
+    /// Samples of silence the last chunk is padded with because the recording
+    /// ends inside it; `0` when it ends on or after the chunk's end.
+    #[must_use]
+    pub fn padded_tail(&self) -> usize {
+        self.starts.last().map_or(0, |&last| {
+            last.saturating_add(self.chunk_samples)
+                .saturating_sub(self.len)
+        })
+    }
+}
+
+/// How [`process_file`] cuts a recording of `len` samples (at
+/// `config.target_sample_rate`) under `config`.
+#[must_use]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss
+)]
+pub fn chunk_layout(config: &PipelineConfig, len: usize) -> ChunkLayout {
+    let chunk_samples = (config.chunk_duration_secs * config.target_sample_rate as f32) as usize;
+    let step = chunk_step_samples(config);
+    let min_tail = min_tail_samples(chunk_samples, config.target_sample_rate);
+    ChunkLayout {
+        len,
+        chunk_samples,
+        step,
+        min_tail,
+        starts: chunk_starts(len, step, min_tail),
+    }
+}
+
 /// Process a single audio file through the pipeline.
 ///
 /// Decodes, resamples, splits into chunks, and computes mel spectrograms.
@@ -326,13 +390,11 @@ pub fn process_file_with_source_rate(
         .collect::<Result<_, PipelineError>>()?;
 
     // Split into chunks
-    let chunk_samples = (config.chunk_duration_secs * config.target_sample_rate as f32) as usize;
-    let step = chunk_step_samples(config);
-
-    let min_tail = min_tail_samples(chunk_samples, config.target_sample_rate);
+    let layout = chunk_layout(config, samples.len());
+    let chunk_samples = layout.chunk_samples;
     let mut chunks = Vec::new();
 
-    for pos in chunk_starts(samples.len(), step, min_tail) {
+    for pos in layout.starts {
         let end = (pos + chunk_samples).min(samples.len());
         let mut chunk_data = samples[pos..end].to_vec();
 
@@ -574,6 +636,53 @@ mod tests {
     fn a_recording_shorter_than_the_minimum_still_gets_one_chunk() {
         assert_eq!(our_chunk_starts(48_000, 0.0, 3.0), vec![0]);
         assert!(our_chunk_starts(0, 0.0, 3.0).is_empty());
+    }
+
+    /// [`chunk_layout`] for a `secs`-second segment at 48 kHz.
+    fn layout(secs: f32, window: f32, overlap: f32) -> ChunkLayout {
+        let config = PipelineConfig {
+            chunk_duration_secs: window,
+            chunk_overlap_secs: overlap,
+            ..PipelineConfig::default()
+        };
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        chunk_layout(&config, (secs * 48_000.0) as usize)
+    }
+
+    /// The layout's starts are the walk's, and what it reports lost or
+    /// padded is the arithmetic MSC-08 worked by hand: the default 15 s
+    /// segment is five whole windows with nothing lost or padded; 10 s and
+    /// 16 s drop their last second; overlap 1.5 adds a window at 13.5 s that
+    /// is half silence; a 4.5 s window at 15 s ends on 1.5 s of audio and
+    /// 3 s of silence.
+    #[test]
+    fn the_layout_reports_what_a_segment_length_loses_or_pads() {
+        const S: usize = 48_000;
+        let default = layout(15.0, 3.0, 0.0);
+        assert_eq!(default.starts, vec![0, 3 * S, 6 * S, 9 * S, 12 * S]);
+        assert_eq!((default.unanalysed_tail(), default.padded_tail()), (0, 0));
+        assert_eq!(default.starts, our_chunk_starts(15 * S, 0.0, 3.0));
+
+        for secs in [10.0, 16.0] {
+            let l = layout(secs, 3.0, 0.0);
+            assert_eq!((l.unanalysed_tail(), l.padded_tail()), (S, 0), "{secs} s");
+        }
+
+        let overlap = layout(15.0, 3.0, 1.5);
+        assert_eq!(overlap.starts.last(), Some(&(27 * S / 2)));
+        assert_eq!(
+            (overlap.unanalysed_tail(), overlap.padded_tail()),
+            (0, 3 * S / 2)
+        );
+
+        let wide = layout(15.0, 4.5, 0.0);
+        assert_eq!(wide.starts, vec![0, 9 * S / 2, 9 * S, 27 * S / 2]);
+        assert_eq!((wide.unanalysed_tail(), wide.padded_tail()), (0, 3 * S));
+
+        // An 11 s segment keeps its 2 s tail as a padded window rather than
+        // dropping it: padded, not lost.
+        let eleven = layout(11.0, 3.0, 0.0);
+        assert_eq!((eleven.unanalysed_tail(), eleven.padded_tail()), (0, S));
     }
 
     #[test]

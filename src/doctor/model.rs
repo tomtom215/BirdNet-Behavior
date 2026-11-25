@@ -369,6 +369,103 @@ fn check_classifiers(
     out
 }
 
+/// The chunk arithmetic the detection daemon would run on this station, for
+/// the checks that reason about analysis windows (N24-06).
+pub(super) struct StationWindows {
+    /// The pipeline configuration as the daemon fits it: the configured
+    /// overlap, then the loaded classifiers' rate, window and step.
+    pub(super) pipeline: birdnet_core::detection::pipeline::PipelineConfig,
+    /// Why the window is an assumption rather than the classifiers' own, when
+    /// it is: no classifier is configured, or the configured ones did not load.
+    pub(super) assumed: Option<String>,
+}
+
+impl StationWindows {
+    /// Each chunk's length, in seconds.
+    pub(super) const fn chunk_secs(&self) -> f32 {
+        self.pipeline.chunk_duration_secs
+    }
+
+    /// How far apart consecutive chunks start, in seconds, as the pipeline
+    /// steps them ([`birdnet_core::detection::pipeline::chunk_step_samples`]).
+    #[allow(clippy::cast_precision_loss)]
+    pub(super) fn step_secs(&self) -> f32 {
+        birdnet_core::detection::pipeline::chunk_step_samples(&self.pipeline) as f32
+            / self.pipeline.target_sample_rate as f32
+    }
+
+    /// How far consecutive chunks overlap as the pipeline cuts them: the chunk
+    /// less the step, which is what the daemon judges the confirmation filter
+    /// against.
+    pub(super) fn effective_overlap_secs(&self) -> f32 {
+        (self.chunk_secs() - self.step_secs()).max(0.0)
+    }
+
+    /// The note a finding carries when its window is assumed, else nothing.
+    pub(super) fn caveat(&self) -> String {
+        self.assumed.as_ref().map_or_else(String::new, |why| {
+            format!(" (assuming BirdNET V2.4's 3 s window: {why})")
+        })
+    }
+}
+
+/// The station's analysis windows: the configured `overlap`, fitted to the
+/// classifiers the daemon would load by the daemon's own
+/// [`birdnet_core::detection::daemon::fit_pipeline_to_classifiers`].
+///
+/// The classifiers are read through the same [`crate::helpers::models::plan`]
+/// and registry load as [`check_classifiers`], so a declared
+/// `MODEL_SAMPLE_RATE` and a second classifier's window count as they do at
+/// startup. When nothing loads, the pipeline's default is used and said to be
+/// an assumption: the model checks report why nothing loaded.
+pub(super) fn station_windows(cli: &Cli, config: Option<&Config>, overlap: f32) -> StationWindows {
+    use birdnet_core::detection::pipeline::PipelineConfig;
+    let mut pipeline = PipelineConfig {
+        chunk_overlap_secs: overlap,
+        ..PipelineConfig::default()
+    };
+    let model = cli
+        .model
+        .clone()
+        .or_else(|| config?.get("MODEL_PATH").map(PathBuf::from));
+    let labels = cli
+        .labels
+        .clone()
+        .or_else(|| config?.get("LABELS_PATH").map(PathBuf::from));
+    let (Some(model), Some(labels)) = (model, labels) else {
+        return StationWindows {
+            pipeline,
+            assumed: Some("no classifier is configured".to_owned()),
+        };
+    };
+    let plan = crate::helpers::models::plan(
+        config,
+        model,
+        labels,
+        birdnet_behavioral::memory::detect_ceiling().map(|(mib, _)| mib),
+    );
+    match birdnet_core::inference::registry::ClassifierRegistry::load(
+        &plan.specs,
+        &plan.routes,
+        &birdnet_core::inference::model::ModelConfig {
+            num_threads: 1,
+            ..birdnet_core::inference::model::ModelConfig::default()
+        },
+    ) {
+        Ok(registry) => {
+            birdnet_core::detection::daemon::fit_pipeline_to_classifiers(&mut pipeline, &registry);
+            StationWindows {
+                pipeline,
+                assumed: None,
+            }
+        }
+        Err(e) => StationWindows {
+            pipeline,
+            assumed: Some(format!("the configured classifiers did not load: {e}")),
+        },
+    }
+}
+
 fn check_identity(model: &Path, db_path: &Path) -> Check {
     let digest = match birdnet_core::inference::identity::file_digest(model) {
         Ok(d) => d,

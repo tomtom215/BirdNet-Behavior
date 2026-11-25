@@ -65,8 +65,10 @@ See [Backups & Recovery](../admin/backups.md#offsite-backups).
 
 Almost certainly because the analysis windows do not overlap. The filter asks
 how many of the windows within six seconds heard the same species — and with no
-overlap, six seconds is two 3-second windows, so "20% of them" rounds up to one,
-which every detection already satisfies.
+overlap, six seconds is three 3-second windows, so "20% of them" or "30% of
+them" rounds up to one, which every detection already satisfies. (`balanced` and
+`strict` ask for two and three of the three; with a 4.5-second window and no
+overlap, no level asks for more than the detection itself.)
 
 Set `BIRDNET_OVERLAP` as well. `birdnet-behavior --doctor` reports which side of
 that line your station is on, the dropdown on the settings page prints the

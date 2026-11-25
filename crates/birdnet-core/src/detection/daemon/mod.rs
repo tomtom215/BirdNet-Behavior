@@ -29,7 +29,7 @@ mod process;
 mod run;
 
 pub use process::{process_and_infer_filtered, process_file_pipeline_only};
-pub use run::run_daemon;
+pub use run::{fit_pipeline_to_classifiers, run_daemon};
 
 /// Errors from the detection daemon.
 #[derive(Debug)]
