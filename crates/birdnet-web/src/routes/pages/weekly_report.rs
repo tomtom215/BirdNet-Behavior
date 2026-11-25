@@ -321,7 +321,6 @@ fn render_weekly_chart(
         desc: "Detections for each day of the week, Monday to Sunday; the busiest day is labelled and every day has a tooltip.",
         unit: "detections",
         days: &days,
-        slot: 0,
         width: 560.0,
         plot_h: 120.0,
         listened: None,

@@ -330,6 +330,25 @@ pub fn pin(name: &str, s: &str) -> (usize, u64) {
     (s.len(), h)
 }
 
+/// Every colour a species owns that `svg` paints with: a class `ck-c1` .. `ck-c8`, a token
+/// `--chart-1` .. `--chart-8`, or a gradient made from either. For the tests that hold a mark
+/// that is not a species to the colours no species owns (N25-06).
+#[cfg(test)]
+pub fn species_colours_in(svg: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for k in 1..=8 {
+        for word in [format!("ck-c{k}"), format!("--chart-{k})")] {
+            if svg
+                .match_indices(&word)
+                .any(|(i, _)| !svg[i + word.len()..].starts_with(|c: char| c.is_ascii_digit()))
+            {
+                out.push(word);
+            }
+        }
+    }
+    out
+}
+
 /// The value of the monotone curve through `pts` at `x` (for tests and for placing
 /// a mark on a curve rather than on the polyline). `None` outside the data's span.
 #[cfg(test)]
@@ -643,20 +662,6 @@ pub fn pct(v: f64) -> String {
         "<1%".to_owned()
     } else {
         format!("{:.0}%", p.round())
-    }
-}
-
-/// The class for categorical slot `i` (0-based): `ck-c1` … `ck-c8`, then `ck-cother`.
-///
-/// For a category that is **not a species**: a single series (`Fill::Slot(0)`, a day chart's
-/// one colour). A species takes its colour from the station's [`SpeciesSlots`], never from its
-/// position in a chart; `tests/a_species_keeps_its_colour_on_every_chart.rs` lists the callers
-/// this is allowed in.
-pub fn slot_class(i: usize) -> String {
-    if i < 8 {
-        format!("ck-c{}", i + 1)
-    } else {
-        "ck-cother".to_string()
     }
 }
 
