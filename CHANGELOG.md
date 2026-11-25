@@ -259,6 +259,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A full disk whose purge finds nothing it may delete now says so (N25-01).** With every clip left locked,
+  reviewed, at its species floor or excluded, the disk filled to 100% with only a warning in the log. It now
+  raises the `purge-nothing-deletable` health condition and the `birdnet_purge_nothing_deletable` gauge, and
+  logs one error saying how to make room. The signal does not stop the purge, which still takes a clip the
+  moment one becomes deletable.
 - **Retention no longer counts the end of the record as a bird that did not return (CHT-11).** A day near the end
   of the record could not have been followed for a month, and was averaged in as "not heard again"; every long
   interval read low, most for recent arrivals.

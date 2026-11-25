@@ -2995,7 +2995,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
    "status": "open",
-   "evidence": "Reported by the evidence lane from reading, 2026-11-25; the wording predates this batch."
+   "evidence": "Read, 2026-11-25: docs/book/admin/backups.md:45, docs/book/admin/recording.md:52 and docs/book/getting-started/configuration.md:171 say the disk manager purges 'the oldest recordings'. The default policy takes the most-recorded species first, lowest confidence then oldest, never below PURGE_SPECIES_FLOOR; configuration.md:85 and migration.md:163 say so correctly."
   },
   {
    "id": "N25-06",
@@ -3044,6 +3044,42 @@
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
    "status": "open",
    "evidence": "Noticed while rewriting the README (pull request 308), from reading; not probed."
+  },
+  {
+   "id": "N25-01",
+   "title": "A full disk where every remaining clip is protected deleted nothing and raised no condition",
+   "severity": "high",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
+   "status": "done",
+   "evidence": "c2d0619: found while checking RES-10's default. PurgeGovernor flagged a pass only when it removed files, so a pass over the threshold that removed none (every clip locked, reviewed, at its species floor or excluded) left only warnings in the log. New non-latching flag, health condition purge-nothing-deletable and gauge birdnet_purge_nothing_deletable. Gates a_full_disk_with_nothing_the_purge_may_delete_is_said ('over the threshold with nothing deletable, and nothing said'), a_full_disk_held_entirely_by_the_species_floor_is_said, a_purge_that_deletes_or_a_disk_below_the_threshold_does_not_say_it, each red on the unfixed code; counterpart the_ineffective_latch_still_stops_the_purge. Not covered by a test: the wiring in system.rs and check_purge, and the once-per-episode log. Not signalled: a station whose watch directory is its recordings directory (see N25-11)."
+  },
+  {
+   "id": "N25-10",
+   "title": "The stream and recordings disk managers write the same purge-ineffective flag",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
+   "status": "open",
+   "evidence": "Read, 2026-11-25 (src/helpers/system.rs, both DiskManager configs take purge_ineffective_flag()): with the stream directory on another filesystem below the threshold, the stream manager writes false every cycle while a latched recordings manager writes true, so the purge condition and gauge depend on which thread wrote last. Not probed."
+  },
+  {
+   "id": "N25-11",
+   "title": "With the watch directory equal to the recordings directory, locked and reviewed clips are not protected from the disk-full purge",
+   "severity": "high",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "unassigned",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
+   "status": "open",
+   "evidence": "Read, 2026-11-25, not probed: in that configuration the only disk manager is the stream one, which runs OldestFirst with a provider listing only in-flight segments. backups.md:47 says locked recordings are never purged. Needs a probe before anything is built on it."
   }
  ]
 }
