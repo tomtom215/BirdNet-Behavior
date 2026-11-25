@@ -3126,8 +3126,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/decisions-2026-11-25.md",
-   "status": "open",
-   "evidence": "Read 2026-11-25: README.md:117 against CHANGELOG (0.19.0 released 2026-10-31), with OOB-22; docs/UNATTENDED_DEPLOYMENT_AUDIT.md:603, written when the 4.5 s model was the default."
+   "status": "in_progress",
+   "evidence": "Read 2026-11-25: README.md:117 against CHANGELOG (0.19.0 released 2026-10-31), with OOB-22; docs/UNATTENDED_DEPLOYMENT_AUDIT.md:603, written when the 4.5 s model was the default. 86ed9df (2026-11-25): the S-1 row of docs/UNATTENDED_DEPLOYMENT_AUDIT.md carries a dated 'Superseded' note. Remains: README.md:117, which waits for pull request 308."
   },
   {
    "id": "N26-01",
