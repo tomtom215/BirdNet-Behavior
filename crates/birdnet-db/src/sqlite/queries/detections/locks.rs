@@ -126,8 +126,10 @@ pub fn locked_file_names(conn: &Connection) -> Result<Vec<String>, DbError> {
 }
 
 /// Whether a detection's clip is kept back from automatic deletion, as an SQL
-/// condition over `detections AS d`: the clip retention, the per-species cap
-/// and the disk-full purge all read it, so the three agree.
+/// condition over `detections AS d`.
+///
+/// The clip retention, the per-species cap and the disk-full purge all read
+/// it, so the three agree.
 ///
 /// A locked clip is always kept back. With `retain_reviewed` (the
 /// `RETAIN_REVIEWED_AUDIO` setting, on unless turned off) so is the clip of a

@@ -306,7 +306,7 @@ pub fn approve_quarantine(conn: &Connection, id: i64) -> Result<bool, DbError> {
     )
 }
 
-/// [`approve_quarantine`], recording `reviewer` against the verdict the
+/// [`approve_quarantine`], recording `by` against the verdict the
 /// approval gives in the review history (`review_events`), which outlives the
 /// audit log (N24-04).
 ///
@@ -316,7 +316,7 @@ pub fn approve_quarantine(conn: &Connection, id: i64) -> Result<bool, DbError> {
 pub fn approve_quarantine_by(
     conn: &Connection,
     id: i64,
-    reviewer: &super::Reviewer<'_>,
+    by: &super::Reviewer<'_>,
 ) -> Result<bool, DbError> {
     let tx = conn.unchecked_transaction()?;
 
@@ -363,7 +363,7 @@ pub fn approve_quarantine_by(
                  SELECT date, time, sci_name, COALESCE(file_name, ''), 'confirmed', ?2, ?3, ?4,
                         'Approved from quarantine'
                    FROM quarantine WHERE id = ?1",
-                params![id, reviewer.user_id, reviewer.name, reviewer.via],
+                params![id, by.user_id, by.name, by.via],
             )?;
         }
     }

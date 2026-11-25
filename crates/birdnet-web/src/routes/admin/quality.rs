@@ -825,7 +825,7 @@ fn render_review_share(
     if rows.is_empty() {
         return r#"<p class="bnb-meta">No detection has a reviewer verdict yet.</p>"#.to_string();
     }
-    let named = |r: &SpeciesReviewShare| names.name(&r.sci_name, &r.com_name).to_owned();
+    let shown_name = |r: &SpeciesReviewShare| names.name(&r.sci_name, &r.com_name).to_owned();
     let mut ranked: Vec<(&SpeciesReviewShare, (f64, f64))> = rows
         .iter()
         .filter(|r| r.reviewed >= MIN_VERDICTS_TO_RANK)
@@ -837,13 +837,13 @@ fn render_review_share(
     ranked.sort_by(|(a, ia), (b, ib)| {
         ia.1.total_cmp(&ib.1)
             .then(ia.0.total_cmp(&ib.0))
-            .then_with(|| named(a).cmp(&named(b)))
+            .then_with(|| shown_name(a).cmp(&shown_name(b)))
     });
     let mut thin: Vec<&SpeciesReviewShare> = rows
         .iter()
         .filter(|r| r.reviewed < MIN_VERDICTS_TO_RANK)
         .collect();
-    thin.sort_by_key(|r| named(r));
+    thin.sort_by_key(|r| shown_name(r));
 
     let mut html = String::new();
     if ranked.is_empty() {
@@ -867,7 +867,7 @@ fn render_review_share(
   </div>
   <div class="bnb-mvr-gap small">95% interval {lo}–{hi}%</div>
 </li>"#,
-                com = escape_html(&named(r)),
+                com = escape_html(&shown_name(r)),
                 sci = escape_html(&r.sci_name),
                 confirmed = r.confirmed,
                 reviewed = r.reviewed,
@@ -888,7 +888,7 @@ fn render_review_share(
             let _ = write!(
                 html,
                 "<li>{com}: {confirmed} of {reviewed} confirmed (95% interval {lo}–{hi}%)</li>",
-                com = escape_html(&named(r)),
+                com = escape_html(&shown_name(r)),
                 confirmed = r.confirmed,
                 reviewed = r.reviewed,
                 lo = pct(lo),

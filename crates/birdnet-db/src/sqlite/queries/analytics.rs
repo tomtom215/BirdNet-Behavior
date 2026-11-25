@@ -505,9 +505,11 @@ pub fn wilson_interval_95(successes: u32, trials: u32) -> Option<(f64, f64)> {
     ))
 }
 
-/// Every species with at least one current verdict: how many verdicts, and
-/// how many of them confirmed. Unordered and unfiltered: how few verdicts are
-/// too few to rank is the reader's decision, made with the interval.
+/// Every species with at least one current verdict: how many, and how many
+/// confirmed.
+///
+/// Unordered and unfiltered: how few verdicts are too few to rank is the
+/// reader's decision, made with the interval.
 ///
 /// Counted from `detection_reviews` (a verdict attached to no detection is in
 /// no count, as everywhere), one per verdict: a verdict names one detection by
