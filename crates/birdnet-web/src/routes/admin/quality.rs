@@ -27,9 +27,9 @@ use axum::response::Html;
 use axum::{Router, routing::get};
 
 use birdnet_db::sqlite::{
-    ModelVsReviewRow, QualitySummary, ReviewVerdictDay, confidence_distribution, confidence_trend,
-    detection_quality_by_hour, low_confidence_species, model_vs_review_by_species, quality_summary,
-    review_verdict_trend,
+    QualitySummary, ReviewVerdictDay, SpeciesReviewShare, confidence_distribution,
+    confidence_trend, detection_quality_by_hour, low_confidence_species, quality_summary,
+    review_share_by_species, review_verdict_trend,
 };
 
 use crate::routes::pages::escape_html;
@@ -304,7 +304,7 @@ struct QualityData {
     by_hour: Loaded<Vec<(u8, i64, f64)>>,
     low_conf: Loaded<Vec<(String, String, i64, f64)>>,
     review_trend: Loaded<Vec<ReviewVerdictDay>>,
-    model_vs_review: Loaded<Vec<ModelVsReviewRow>>,
+    review_share: Loaded<Vec<SpeciesReviewShare>>,
 }
 
 /// Render one panel from what was loaded for it, or say it could not be.
@@ -348,7 +348,7 @@ fn load_quality_data(state: &AppState) -> QualityData {
                 .collect()
         }),
         review_trend: review_verdict_trend(conn, 30),
-        model_vs_review: model_vs_review_by_species(conn, 12),
+        review_share: review_share_by_species(conn),
     })
 }
 
@@ -378,11 +378,9 @@ fn render_quality_page(data: &QualityData, names: &birdnet_core::i18n::NameLocal
     let review_trend_html = panel(&data.review_trend, "the review verdict trend", |r| {
         render_review_trend(r)
     });
-    let model_vs_review_html = panel(
-        &data.model_vs_review,
-        "the model-versus-human comparison",
-        |m| render_model_vs_review(m, names),
-    );
+    let review_share_html = panel(&data.review_share, "the reviewer verdicts", |r| {
+        render_review_share(r, names)
+    });
     let tuning_link = help_link(Topic::Tuning);
     // Skeletons for the partials that load via hx-trigger="load"
     // (#quality-summary and #quality-trend), so the page does not jump when
@@ -483,17 +481,20 @@ fn render_quality_page(data: &QualityData, names: &birdnet_core::i18n::NameLocal
 <section class="bnb-card pad q-section">
   <div class="section-header">
     <div>
-      <div class="bnb-eyebrow">Model vs. human</div>
-      <h3>Where do they disagree most?</h3>
+      <div class="bnb-eyebrow">Reviewer verdicts</div>
+      <h3>Share of reviewed detections confirmed</h3>
     </div>
   </div>
   <p class="bnb-meta q-meta-mb">
-    Per-species comparison of the classifier's mean confidence (top bar) vs.
-    the share of reviewed calls that humans confirmed (bottom bar). Species
-    sorted by the gap, biggest first — these are the most likely
-    overconfident false positives.
+    Per species, the share of the detections a reviewer looked at that they
+    confirmed, with its 95% interval. Reviews are not a random sample: people
+    review what looks wrong, so this is not the share of all detections that
+    are right. Species with at least {MIN_VERDICTS_TO_RANK} verdicts are ranked
+    by the top of the interval, lowest first: the ones whose share is credibly
+    lowest. Fewer verdicts than that leave the interval too wide to rank on,
+    and those species are listed apart.
   </p>
-  {model_vs_review_html}
+  {review_share_html}
 </section>
 
 <section class="bnb-card pad q-section">
@@ -800,54 +801,102 @@ fn render_review_trend(days: &[ReviewVerdictDay]) -> String {
     html
 }
 
-fn render_model_vs_review(
-    rows: &[ModelVsReviewRow],
+/// Verdicts a species needs before its confirmed share is ranked (ACC-07).
+///
+/// Below it the 95 % interval is too wide to order species by: 2 of 3 spans
+/// 21 % to 94 %. 20 is the floor the audit proposed; at 20 the interval is
+/// still about ±20 points, which the panel prints rather than hides.
+const MIN_VERDICTS_TO_RANK: u32 = 20;
+
+/// Ranked rows shown at most.
+const RANKED_ROWS: usize = 12;
+
+/// Whole percent, for display.
+fn pct(share: f64) -> u32 {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let p = (share * 100.0).round().clamp(0.0, 100.0) as u32;
+    p
+}
+
+fn render_review_share(
+    rows: &[SpeciesReviewShare],
     names: &birdnet_core::i18n::NameLocalizer,
 ) -> String {
     if rows.is_empty() {
-        return r#"<p class="bnb-meta">Not enough reviewed detections yet. The panel needs at least 5 detections per species and 3 reviewer verdicts to compare model and human confidence.</p>"#.to_string();
+        return r#"<p class="bnb-meta">No detection has a reviewer verdict yet.</p>"#.to_string();
     }
-    let mut html = String::from(r#"<ul class="bnb-mvr q-mvr-list" role="list">"#);
-    for r in rows {
-        let model_pct = (r.model_avg * 100.0).clamp(0.0, 100.0);
-        let human_pct = (r.human_avg * 100.0).clamp(0.0, 100.0);
-        let gap = r.model_avg - r.human_avg;
-        let gap_class = if gap.abs() >= 0.15 { "" } else { " small" };
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let model_w = model_pct as u32;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let human_w = human_pct as u32;
-        let species_link = format!(
-            "/quarantine?species={}",
-            crate::routes::pages::simple_url_encode(&r.com_name)
-        );
+    let named = |r: &SpeciesReviewShare| names.name(&r.sci_name, &r.com_name).to_owned();
+    let mut ranked: Vec<(&SpeciesReviewShare, (f64, f64))> = rows
+        .iter()
+        .filter(|r| r.reviewed >= MIN_VERDICTS_TO_RANK)
+        .filter_map(|r| r.interval().map(|i| (r, i)))
+        .collect();
+    // The top of the interval, lowest first: a species ranks high only when
+    // even the most generous reading of its verdicts is low. Ties by the
+    // bottom, then by name, so the order does not depend on the database's.
+    ranked.sort_by(|(a, ia), (b, ib)| {
+        ia.1.total_cmp(&ib.1)
+            .then(ia.0.total_cmp(&ib.0))
+            .then_with(|| named(a).cmp(&named(b)))
+    });
+    let mut thin: Vec<&SpeciesReviewShare> = rows
+        .iter()
+        .filter(|r| r.reviewed < MIN_VERDICTS_TO_RANK)
+        .collect();
+    thin.sort_by_key(|r| named(r));
+
+    let mut html = String::new();
+    if ranked.is_empty() {
         let _ = write!(
             html,
-            r#"<li class="bnb-mvr-row">
+            r#"<p class="bnb-meta">No species has {MIN_VERDICTS_TO_RANK} verdicts yet, so none is ranked.</p>"#
+        );
+    } else {
+        html.push_str(r#"<ol class="bnb-mvr q-mvr-list" role="list">"#);
+        for (r, (lo, hi)) in ranked.iter().take(RANKED_ROWS) {
+            let share = f64::from(r.confirmed) / f64::from(r.reviewed);
+            let _ = write!(
+                html,
+                r#"<li class="bnb-mvr-row">
   <div class="bnb-mvr-name">
-    <a href="{href}" class="q-mvr-link">{com}</a>
-    <em>{sci} · {total} detections</em>
+    {com}
+    <em>{sci} · {confirmed} of {reviewed} reviewed confirmed</em>
   </div>
   <div class="bnb-mvr-bars">
-    <div class="bnb-mvr-bar model"><span class="fill" data-style="width:{model_w}%"></span><span class="label">model {model_pct:.0}%</span></div>
-    <div class="bnb-mvr-bar human"><span class="fill" data-style="width:{human_w}%"></span><span class="label">human {human_pct:.0}%</span></div>
+    <div class="bnb-mvr-bar human"><span class="fill" data-style="width:{share_pct}%"></span><span class="label">{share_pct}% confirmed</span></div>
   </div>
-  <div class="bnb-mvr-gap{gap_class}">Δ {gap_sign}{gap_abs:.0}%</div>
+  <div class="bnb-mvr-gap small">95% interval {lo}–{hi}%</div>
 </li>"#,
-            href = escape_html(&species_link),
-            com = escape_html(names.name(&r.sci_name, &r.com_name)),
-            sci = escape_html(&r.sci_name),
-            total = r.total,
-            model_w = model_w,
-            human_w = human_w,
-            model_pct = model_pct,
-            human_pct = human_pct,
-            gap_class = gap_class,
-            gap_sign = if gap >= 0.0 { "+" } else { "−" },
-            gap_abs = (gap.abs() * 100.0),
-        );
+                com = escape_html(&named(r)),
+                sci = escape_html(&r.sci_name),
+                confirmed = r.confirmed,
+                reviewed = r.reviewed,
+                share_pct = pct(share),
+                lo = pct(*lo),
+                hi = pct(*hi),
+            );
+        }
+        html.push_str("</ol>");
     }
-    html.push_str("</ul>");
+    if !thin.is_empty() {
+        let _ = write!(
+            html,
+            r#"<p class="bnb-meta q-meta-mb">Not ranked, fewer than {MIN_VERDICTS_TO_RANK} verdicts:</p><ul class="bnb-meta q-mvr-list" role="list">"#
+        );
+        for r in &thin {
+            let (lo, hi) = r.interval().unwrap_or((0.0, 1.0));
+            let _ = write!(
+                html,
+                "<li>{com}: {confirmed} of {reviewed} confirmed (95% interval {lo}–{hi}%)</li>",
+                com = escape_html(&named(r)),
+                confirmed = r.confirmed,
+                reviewed = r.reviewed,
+                lo = pct(lo),
+                hi = pct(hi),
+            );
+        }
+        html.push_str("</ul>");
+    }
     html
 }
 

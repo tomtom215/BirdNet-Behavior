@@ -454,82 +454,89 @@ pub fn review_verdict_trend(
     Ok(rows)
 }
 
-/// One species' model-vs-human confidence comparison for O-22.
+/// One species' reviewer verdicts, for the Data tab's verdict panel (ACC-07).
 ///
-/// `model_avg` is the mean detection confidence the classifier reported.
-/// `human_avg` is the share of *reviewed* detections that humans
-/// confirmed — `confirmed / (confirmed + rejected)`. The gap
-/// `model_avg − human_avg` flags species the model trusts more than the
-/// operator does (the top of the list in the rendered panel).
-#[derive(Debug, Clone)]
-pub struct ModelVsReviewRow {
-    /// Common name of the species.
+/// A share of *reviewed* detections, not an accuracy: reviews are not a random
+/// sample (people review what looks wrong), so `confirmed / reviewed` says
+/// what reviewers decided about the detections they chose to look at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpeciesReviewShare {
+    /// Common name, as the verdicts recorded it.
     pub com_name: String,
     /// Scientific name of the species.
     pub sci_name: String,
-    /// Total number of detections for this species.
-    pub total: i64,
-    /// Mean BirdNET confidence score across all detections (0.0–1.0).
-    pub model_avg: f64,
-    /// Fraction of reviewed detections that humans confirmed
-    /// (`confirmed / (confirmed + rejected)`). `0.0` when no verdicts exist.
-    pub human_avg: f64,
+    /// Verdicts that confirmed a detection.
+    pub confirmed: u32,
+    /// Verdicts either way (`confirmed` plus rejected); never 0 in a result.
+    pub reviewed: u32,
 }
 
-/// Per-species model-vs-review average for species with at least 5
-/// detections and at least 3 review verdicts. Ordered by widest
-/// `model_avg − human_avg` gap first, capped at `limit` rows.
+impl SpeciesReviewShare {
+    /// The 95 % Wilson score interval on the confirmed share
+    /// ([`wilson_interval_95`]).
+    #[must_use]
+    pub fn interval(&self) -> Option<(f64, f64)> {
+        wilson_interval_95(self.confirmed, self.reviewed)
+    }
+}
+
+/// The 95 % Wilson score interval for `successes` out of `trials`, as
+/// `(low, high)` in `0.0..=1.0`; `None` for no trials.
+///
+/// The Wilson interval rather than the normal approximation because the
+/// counts here are small and the share is often near 0 or 1, where the normal
+/// interval runs outside `0..1` and is far too narrow: 2 of 3 is 0.21 to 0.94.
+#[must_use]
+pub fn wilson_interval_95(successes: u32, trials: u32) -> Option<(f64, f64)> {
+    /// The 97.5th percentile of the standard normal distribution.
+    const Z: f64 = 1.959_963_984_540_054;
+    if trials == 0 {
+        return None;
+    }
+    let n = f64::from(trials);
+    let p = f64::from(successes.min(trials)) / n;
+    let z2 = Z * Z;
+    let denominator = 1.0 + z2 / n;
+    let centre = (p + z2 / (2.0 * n)) / denominator;
+    let half = Z * (p * (1.0 - p) / n + z2 / (4.0 * n * n)).sqrt() / denominator;
+    Some((
+        (centre - half).clamp(0.0, 1.0),
+        (centre + half).clamp(0.0, 1.0),
+    ))
+}
+
+/// Every species with at least one current verdict: how many verdicts, and
+/// how many of them confirmed. Unordered and unfiltered: how few verdicts are
+/// too few to rank is the reader's decision, made with the interval.
+///
+/// Counted from `detection_reviews` (a verdict attached to no detection is in
+/// no count, as everywhere), one per verdict: a verdict names one detection by
+/// its clip, and a join from the detections side counted it once for every row
+/// sharing its date, time and species.
 ///
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
-///
-/// Reads the raw table, not `detections_analytic`, for the same reason as
-/// [`review_verdict_trend`]: a comparison of what the model said against what
-/// a reviewer said has to see the detections the reviewer threw out.
-pub fn model_vs_review_by_species(
-    conn: &Connection,
-    limit: u32,
-) -> Result<Vec<ModelVsReviewRow>, DbError> {
+pub fn review_share_by_species(conn: &Connection) -> Result<Vec<SpeciesReviewShare>, DbError> {
     let mut stmt = conn.prepare(
-        "WITH per_species AS (
-             SELECT d.Com_Name AS com,
-                    d.Sci_Name AS sci,
-                    COUNT(*)                                         AS total,
-                    AVG(d.Confidence)                                AS model_avg,
-                    SUM(CASE WHEN r.status = 'confirmed' THEN 1 END) AS confirmed,
-                    SUM(CASE WHEN r.status = 'rejected'  THEN 1 END) AS rejected
-               FROM detections d
-          LEFT JOIN detection_reviews r
-                 ON r.date = d.Date AND r.time = d.Time AND r.sci_name = d.Sci_Name
-                 AND r.file_name = COALESCE(d.File_Name, '') AND r.detached IS NULL
-              GROUP BY d.Com_Name, d.Sci_Name
-             HAVING COUNT(*) >= 5
-                AND SUM(CASE WHEN r.status IS NOT NULL THEN 1 END) >= 3
-         )
-         SELECT com,
-                sci,
-                total,
-                model_avg,
-                CAST(COALESCE(confirmed, 0) AS REAL)
-                  / NULLIF(COALESCE(confirmed, 0) + COALESCE(rejected, 0), 0) AS human_avg
-           FROM per_species
-          ORDER BY (model_avg - COALESCE(
-                       CAST(COALESCE(confirmed, 0) AS REAL)
-                         / NULLIF(COALESCE(confirmed, 0) + COALESCE(rejected, 0), 0),
-                       0.0
-                   )) DESC
-          LIMIT ?1",
+        "SELECT MAX(r.com_name),
+                r.sci_name,
+                SUM(CASE WHEN r.status = 'confirmed' THEN 1 ELSE 0 END),
+                COUNT(*)
+           FROM detection_reviews r
+          WHERE r.detached IS NULL
+            AND EXISTS (SELECT 1 FROM detections d
+                         WHERE d.Date = r.date AND d.Time = r.time AND d.Sci_Name = r.sci_name
+                           AND COALESCE(d.File_Name, '') = r.file_name)
+          GROUP BY r.sci_name",
     )?;
     let rows = stmt
-        .query_map(params![limit], |row| {
-            let human_avg: Option<f64> = row.get(4)?;
-            Ok(ModelVsReviewRow {
+        .query_map([], |row| {
+            Ok(SpeciesReviewShare {
                 com_name: row.get(0)?,
                 sci_name: row.get(1)?,
-                total: row.get(2)?,
-                model_avg: row.get(3)?,
-                human_avg: human_avg.unwrap_or(0.0),
+                confirmed: row.get(2)?,
+                reviewed: row.get(3)?,
             })
         })?
         .collect::<Result<Vec<_>, _>>()?;
@@ -541,7 +548,7 @@ pub fn model_vs_review_by_species(
 ///
 /// Reads the raw `detections` table, not `detections_analytic`: the view hides
 /// rejected rows, and a rejected row is exactly half the evidence here. This is
-/// the same reason [`review_verdict_trend`] and [`model_vs_review_by_species`]
+/// the same reason [`review_verdict_trend`] and [`review_share_by_species`]
 /// read the raw table.
 ///
 /// # Errors
@@ -1145,34 +1152,19 @@ mod tests {
     }
 
     #[test]
-    fn model_vs_review_filters_species_below_min_count() {
+    fn review_share_lists_no_species_without_a_verdict() {
         let (_tmp, conn) = temp_db_with_data();
-        // Fixture has 2 Blackbird rows, 1 Robin, 1 Great Tit — none meet
-        // the `>= 5` total threshold, so the result is empty regardless of
-        // reviews.
-        let rows = model_vs_review_by_species(&conn, 12).unwrap();
-        assert!(rows.is_empty());
+        assert!(review_share_by_species(&conn).unwrap().is_empty());
     }
 
     #[test]
-    fn model_vs_review_returns_eligible_species() {
+    fn review_share_counts_confirmed_among_reviewed() {
         let (_tmp, conn) = temp_db_with_data();
-        // Add three more Blackbird rows so the species crosses the 5-row
-        // threshold, and 3 reviewer verdicts so the HAVING clause also
-        // passes.
-        let recent = days_ago(&conn, 5);
-        for time in ["08:00:00", "09:00:00", "10:00:00"] {
-            conn.execute(
-                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
-                 VALUES (?1, ?2, 'Turdus merula', 'Eurasian Blackbird', 0.80)",
-                params![recent, time],
-            )
-            .unwrap();
-        }
-        // Two confirmed, one rejected.
+        let recent = days_ago(&conn, 6);
+        // Two confirmed, one rejected, of two blackbirds and a robin.
         add_review(
             &conn,
-            &days_ago(&conn, 6),
+            &recent,
             "06:30:00",
             "Turdus merula",
             "Eurasian Blackbird",
@@ -1181,29 +1173,52 @@ mod tests {
         add_review(
             &conn,
             &recent,
-            "08:00:00",
-            "Turdus merula",
-            "Eurasian Blackbird",
-            "confirmed",
-        );
-        add_review(
-            &conn,
-            &recent,
-            "09:00:00",
+            "07:00:00",
             "Turdus merula",
             "Eurasian Blackbird",
             "rejected",
         );
-
-        let rows = model_vs_review_by_species(&conn, 12).unwrap();
-        let bb = rows
+        add_review(
+            &conn,
+            &recent,
+            "06:45:00",
+            "Erithacus rubecula",
+            "European Robin",
+            "confirmed",
+        );
+        let mut rows = review_share_by_species(&conn).unwrap();
+        rows.sort_by(|a, b| a.sci_name.cmp(&b.sci_name));
+        let counts: Vec<(&str, u32, u32)> = rows
             .iter()
-            .find(|r| r.com_name == "Eurasian Blackbird")
-            .expect("blackbird row");
-        assert_eq!(bb.total, 5);
-        assert!(bb.model_avg > 0.0);
-        // 2 confirmed / (2 + 1 rejected) = 0.66…
-        assert!((bb.human_avg - 2.0 / 3.0).abs() < 1e-6);
+            .map(|r| (r.sci_name.as_str(), r.confirmed, r.reviewed))
+            .collect();
+        assert_eq!(
+            counts,
+            [("Erithacus rubecula", 1, 1), ("Turdus merula", 1, 2)]
+        );
+    }
+
+    /// The interval against values computed by hand from the formula,
+    /// `(p + z²/2n ± z·√(p(1−p)/n + z²/4n²)) / (1 + z²/n)` with z = 1.96:
+    /// 2 of 3 is 0.2077 to 0.9385, 16 of 24 is 0.4671 to 0.8203, 10 of 20 is
+    /// 0.2993 to 0.7007; the bounds stay within 0..1 at 0 and n of n.
+    #[test]
+    fn the_wilson_interval_matches_the_formula() {
+        let close = |got: Option<(f64, f64)>, want: (f64, f64)| {
+            let (lo, hi) = got.expect("an interval");
+            assert!(
+                (lo - want.0).abs() < 5e-5 && (hi - want.1).abs() < 5e-5,
+                "{lo:.4}–{hi:.4}, want {:.4}–{:.4}",
+                want.0,
+                want.1
+            );
+        };
+        close(wilson_interval_95(2, 3), (0.2077, 0.9385));
+        close(wilson_interval_95(16, 24), (0.4671, 0.8203));
+        close(wilson_interval_95(10, 20), (0.2993, 0.7007));
+        close(wilson_interval_95(0, 5), (0.0, 0.4345));
+        close(wilson_interval_95(5, 5), (0.5655, 1.0));
+        assert_eq!(wilson_interval_95(0, 0), None);
     }
 
     // ── reviewed detections, for the threshold suggester ────────────────
@@ -1366,12 +1381,11 @@ mod tests {
         );
     }
 
-    /// The model-versus-review panel's floor is "at least 3 verdicts". One verdict
-    /// on one of two same-second detections is one verdict: a join on the triple
-    /// counted it for both rows and let a species past the floor on two real
-    /// verdicts.
+    /// One verdict on one of two same-second detections is one verdict: a join
+    /// on the triple counted it for both rows and let a species past the old
+    /// panel's floor on two real verdicts.
     #[test]
-    fn the_verdict_floor_counts_verdicts_and_not_the_rows_they_were_joined_to() {
+    fn the_verdict_count_counts_verdicts_and_not_the_rows_they_were_joined_to() {
         use crate::sqlite::DetectionKey;
         use crate::sqlite::queries::detection_reviews::{ReviewStatus, set_detection_review};
 
@@ -1404,21 +1418,23 @@ mod tests {
         verdict("05:00:00", "a.wav", ReviewStatus::Rejected); // one verdict, on one of the pair
         verdict("05:00:01", "c.wav", ReviewStatus::Confirmed);
 
-        assert!(
-            model_vs_review_by_species(&conn, 10).unwrap().is_empty(),
-            "two verdicts are under the floor of three, however many rows they join to"
+        let counts = |conn: &Connection| -> Vec<(u32, u32)> {
+            review_share_by_species(conn)
+                .unwrap()
+                .iter()
+                .map(|r| (r.confirmed, r.reviewed))
+                .collect()
+        };
+        assert_eq!(
+            counts(&conn),
+            [(1, 2)],
+            "two verdicts, however many rows they join to"
         );
 
-        // The counterpart: a third real verdict puts the species over it, so the
-        // function is not simply returning nothing.
+        // The counterpart: a third real verdict is counted, so the function is
+        // not simply under-counting.
         verdict("05:00:02", "d.wav", ReviewStatus::Confirmed);
-        let rows = model_vs_review_by_species(&conn, 10).unwrap();
-        assert_eq!(rows.len(), 1);
-        assert!(
-            (rows[0].human_avg - 2.0 / 3.0).abs() < 1e-9,
-            "{:?}",
-            rows[0]
-        );
+        assert_eq!(counts(&conn), [(2, 3)]);
     }
 
     // ── species shapes, for the phantom report ──────────────────────────
