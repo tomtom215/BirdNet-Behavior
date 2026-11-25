@@ -9,7 +9,7 @@ import path from 'node:path';
 const BASE = process.env.BASE || 'http://127.0.0.1:8502';
 const OUT = process.env.OUT || '/home/user/BirdNet-Behavior/docs/book/images';
 const browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
-const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1, colorScheme: 'light' });
+const ctx = await browser.newContext({ viewport: { width: 1440, height: 1000 }, deviceScaleFactor: 1, colorScheme: 'light', reducedMotion: 'reduce' });
 await ctx.addInitScript(() => { try { localStorage.setItem('theme', 'light'); } catch (e) {} });
 const page = await ctx.newPage();
 await page.goto(BASE + '/onboarding', { waitUntil: 'networkidle' });

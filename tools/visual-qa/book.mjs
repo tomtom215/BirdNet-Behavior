@@ -100,6 +100,9 @@ for (const [name, route, theme, selector] of PAGES) {
     viewport: { width: W, height: 1000 },
     deviceScaleFactor: 1,
     colorScheme: theme,
+    // A full-page picture is taken while a chart may still be arriving, and one taken mid-entrance
+    // shows an empty chart (UIR-33): the pictures are of the charts at rest.
+    reducedMotion: 'reduce',
   });
   await ctx.addInitScript((t) => {
     try { localStorage.setItem('theme', t); localStorage.setItem('bnb-density', 'regular'); } catch (e) {}
