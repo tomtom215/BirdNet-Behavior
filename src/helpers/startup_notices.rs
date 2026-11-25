@@ -69,6 +69,25 @@ pub fn keep_overridden_by_watch_dir(
         })
 }
 
+/// What a station loses when the stream directory *is* the recordings directory
+/// (`--watch-dir` set to it): the stream manager is then the only disk manager on
+/// the clips, and it drains by age and protects only the segments being read.
+///
+/// Probed 2026-11-25 (N25-11) with one locked and one unlocked clip: with the two
+/// directories equal, both were deleted once an hour old with the disk not full,
+/// and the locked one was deleted on a full disk; with separate directories the
+/// locked clip survived both. Neither installer sets the directories equal.
+#[must_use]
+pub fn clips_drained_by_watch_dir(watch_dir_is_recordings_dir: bool) -> Option<String> {
+    watch_dir_is_recordings_dir.then(|| {
+        "EVERY SAVED CLIP WILL BE DELETED: --watch-dir is the recordings directory, and a watch \
+         directory is emptied of anything older than STREAM_RETENTION_SECS (10 minutes unless \
+         set), locked, reviewed or not. Point --watch-dir at a different directory (a RAM disk \
+         is usual) to keep clips"
+            .to_owned()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,6 +119,16 @@ mod tests {
         assert!(notices(Some(&explicit)).is_empty());
         let blank = config_with(&[("RECORDING_LENGTH", " "), ("FULL_DISK", "")]);
         assert!(notices(Some(&blank)).is_empty());
+    }
+
+    #[test]
+    fn a_watch_dir_that_is_the_recordings_dir_is_said_to_delete_clips() {
+        let said = clips_drained_by_watch_dir(true).expect("a notice");
+        assert!(
+            said.contains("DELETED") && said.contains("--watch-dir"),
+            "{said}"
+        );
+        assert!(clips_drained_by_watch_dir(false).is_none());
     }
 
     #[test]
