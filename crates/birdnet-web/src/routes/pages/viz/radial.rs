@@ -274,7 +274,7 @@ pub fn chord_diagram(g: &CoGraph, max_links: usize) -> String {
     svg.push_str(&svg_a11y(
         "Acoustic co-occurrence network",
         &format!(
-            "{} species on a ring joined by the {} strongest links; a wider, darker ribbon joins two species that were heard together in the same five-minute block more of the time. The strongest is {} with {}.",
+            "{} species on a ring joined by the {} strongest links; a wider ribbon, in a stronger colour, joins two species that were heard together in the same five-minute block more of the time. The strongest is {} with {}.",
             nodes.len(),
             links.len(),
             g.names[links[0].a],

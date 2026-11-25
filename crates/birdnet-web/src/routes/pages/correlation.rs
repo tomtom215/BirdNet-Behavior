@@ -71,7 +71,7 @@ pub(super) fn content() -> String {
         help: &super::help::help_link(super::help::Topic::Analytics),
         title: "Who sings with <em>whom</em>",
         lead: "Species joined by a ribbon are often heard in the same five-minute block.",
-        lede: "A wider, darker ribbon means the two birds share more of their time. Point at a name to see only its ribbons. It's correlation, not cause: they may just share the same good morning.",
+        lede: "A wider ribbon, in a stronger colour, means the two birds share more of their time. Point at a name to see only its ribbons. It's correlation, not cause: they may just share the same good morning.",
         aside: ranges,
     });
     CORRELATION_CONTENT.replace("{{page_head}}", &head)

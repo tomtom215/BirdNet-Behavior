@@ -130,7 +130,7 @@ fn render_history(days: &[birdnet_db::sqlite::DayCount]) -> String {
             help: &help_link,
             title: "Browse past <em>days</em>",
             lead: "Every day your station has listened.",
-            lede: "Darker squares were busier — open one to see its hours and top species.",
+            lede: "A stronger colour means a busier day — open one to see its hours and top species.",
             aside: "",
         }),
     );

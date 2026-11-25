@@ -47,6 +47,11 @@ These are the reason the charts are not simply "prettier". Each one is held by a
 9. **Text never wears a series colour.** The mark carries the identity; the label stays
    in `--chart-label` or `--chart-annot`. (A label set on a band uses `--fg` with a
    `--chart-gap` halo.)
+10. **Words do not name a lightness.** Every sequential ramp runs dark-to-light on paper
+   and light-to-dark in the dark theme, so "darker squares were busier" tells half the
+   readers to read the chart backwards. Chart copy says "a stronger colour"
+   (`chart_copy_does_not_say_darker_means_more.rs`, with a named list of the uses that are
+   true in both themes).
 
 ## The vocabulary beyond the bar
 
