@@ -85,6 +85,12 @@ pub fn known_env_names() -> BTreeSet<String> {
             .iter()
             .map(|k| (*k).to_owned()),
     );
+    // The model installer's network settings (MDL-13), read in its own crate.
+    out.extend(
+        birdnet_integrations::model_catalog::POLICY_ENV_KEYS
+            .iter()
+            .map(|k| (*k).to_owned()),
+    );
     // The extra-classifier settings are read the same way (`G-10` Stage 2).
     out.extend(
         crate::helpers::models::MODEL_ENV_KEYS
