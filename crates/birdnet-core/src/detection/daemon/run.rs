@@ -246,14 +246,15 @@ fn load_occurrence_filter(
             ),
         );
     };
-    if let Err(off) = occurrence_files_present(mdata_path, config.metadata_labels_path.as_deref()) {
+    if let Err((reason, why)) =
+        occurrence_files_present(mdata_path, config.metadata_labels_path.as_deref())
+    {
         tracing::error!(
             path = %mdata_path.display(),
             "species occurrence filtering is OFF and every species in the model stays a \
-             candidate: {}",
-            off.message()
+             candidate: {why}"
         );
-        return (passthrough(), off);
+        return (passthrough(), FilterState::off(reason, why));
     }
     let meta_labels = match config
         .metadata_labels_path
@@ -328,11 +329,14 @@ fn load_occurrence_filter(
     }
 }
 
-/// Whether the occurrence model's files are where the configuration says, as
-/// the [`FilterState`] to publish when one is not.
-fn occurrence_files_present(model: &Path, labels: Option<&Path>) -> Result<(), FilterState> {
+/// Whether the occurrence model's files are where the configuration says;
+/// when one is not, why the filter is off, as a kind and in words.
+fn occurrence_files_present(
+    model: &Path,
+    labels: Option<&Path>,
+) -> Result<(), (FilterOff, String)> {
     if !model.exists() {
-        return Err(FilterState::off(
+        return Err((
             FilterOff::ModelMissing,
             format!(
                 "its model file {} is not there; install it again or correct \
@@ -341,13 +345,13 @@ fn occurrence_files_present(model: &Path, labels: Option<&Path>) -> Result<(), F
             ),
         ));
     }
-    match labels.map(std::fs::metadata) {
-        Some(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => Err(FilterState::off(
+    match labels {
+        Some(path) if !path.exists() => Err((
             FilterOff::LabelsMissing,
             format!(
-                "its labels file {} is not there; install the labels file that ships \
-                     with the occurrence model, or correct METADATA_LABELS_PATH",
-                labels.map_or_else(String::new, |p| p.display().to_string())
+                "its labels file {} is not there; install the labels file that ships with \
+                 the occurrence model, or correct METADATA_LABELS_PATH",
+                path.display()
             ),
         )),
         _ => Ok(()),
