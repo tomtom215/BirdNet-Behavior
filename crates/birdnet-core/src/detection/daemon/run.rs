@@ -1,5 +1,18 @@
 //! The daemon run loop: watch the directory, debounce writes, and drive each
 //! settled clip through the processing pipeline.
+//!
+//! [`run_daemon`] is the start-up, in named steps, each with a typed result:
+//!
+//! 1. [`load_classifiers`] — the registry, and what became of every declared
+//!    classifier, reported to [`super::ModelStateObserver`]. Only a primary
+//!    that will not load (or a set that cannot be a station) stops here.
+//! 2. [`fit_pipeline_to_classifiers`] — the chunk arithmetic the loaded
+//!    classifiers need.
+//! 3. [`load_occurrence_filter`] — the filter, or the reason it is off. Never
+//!    fatal (MDL-02, MDL-05).
+//! 4. [`chunk_filters`] and [`announce_chunk_filters`] — the whole-chunk
+//!    filters, and the start-up lines that say what each will do.
+//! 5. [`DaemonLoop::spawn`] — the watcher and the loop thread.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -13,14 +26,15 @@ use crate::detection::privacy::PrivacyFilter;
 use crate::detection::{ChunkFilters, noise::NoiseFilter};
 use crate::file_settle::{FILE_SETTLE, PendingFiles};
 use crate::inference::labels::LabelSet;
-use crate::inference::registry::ClassifierRegistry;
-use crate::inference::species_filter::SpeciesFilter;
+use crate::inference::model_state::{FilterOff, FilterState};
+use crate::inference::registry::{ClassifierRegistry, LOCAL_SOURCE};
+use crate::inference::species_filter::{SpeciesFilter, SpeciesListsProvider};
 use crate::inference::vocabulary::parse_alias_file;
 
 use super::process::process_and_infer_filtered;
 use super::{
-    DaemonConfig, DaemonError, DaemonHandle, DetectionEvent, ShedReason, Shedder,
-    new_event_correlation_id,
+    DaemonConfig, DaemonError, DaemonHandle, DetectionEvent, InFlight, ModelStateObserver,
+    ShedPolicy, ShedReason, Shedder, ThresholdFloor, ThroughputObserver, new_event_correlation_id,
 };
 
 /// How stale the operator's species include/exclude lists may get before the
@@ -63,46 +77,99 @@ fn classifier_specs(config: &DaemonConfig) -> Vec<crate::inference::registry::Mo
 /// the full pipeline. Detections are sent to `event_tx`.
 ///
 /// Returns a `DaemonHandle` for stopping the daemon, and spawns the
-/// watch loop on the current thread (blocking).
+/// watch loop on its own thread.
+///
+/// What became of each classifier and of the occurrence filter is reported to
+/// [`DaemonConfig::on_model_state`] as each is decided, including when this
+/// returns an error.
 ///
 /// # Errors
 ///
-/// Returns `DaemonError` if no classifier is configured, if one cannot be
-/// loaded, if a route names a classifier that does not exist, or if the
-/// watcher fails. Every one of those is refused here at startup rather than
-/// at the first audio file, because an unattended station must fail where
-/// somebody can see it.
-///
-/// # Panics
-///
-/// Does not panic in practice: the `expect` on the primary classifier is
-/// guaranteed by [`crate::inference::registry::ClassifierRegistry::load`],
-/// which refuses to build a registry with no classifiers in it.
-#[allow(clippy::too_many_lines)]
+/// Returns `DaemonError` if no classifier is configured, if the primary
+/// cannot be loaded, if a route names a classifier that was never declared,
+/// or if the watcher fails. Every one of those is refused here at startup
+/// rather than at the first audio file, because an unattended station must
+/// fail where somebody can see it. An extra classifier or an occurrence
+/// filter that cannot be loaded is left out with its reason, and the daemon
+/// starts without it (MDL-01, MDL-02).
 pub fn run_daemon(
     config: &DaemonConfig,
     event_tx: mpsc::SyncSender<DetectionEvent>,
 ) -> Result<DaemonHandle, DaemonError> {
-    // Every classifier this station runs, primary first (`G-10` Stage 2).
-    //
-    // One entry on a station that has not asked for a second opinion, which is
-    // every station today: the registry is then exactly the single model this
-    // loaded before, reached through `primary()`.
-    //
-    // Built here, before anything else, because every way it can fail —
-    // nothing configured, a route naming a classifier that does not exist, a
-    // model that will not load — must stop the daemon at startup where the
-    // journal and `--doctor` will show it. An unattended station that starts
-    // with a microphone routed to nothing looks identical to one having a
-    // quiet month.
-    let specs = classifier_specs(config);
+    let mut registry = load_classifiers(config)?;
 
-    let mut registry = crate::inference::registry::ClassifierRegistry::load(
-        &specs,
-        &config.model_routes,
-        &config.model,
+    // The pipeline is fitted to the classifiers as the *registry* sees them,
+    // i.e. after any declared `MODEL_SAMPLE_RATE` has replaced the rate the
+    // model's shape suggests. See `fit_pipeline_to_classifiers`.
+    let mut pipeline_config = config.pipeline.clone();
+    fit_pipeline_to_classifiers(&mut pipeline_config, &registry);
+
+    let (species_filter, filter_state) =
+        load_occurrence_filter(config, registry.primary().model.labels());
+    if let Some(observer) = config.on_model_state.as_ref() {
+        observer.filter(&filter_state);
+    }
+    // What each classifier is, stated once now that they are loaded. The window
+    // record (`model_health`) says how they are doing; this says what they are.
+    if let Some(observer) = config.on_file_analysed.as_ref() {
+        observer.model_info(&registry.info());
+    }
+
+    let chunk_filters = chunk_filters(config, &pipeline_config);
+    announce_chunk_filters(config, &pipeline_config, &chunk_filters, &registry);
+    // Every classifier scores the watched noise classes before its detection
+    // threshold, so the noise filter's own threshold binds even below it.
+    if chunk_filters.noise.is_enabled() {
+        for idx in 0..registry.len() {
+            if let Some(registered) = registry.model_mut(idx) {
+                registered
+                    .model
+                    .watch_noise_classes(chunk_filters.noise.classes());
+            }
+        }
+    }
+
+    DaemonLoop::new(
+        config,
+        registry,
+        pipeline_config,
+        chunk_filters,
+        species_filter,
+        event_tx,
     )
-    .map_err(|e| DaemonError::Model(e.to_string()))?;
+    .spawn(&config.watch_dir, config.process_existing)
+}
+
+/// Step 1: every declared classifier, loaded or left out with why.
+///
+/// One entry on a station that has not asked for a second opinion, which is
+/// the registry is then exactly the single model this loaded before, reached
+/// through `primary()`.
+///
+/// Built before anything else, because every way the *set* can fail —
+/// nothing configured, the primary will not load, a route naming a classifier
+/// that was never declared — must stop the daemon at startup where the
+/// journal and `--doctor` will show it. An extra classifier that will not
+/// load does not (MDL-01): it is reported, by name and reason, and the rest
+/// of the station runs.
+///
+/// # Errors
+///
+/// [`DaemonError::Model`] with the registry's refusal.
+fn load_classifiers(config: &DaemonConfig) -> Result<ClassifierRegistry, DaemonError> {
+    let specs = classifier_specs(config);
+    let registry = match ClassifierRegistry::load(&specs, &config.model_routes, &config.model) {
+        Ok(registry) => registry,
+        Err(e) => {
+            if let Some(observer) = config.on_model_state.as_ref() {
+                observer.classifiers(&crate::inference::registry::refused_states(&specs, &e));
+            }
+            return Err(DaemonError::Model(e.to_string()));
+        }
+    };
+    if let Some(observer) = config.on_model_state.as_ref() {
+        observer.classifiers(&registry.states());
+    }
 
     for (id, spec) in registry.specs() {
         tracing::info!(
@@ -119,149 +186,241 @@ pub fn run_daemon(
             routes = ?config.model_routes,
             "running more than one classifier"
         );
-        let unrouted = registry.unrouted();
-        if !unrouted.is_empty() {
-            tracing::warn!(
-                classifiers = ?unrouted,
-                "loaded but named by no MODEL_ROUTES entry, so they judge nothing: a source \
-                 without a route gets the primary alone. Name a source for each, as \
-                 MODEL_ROUTES=<source id>:<primary>+<classifier>, or remove it to free its memory"
-            );
-        }
+    }
+    let unrouted = registry.unrouted();
+    if !unrouted.is_empty() {
+        tracing::warn!(
+            classifiers = ?unrouted,
+            "loaded but named by no MODEL_ROUTES entry, so they judge nothing: a source \
+             without a route gets the primary alone. Name a source for each, as \
+             MODEL_ROUTES=<source id>:<primary>+<classifier> (`{LOCAL_SOURCE}` for a \
+             microphone set in the configuration file), or remove it to free its memory"
+        );
     }
 
-    // The primary is what the pipeline below runs on, so this is byte-for-byte
-    // the model that was loaded here before Stage 2. Borrowed immutably for
-    // the setup that follows; the registry itself moves into the loop thread,
-    // where the mutable borrow is taken.
-    let model = &registry
-        .model(0)
-        .expect("a registry always has a primary")
-        .model;
-
+    let primary = registry.primary();
     tracing::info!(
-        species_count = model.labels().len(),
+        species_count = primary.model.labels().len(),
         labels_path = %config.labels_path.display(),
         "labels loaded"
     );
-
-    // The pipeline is fitted to the classifiers as the *registry* sees them,
-    // i.e. after any declared `MODEL_SAMPLE_RATE` has replaced the rate the
-    // model's shape suggests. See `fit_pipeline_to_classifiers`.
     tracing::info!(
         model_path = %config.model_path.display(),
-        input_shape = ?model.input_shape(),
-        sample_rate = registry.primary().spec.sample_rate,
+        input_shape = ?primary.model.input_shape(),
+        sample_rate = primary.spec.sample_rate,
         "model loaded, starting daemon"
     );
-    let mut pipeline_config = config.pipeline.clone();
-    fit_pipeline_to_classifiers(&mut pipeline_config, &registry);
+    Ok(registry)
+}
 
-    // Load the species occurrence filter (the metadata / "geo" model).
-    //
-    // Every exit from this block that is not a loaded model leaves the station
-    // reporting every species the classifier knows, anywhere on Earth, in any
-    // week. That used to be reached silently — no metadata model configured
-    // logged nothing at all — and the symptom (implausible birds) reads as a
-    // bad classifier rather than as a missing file. Each branch now says so at
-    // a level an operator will actually see, and `--doctor` reports the same
-    // state before the service starts.
-    let mut species_filter = match config.metadata_model_path.as_ref() {
-        None => {
-            tracing::warn!(
-                species = model.labels().len(),
-                "no metadata model configured (METADATA_MODEL_PATH / BIRDNET_METADATA_MODEL): species occurrence filtering is OFF and every species in the model stays a candidate regardless of the station's location. Run `birdnet-behavior --doctor` for how to enable it"
+/// Step 3: the species occurrence filter (the metadata / "geo" model), or the
+/// reason it is off.
+///
+/// Every outcome that is not a loaded model with a position leaves the station
+/// reporting every species the classifier knows, anywhere on Earth, in any
+/// week, so each one is said at a level an operator will see and returned as
+/// a [`FilterState`] the station publishes. None of them stops the detector:
+/// a missing labels file used to (MDL-02), and a real station recorded
+/// nothing for it.
+///
+/// The model is still loaded without coordinates — the operator's lists ride
+/// on it, and a damaged file is worth finding before the position is set —
+/// but the filter is not called on, because it cannot be asked what occurs
+/// nowhere (MDL-04).
+fn load_occurrence_filter(
+    config: &DaemonConfig,
+    classifier_labels: &LabelSet,
+) -> (SpeciesFilter, FilterState) {
+    let passthrough = || SpeciesFilter::new_passthrough(config.species_filter.clone());
+    let Some(mdata_path) = config.metadata_model_path.as_ref() else {
+        tracing::warn!(
+            species = classifier_labels.len(),
+            "no metadata model configured (METADATA_MODEL_PATH / BIRDNET_METADATA_MODEL): species occurrence filtering is OFF and every species in the model stays a candidate regardless of the station's location. Run `birdnet-behavior --doctor` for how to enable it"
+        );
+        return (
+            passthrough(),
+            FilterState::off(
+                FilterOff::NotConfigured,
+                "no occurrence model is configured (METADATA_MODEL_PATH); run \
+                 `birdnet-behavior --doctor` for how to enable one",
+            ),
+        );
+    };
+    if crate::inference::model_state::occurrence_filter_turned_off(mdata_path) {
+        tracing::info!(
+            setting = %mdata_path.display(),
+            "species occurrence filtering is turned off in the configuration \
+             (METADATA_MODEL_PATH); every species the classifiers know stays a candidate"
+        );
+        return (
+            passthrough(),
+            FilterState::off(
+                FilterOff::NotConfigured,
+                "it is turned off in the configuration (METADATA_MODEL_PATH)",
+            ),
+        );
+    }
+    if let Err((reason, why)) =
+        occurrence_files_present(mdata_path, config.metadata_labels_path.as_deref())
+    {
+        tracing::error!(
+            path = %mdata_path.display(),
+            "species occurrence filtering is OFF and every species in the model stays a \
+             candidate: {why}"
+        );
+        return (passthrough(), FilterState::off(reason, why));
+    }
+    let meta_labels = match config
+        .metadata_labels_path
+        .as_ref()
+        .map(|p| (p, LabelSet::load(p)))
+    {
+        None => None,
+        Some((_, Ok(labels))) => Some(labels),
+        Some((path, Err(e))) => {
+            tracing::error!(
+                path = %path.display(),
+                error = %e,
+                "metadata label file could not be read; species occurrence filtering is OFF"
             );
-            SpeciesFilter::new_passthrough(config.species_filter.clone())
-        }
-        Some(mdata_path) => {
-            let meta_labels = match config.metadata_labels_path.as_ref() {
-                None => None,
-                Some(p) => match LabelSet::load(p) {
-                    Ok(ls) => Some(ls),
-                    Err(e) => {
-                        tracing::error!(
-                            path = %p.display(),
-                            error = %e,
-                            "metadata label file could not be read; species occurrence filtering is OFF"
-                        );
-                        return Err(DaemonError::Model(format!("metadata labels: {e}")));
-                    }
-                },
-            };
-            // An unreadable alias file is a warning, not a failure: the
-            // alignment works without it, and taking the occurrence filter off
-            // a station over a typo'd path would admit every species the
-            // classifier knows, wherever it is.
-            let aliases = config.species_aliases_path.as_ref().map_or_else(
-                std::collections::HashMap::new,
-                |p| match std::fs::read_to_string(p) {
-                    Ok(text) => {
-                        let (map, skipped) = parse_alias_file(&text);
-                        tracing::info!(
-                            path = %p.display(),
-                            aliases = map.len(),
-                            skipped_lines = skipped,
-                            "species alias file loaded"
-                        );
-                        map
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            path = %p.display(),
-                            error = %e,
-                            "species alias file could not be read; continuing without it"
-                        );
-                        std::collections::HashMap::new()
-                    }
-                },
+            return (
+                passthrough(),
+                FilterState::off(
+                    FilterOff::LabelsUnreadable,
+                    format!(
+                        "its labels file {} cannot be read as labels ({e}); install the labels \
+                         file that ships with the occurrence model",
+                        path.display()
+                    ),
+                ),
             );
-            match SpeciesFilter::load_with_vocabulary(
-                mdata_path,
-                meta_labels,
-                model.labels(),
-                &aliases,
-                config.species_filter.clone(),
-            ) {
-                Ok(sf) => sf,
-                Err(e) => {
-                    tracing::error!(
-                        path = %mdata_path.display(),
-                        error = %e,
-                        "metadata model could not be used; species occurrence filtering is OFF and every species in the model stays a candidate"
-                    );
-                    SpeciesFilter::new_passthrough(config.species_filter.clone())
-                }
-            }
         }
     };
-
-    let filter_observer = config.on_species_filter_state.clone();
-    let throughput = config.on_file_analysed.clone();
-    // What each classifier is, stated once now that they are loaded. The window
-    // record (`model_health`) says how they are doing; this says what they are.
-    if let Some(observer) = throughput.as_ref() {
-        observer.model_info(&registry.info());
+    match SpeciesFilter::load_with_vocabulary(
+        mdata_path,
+        meta_labels,
+        classifier_labels,
+        &species_aliases(config),
+        config.species_filter.clone(),
+    ) {
+        Ok(filter) if config.latitude.zip(config.longitude).is_some() => {
+            (filter, FilterState::Active { candidates: None })
+        }
+        Ok(filter) => {
+            tracing::warn!(
+                "the occurrence model loaded and the station has no coordinates \
+                 (LATITUDE / LONGITUDE), so species occurrence filtering is OFF: it cannot be \
+                 asked what occurs here. Set the station's position to switch it on"
+            );
+            (
+                filter,
+                FilterState::off(
+                    FilterOff::NoCoordinates,
+                    "the station has no LATITUDE and LONGITUDE, so the filter cannot be asked \
+                     what occurs here; set the station's position",
+                ),
+            )
+        }
+        Err(e) => {
+            tracing::error!(
+                path = %mdata_path.display(),
+                error = %e,
+                "metadata model could not be used; species occurrence filtering is OFF and every species in the model stays a candidate"
+            );
+            (
+                passthrough(),
+                FilterState::off(
+                    FilterOff::ModelUnusable,
+                    format!(
+                        "its model file {} could not be used ({e}); a truncated or damaged \
+                         download does this, as does a model that is not an occurrence model: \
+                         install it again",
+                        mdata_path.display()
+                    ),
+                ),
+            )
+        }
     }
-    let in_flight = config.in_flight.clone();
-    let shed_policy = config.shed.clone();
-    // The shed decision is logged on change, not on every 500 ms sweep.
-    let mut shedding: Option<ShedReason> = None;
-    let mut shedder = Shedder::default();
-    if let Some(observer) = filter_observer.as_ref() {
-        observer.report(species_filter.has_model(), None);
+}
+
+/// Whether the occurrence model's files are where the configuration says;
+/// when one is not, why the filter is off, as a kind and in words.
+fn occurrence_files_present(
+    model: &Path,
+    labels: Option<&Path>,
+) -> Result<(), (FilterOff, String)> {
+    if !model.exists() {
+        return Err((
+            FilterOff::ModelMissing,
+            format!(
+                "its model file {} is not there; install it again or correct \
+                 METADATA_MODEL_PATH",
+                model.display()
+            ),
+        ));
     }
+    match labels {
+        Some(path) if !path.exists() => Err((
+            FilterOff::LabelsMissing,
+            format!(
+                "its labels file {} is not there; install the labels file that ships with \
+                 the occurrence model, or correct METADATA_LABELS_PATH",
+                path.display()
+            ),
+        )),
+        _ => Ok(()),
+    }
+}
 
-    // Create the whole-chunk filters.
-    let chunk_filters = chunk_filters(config, &pipeline_config);
+/// The operator's scientific-name alias file, or none.
+///
+/// An unreadable alias file is a warning, not a failure: the alignment works
+/// without it, and taking the occurrence filter off a station over a typo'd
+/// path would admit every species the classifier knows, wherever it is.
+fn species_aliases(config: &DaemonConfig) -> std::collections::HashMap<String, String> {
+    config
+        .species_aliases_path
+        .as_ref()
+        .map_or_else(
+            std::collections::HashMap::new,
+            |p| match std::fs::read_to_string(p) {
+                Ok(text) => {
+                    let (map, skipped) = parse_alias_file(&text);
+                    tracing::info!(
+                        path = %p.display(),
+                        aliases = map.len(),
+                        skipped_lines = skipped,
+                        "species alias file loaded"
+                    );
+                    map
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        path = %p.display(),
+                        error = %e,
+                        "species alias file could not be read; continuing without it"
+                    );
+                    std::collections::HashMap::new()
+                }
+            },
+        )
+}
 
+/// Step 4: say what each whole-chunk filter will do, and warn where one is
+/// on and cannot act.
+fn announce_chunk_filters(
+    config: &DaemonConfig,
+    pipeline_config: &PipelineConfig,
+    chunk_filters: &ChunkFilters,
+    registry: &ClassifierRegistry,
+) {
     if chunk_filters.privacy.is_enabled() {
         tracing::info!(
             threshold = config.privacy_threshold,
             rank = config.privacy_rank,
             "privacy filter enabled"
         );
-        if !privacy_can_fire(&registry) {
+        if !privacy_can_fire(registry) {
             tracing::warn!(
                 "privacy filter enabled but no label in the loaded model names a human class; \
                  the filter can never fire with this model"
@@ -287,168 +446,209 @@ pub fn run_daemon(
         );
     }
     if chunk_filters.confirmation.enabled() {
-        let overlap = effective_overlap_secs(&pipeline_config);
-        let chunk_secs = pipeline_config.chunk_duration_secs;
-        if chunk_filters
-            .confirmation
-            .is_effective_at(overlap, chunk_secs)
-        {
-            tracing::info!(
-                level = chunk_filters.confirmation.as_str(),
-                overlap,
-                required = chunk_filters
-                    .confirmation
-                    .required_confirmations_at(overlap, chunk_secs),
-                "repeat-confirmation filter enabled"
-            );
-        } else {
-            // Not a hard error: the level is still honoured, it just cannot
-            // reject anything at this overlap, so a station that set it and
-            // saw no change would otherwise have nothing to read.
-            tracing::warn!(
-                level = chunk_filters.confirmation.as_str(),
-                overlap,
-                chunk_secs,
-                minimum_overlap = ?chunk_filters.confirmation.minimum_overlap(chunk_secs),
-                "repeat-confirmation filter will not reject anything at this overlap: \
-                 a single window is already the whole neighbourhood it is asked to \
-                 agree with. Raise the analysis overlap or the confirmation level."
-            );
+        announce_confirmation(pipeline_config, chunk_filters);
+    }
+}
+
+/// The repeat-confirmation filter's start-up line: what it requires at the
+/// overlap the pipeline cuts, or that it cannot reject anything there.
+fn announce_confirmation(pipeline_config: &PipelineConfig, chunk_filters: &ChunkFilters) {
+    let overlap = effective_overlap_secs(pipeline_config);
+    let chunk_secs = pipeline_config.chunk_duration_secs;
+    if chunk_filters
+        .confirmation
+        .is_effective_at(overlap, chunk_secs)
+    {
+        tracing::info!(
+            level = chunk_filters.confirmation.as_str(),
+            overlap,
+            required = chunk_filters
+                .confirmation
+                .required_confirmations_at(overlap, chunk_secs),
+            "repeat-confirmation filter enabled"
+        );
+    } else {
+        // Not a hard error: the level is still honoured, it just cannot
+        // reject anything at this overlap, so a station that set it and saw
+        // no change would otherwise have nothing to read.
+        tracing::warn!(
+            level = chunk_filters.confirmation.as_str(),
+            overlap,
+            chunk_secs,
+            minimum_overlap = ?chunk_filters.confirmation.minimum_overlap(chunk_secs),
+            "repeat-confirmation filter will not reject anything at this overlap: \
+             a single window is already the whole neighbourhood it is asked to \
+             agree with. Raise the analysis overlap or the confirmation level."
+        );
+    }
+}
+
+/// What one file's analysis came to, for the two callers that read it
+/// differently (the live loop and the start-up backlog).
+enum Analysed {
+    /// Analysed; its events were handed on.
+    Done,
+    /// The pipeline failed on it.
+    Failed(DaemonError),
+    /// The event receiver is gone, so nothing more can be recorded.
+    ReceiverGone,
+}
+
+/// Why a sweep ended.
+enum SweepEnd {
+    /// Every ready file was analysed.
+    Swept,
+    /// A stop arrived between files; these were not reached.
+    Stop(Vec<PathBuf>),
+    /// The event receiver is gone.
+    ReceiverGone,
+}
+
+/// Step 5: everything the loop thread owns.
+///
+/// One struct rather than a closure capturing twenty locals, so each part of
+/// the loop — a sweep, one file, the backlog — is a method that can be read,
+/// and changed, on its own.
+struct DaemonLoop {
+    registry: ClassifierRegistry,
+    pipeline_config: PipelineConfig,
+    chunk_filters: ChunkFilters,
+    species_filter: SpeciesFilter,
+    model_state: Option<ModelStateObserver>,
+    throughput: Option<ThroughputObserver>,
+    in_flight: Option<InFlight>,
+    shed_policy: Option<ShedPolicy>,
+    /// The shed decision in force, logged on change rather than on every
+    /// 500 ms sweep.
+    shedding: Option<ShedReason>,
+    shedder: Shedder,
+    lat: Option<f64>,
+    lon: Option<f64>,
+    species_lists_provider: Option<SpeciesListsProvider>,
+    /// When the operator's species lists were last re-read, so a change on
+    /// /admin/species applies to the next file rather than the next restart.
+    /// Checked per file rather than per loop tick: the tick is a 500 ms poll
+    /// and the lists live in a database.
+    lists_refreshed: Instant,
+    /// The floor the processor publishes: before every file each classifier
+    /// runs at the lower of it and its own threshold as loaded, so a
+    /// per-species threshold below the global one reaches the model at all.
+    threshold_floor: Option<Arc<ThresholdFloor>>,
+    loaded_thresholds: Vec<f32>,
+    /// Debounce watcher events: a clip is decoded only once its size has
+    /// been stable for `FILE_SETTLE` (see `PendingFiles`), so an in-progress
+    /// ffmpeg/RTSP segment isn't decoded mid-write (which fails with
+    /// "unexpected end of file" and reprocesses the same growing file).
+    pending: PendingFiles,
+    /// One band verdict per source (ACC-14): see `band_check`.
+    band_watch: BandWatch,
+    event_tx: mpsc::SyncSender<DetectionEvent>,
+    /// Bumped once per iteration and per file, so a watchdog can tell a hung
+    /// pipeline (no progress) from an idle one.
+    heartbeat: Arc<AtomicU64>,
+}
+
+impl DaemonLoop {
+    fn new(
+        config: &DaemonConfig,
+        registry: ClassifierRegistry,
+        pipeline_config: PipelineConfig,
+        chunk_filters: ChunkFilters,
+        species_filter: SpeciesFilter,
+        event_tx: mpsc::SyncSender<DetectionEvent>,
+    ) -> Self {
+        let loaded_thresholds = super::loaded_thresholds(&registry);
+        Self {
+            registry,
+            pipeline_config,
+            chunk_filters,
+            species_filter,
+            model_state: config.on_model_state.clone(),
+            throughput: config.on_file_analysed.clone(),
+            in_flight: config.in_flight.clone(),
+            shed_policy: config.shed.clone(),
+            shedding: None,
+            shedder: Shedder::default(),
+            lat: config.latitude,
+            lon: config.longitude,
+            // An `Arc` clone, so the 'static loop thread can own it.
+            species_lists_provider: config.species_lists_provider.clone(),
+            lists_refreshed: Instant::now(),
+            threshold_floor: config.threshold_floor.clone(),
+            loaded_thresholds,
+            pending: PendingFiles::new(),
+            band_watch: BandWatch::default(),
+            event_tx,
+            heartbeat: Arc::new(AtomicU64::new(0)),
         }
     }
 
-    // Every classifier scores the watched noise classes before its detection
-    // threshold, so the noise filter's own threshold binds even below it.
-    if chunk_filters.noise.is_enabled() {
-        for idx in 0..registry.len() {
-            if let Some(registered) = registry.model_mut(idx) {
-                registered
-                    .model
-                    .watch_noise_classes(chunk_filters.noise.classes());
-            }
-        }
+    /// Attach the watcher and start the loop thread.
+    ///
+    /// # Errors
+    ///
+    /// [`DaemonError::Pipeline`] when the directory cannot be watched.
+    fn spawn(self, watch_dir: &Path, process_existing: bool) -> Result<DaemonHandle, DaemonError> {
+        let (stop_tx, stop_rx) = mpsc::channel();
+        // Liveness of the loop thread itself: `true` until the thread returns.
+        // The guard travels into the thread so every exit path clears it.
+        let running = Arc::new(AtomicBool::new(true));
+        let running_guard = super::RunningGuard(Arc::clone(&running));
+        let heartbeat = Arc::clone(&self.heartbeat);
+        // The `RecommendedWatcher` MUST live for the lifetime of the spawned
+        // thread: dropping it stops delivery and closes the channel, and
+        // `file_rx` then reports `Disconnected` — silently breaking the watch
+        // path. It moves into the thread below for that reason.
+        let (file_watcher, file_rx) =
+            pipeline::watch_directory(watch_dir).map_err(DaemonError::Pipeline)?;
+        let watch_dir = watch_dir.to_path_buf();
+        std::thread::spawn(move || {
+            let _watcher = file_watcher;
+            // Dropped when this closure returns, however it returns, clearing
+            // `DaemonHandle::running_flag`.
+            let _alive = running_guard;
+            self.run(&watch_dir, process_existing, &file_rx, &stop_rx);
+        });
+        Ok(DaemonHandle {
+            stop_tx,
+            heartbeat,
+            running,
+        })
     }
 
-    let lat = config.latitude;
-    let lon = config.longitude;
-    // Cloned out of the borrowed `config` so the 'static loop thread below can
-    // own it (an `Arc` clone, not a deep copy).
-    let species_lists_provider = config.species_lists_provider.clone();
-
-    // Create stop channel
-    let (stop_tx, stop_rx) = mpsc::channel();
-
-    // Liveness heartbeat: the loop bumps this once per iteration so an external
-    // watchdog can distinguish a hung pipeline (no progress) from an idle one.
-    let heartbeat = Arc::new(AtomicU64::new(0));
-    let heartbeat_loop = Arc::clone(&heartbeat);
-
-    // Liveness of the loop thread itself: `true` until the thread returns.
-    // The guard travels into the thread so every exit path clears it.
-    let running = Arc::new(AtomicBool::new(true));
-    let running_guard = super::RunningGuard(Arc::clone(&running));
-
-    // Start file watcher. The `RecommendedWatcher` MUST live for the
-    // lifetime of the spawned thread — dropping it stops delivery and
-    // closes the channel. Bound to a name that the closure captures so
-    // `move ||` takes ownership and keeps it alive.
-    let (file_watcher, file_rx) =
-        pipeline::watch_directory(&config.watch_dir).map_err(DaemonError::Pipeline)?;
-
-    // Snapshot the backlog settings to move into the loop thread; `config` is
-    // a borrow and cannot outlive this call on the spawned 'static thread.
-    let process_existing = config.process_existing;
-    // Each classifier's own threshold as loaded, and the floor the processor
-    // publishes: before every file each runs at the lower of the two, so a
-    // per-species threshold below the global one reaches the model at all.
-    let threshold_floor = config.threshold_floor.clone();
-    let loaded_thresholds = super::loaded_thresholds(&registry);
-    let watch_dir = config.watch_dir.clone();
-
-    // Main daemon loop -- runs on its own thread
-    std::thread::spawn(move || {
-        // Keep the watcher alive for the lifetime of this thread.
-        // Without this the `RecommendedWatcher` gets dropped when
-        // `start_detection_daemon` returns, the underlying `notify`
-        // backend stops, and `file_rx` immediately reports
-        // `Disconnected` — silently breaking the watch path.
-        let _watcher = file_watcher;
-        // Dropped when this closure returns, however it returns, clearing
-        // `DaemonHandle::running_flag`.
-        let _alive = running_guard;
+    /// The loop thread's body: the backlog, then sweep after sweep until a
+    /// stop, a closed watcher or a closed receiver.
+    fn run(
+        mut self,
+        watch_dir: &Path,
+        process_existing: bool,
+        file_rx: &mpsc::Receiver<PathBuf>,
+        stop_rx: &mpsc::Receiver<()>,
+    ) {
         tracing::info!("detection daemon started");
-
-        // Process any pre-existing backlog here, on the loop thread, rather
+        // The pre-existing backlog is read here, on the loop thread, rather
         // than before signalling readiness. The event consumer is already
         // draining by now, so a large backlog cannot block startup past the
         // systemd TimeoutStartSec, and with a bounded event channel it applies
         // backpressure instead of dead-locking an undrained queue.
-        // Debounce watcher events: a clip is decoded only once its size has
-        // been stable for FILE_SETTLE (see PendingFiles), so an in-progress
-        // ffmpeg/RTSP segment isn't decoded mid-write (which fails with
-        // "unexpected end of file" and reprocesses the same growing file).
-        let mut pending = PendingFiles::new();
-        // One band verdict per source (ACC-14): see `band_check`.
-        let mut band_watch = BandWatch::default();
-
         if process_existing {
-            super::apply_threshold_floor(
-                &mut registry,
-                &loaded_thresholds,
-                threshold_floor.as_deref(),
-            );
-            process_existing_files(
-                &watch_dir,
-                &pipeline_config,
-                &mut registry,
-                &chunk_filters,
-                &mut species_filter,
-                filter_observer.as_ref(),
-                throughput.as_ref(),
-                in_flight.as_ref(),
-                &mut pending,
-                &mut band_watch,
-                lat,
-                lon,
-                &event_tx,
-            );
+            self.apply_threshold_floor();
+            self.process_existing_files(watch_dir);
         }
-
-        // Track when the operator's species lists were last re-read, so a
-        // change on /admin/species applies to the next file rather than the
-        // next restart. Checked per file rather than per loop tick: the tick is
-        // a 500 ms poll and the lists live in a database.
-        let mut lists_refreshed = Instant::now();
-
-        // Segments a stop cut off mid-sweep (PIPE8b), reported on the way out
-        // with whatever is still settling.
-        let mut left: Vec<PathBuf> = Vec::new();
-        let mut stop_requested = false;
-
         loop {
-            // Heartbeat: record that the loop is still cycling so a watchdog
-            // can tell a hung pipeline from an idle one.
-            heartbeat_loop.fetch_add(1, Ordering::Relaxed);
-
-            // Check for stop signal (non-blocking)
-            if stop_requested || stop_rx.try_recv().is_ok() {
-                tracing::info!("detection daemon stopping");
-                report_unanalysed(
-                    left.into_iter().chain(pending.into_paths()),
-                    process_existing,
-                    throughput.as_ref(),
-                );
+            self.heartbeat.fetch_add(1, Ordering::Relaxed);
+            if stop_rx.try_recv().is_ok() {
+                self.stop(Vec::new(), process_existing);
                 break;
             }
-
-            // Collect every watcher event currently available (blocking briefly
-            // for the first) into the pending set. A burst of modify events for
-            // a file still being written collapses into a single entry.
+            // Collect every watcher event currently available (blocking
+            // briefly for the first) into the pending set. A burst of modify
+            // events for a file still being written collapses into one entry.
             match file_rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(path) => {
-                    pending.note(path, Instant::now());
+                    self.pending.note(path, Instant::now());
                     while let Ok(path) = file_rx.try_recv() {
-                        pending.note(path, Instant::now());
+                        self.pending.note(path, Instant::now());
                     }
                 }
                 Err(mpsc::RecvTimeoutError::Timeout) => {}
@@ -457,196 +657,308 @@ pub fn run_daemon(
                     break;
                 }
             }
-
-            // Process whichever files have finished being written. Polling the
-            // size each sweep means a clip settles even after its last watcher
-            // event, so the final segment is never stranded.
-            let settled = pending.drain_settled_reporting(Instant::now(), FILE_SETTLE, |p| {
-                std::fs::metadata(p).map(|m| m.len()).ok()
-            });
-            // A segment the watcher announced that is gone before the pipeline
-            // could open it is audio that was recorded and never analysed
-            // (PR-1 / S-3): a purge running ahead of a backlogged pipeline.
-            // It used to fall out of the pending set without a word.
-            for path in &settled.vanished {
-                tracing::warn!(
-                    file = %path.display(),
-                    "segment vanished before analysis — recorded audio the pipeline never \
-                     read is gone; if this repeats, the stream directory is being drained \
-                     faster than inference keeps up"
-                );
-                if let Some(observer) = throughput.as_ref() {
-                    observer.dropped(path);
-                }
-            }
-            // The queue is what is still settling plus what this sweep will
-            // analyse (PR-2). Published once per sweep; the shed policy
-            // decides on it.
-            let queue_depth = pending.len() + settled.ready.len();
-            if let Some(observer) = throughput.as_ref() {
-                observer.queue_depth(queue_depth);
-            }
-            let decision = shed_policy.as_ref().and_then(|p| p.decide(queue_depth));
-            if decision != shedding {
-                if let Some(reason) = decision {
-                    tracing::warn!(
-                        queue_depth,
-                        reason = reason.as_str(),
-                        "analysing one segment in two until this clears — inference is \
-                         behind real time here; the skipped segments are counted in \
-                         birdnet_segments_shed_total, not lost quietly"
-                    );
-                } else {
-                    tracing::info!(
-                        queue_depth,
-                        "shedding stopped; every segment is analysed again"
-                    );
-                }
-                shedding = decision;
-            }
-            let ready = match decision {
-                Some(reason) => {
-                    let (analyse, shed) = shedder.split(settled.ready);
-                    for path in &shed {
-                        tracing::debug!(file = %path.display(), reason = reason.as_str(), "segment shed");
-                        if let Some(observer) = throughput.as_ref() {
-                            observer.shed(path, reason);
-                        }
-                    }
-                    analyse
-                }
-                None => settled.ready,
-            };
-            let mut ready = ready.into_iter();
-            while let Some(path) = ready.next() {
-                // A stop between files, not only between sweeps: one sweep can
-                // hold a long backlog, and shutdown waits on this loop.
-                if stop_rx.try_recv().is_ok() {
-                    stop_requested = true;
-                    left.push(path);
-                    left.extend(ready);
+            let ready = self.settled();
+            match self.sweep(ready, stop_rx) {
+                SweepEnd::Swept => {}
+                SweepEnd::Stop(left) => {
+                    self.stop(left, process_existing);
                     break;
                 }
-                // Keep the watchdog fed if a single sweep processes several files.
-                heartbeat_loop.fetch_add(1, Ordering::Relaxed);
+                SweepEnd::ReceiverGone => return,
+            }
+        }
+        tracing::info!("detection daemon stopped");
+    }
 
-                // Refresh the operator's species lists if they have gone stale.
-                // A failed or absent provider leaves the previous lists in
-                // place rather than clearing them: dropping an exclude list on
-                // a transient database error would start recording exactly the
-                // species the operator asked to suppress.
-                if let Some(ref provider) = species_lists_provider
-                    && lists_refreshed.elapsed() >= SPECIES_LISTS_TTL
-                {
-                    let lists = provider.get();
-                    species_filter.set_lists(lists);
-                    lists_refreshed = Instant::now();
+    /// Say what a stop leaves unanalysed: segments a stop cut off mid-sweep
+    /// (`PIPE8b`), and whatever is still settling.
+    fn stop(&mut self, left: Vec<PathBuf>, process_existing: bool) {
+        tracing::info!("detection daemon stopping");
+        let pending = std::mem::take(&mut self.pending);
+        report_unanalysed(
+            left.into_iter().chain(pending.into_paths()),
+            process_existing,
+            self.throughput.as_ref(),
+        );
+    }
+
+    /// The files that have finished being written, less any the shed policy
+    /// skips. Polling the size each sweep means a clip settles even after its
+    /// last watcher event, so the final segment is never stranded.
+    fn settled(&mut self) -> Vec<PathBuf> {
+        let settled = self
+            .pending
+            .drain_settled_reporting(Instant::now(), FILE_SETTLE, |p| {
+                std::fs::metadata(p).map(|m| m.len()).ok()
+            });
+        // A segment the watcher announced that is gone before the pipeline
+        // could open it is audio that was recorded and never analysed (PR-1 /
+        // S-3): a purge running ahead of a backlogged pipeline. It used to
+        // fall out of the pending set without a word.
+        for path in &settled.vanished {
+            tracing::warn!(
+                file = %path.display(),
+                "segment vanished before analysis — recorded audio the pipeline never \
+                 read is gone; if this repeats, the stream directory is being drained \
+                 faster than inference keeps up"
+            );
+            if let Some(observer) = self.throughput.as_ref() {
+                observer.dropped(path);
+            }
+        }
+        // The queue is what is still settling plus what this sweep will
+        // analyse (PR-2). Published once per sweep; the shed policy decides
+        // on it.
+        let queue_depth = self.pending.len() + settled.ready.len();
+        if let Some(observer) = self.throughput.as_ref() {
+            observer.queue_depth(queue_depth);
+        }
+        let decision = self
+            .shed_policy
+            .as_ref()
+            .and_then(|p| p.decide(queue_depth));
+        self.note_shedding(decision, queue_depth);
+        let Some(reason) = decision else {
+            return settled.ready;
+        };
+        let (analyse, shed) = self.shedder.split(settled.ready);
+        for path in &shed {
+            tracing::debug!(file = %path.display(), reason = reason.as_str(), "segment shed");
+            if let Some(observer) = self.throughput.as_ref() {
+                observer.shed(path, reason);
+            }
+        }
+        analyse
+    }
+
+    /// Log a change in the shed decision, once.
+    fn note_shedding(&mut self, decision: Option<ShedReason>, queue_depth: usize) {
+        if decision == self.shedding {
+            return;
+        }
+        if let Some(reason) = decision {
+            tracing::warn!(
+                queue_depth,
+                reason = reason.as_str(),
+                "analysing one segment in two until this clears — inference is \
+                 behind real time here; the skipped segments are counted in \
+                 birdnet_segments_shed_total, not lost quietly"
+            );
+        } else {
+            tracing::info!(
+                queue_depth,
+                "shedding stopped; every segment is analysed again"
+            );
+        }
+        self.shedding = decision;
+    }
+
+    /// Analyse every ready file, checking for a stop between files: one sweep
+    /// can hold a long backlog, and shutdown waits on this loop.
+    fn sweep(&mut self, ready: Vec<PathBuf>, stop_rx: &mpsc::Receiver<()>) -> SweepEnd {
+        let mut ready = ready.into_iter();
+        while let Some(path) = ready.next() {
+            if stop_rx.try_recv().is_ok() {
+                let mut left = vec![path];
+                left.extend(ready);
+                return SweepEnd::Stop(left);
+            }
+            // Keep the watchdog fed if a single sweep processes several files.
+            self.heartbeat.fetch_add(1, Ordering::Relaxed);
+            self.refresh_species_lists();
+            // Stamp a correlation ID on every event we publish for this file
+            // so the operator can trace one file through the entire pipeline
+            // by grepping a single string.
+            let correlation_id = new_event_correlation_id();
+            // DEBUG, not INFO (OB-15): with "file processing complete" this
+            // was two lines per 15 s segment, 92 % of the journal's volume and
+            // 1.6-2.8 GB a year, carrying nothing the
+            // `birdnet_files_analysed_total` counter does not. The
+            // per-detection line keeps the correlation id at INFO.
+            tracing::debug!(
+                correlation_id = %correlation_id,
+                file = %path.display(),
+                "begin processing file"
+            );
+            self.apply_threshold_floor();
+            match self.analyse(&path, &correlation_id) {
+                Analysed::Done => {}
+                Analysed::ReceiverGone => {
+                    tracing::warn!(
+                        correlation_id = %correlation_id,
+                        "event receiver dropped, stopping daemon"
+                    );
+                    return SweepEnd::ReceiverGone;
                 }
+                Analysed::Failed(e) => self.report_failure(&path, &correlation_id, &e),
+            }
+        }
+        SweepEnd::Swept
+    }
 
-                // Stamp a correlation ID on every event we publish for this
-                // file so the operator can trace one file through the entire
-                // pipeline by grepping a single string.
-                let correlation_id = new_event_correlation_id();
-                // DEBUG, not INFO (OB-15): with "file processing complete"
-                // this was two lines per 15 s segment, 92 % of the journal's
-                // volume and 1.6-2.8 GB a year, carrying nothing the
-                // `birdnet_files_analysed_total` counter does not. The
-                // per-detection line keeps the correlation id at INFO.
-                tracing::debug!(
-                    correlation_id = %correlation_id,
-                    file = %path.display(),
-                    "begin processing file"
-                );
+    /// Re-read the operator's species lists if they have gone stale.
+    ///
+    /// A failed or absent provider leaves the previous lists in place rather
+    /// than clearing them: dropping an exclude list on a transient database
+    /// error would start recording exactly the species the operator asked to
+    /// suppress.
+    fn refresh_species_lists(&mut self) {
+        if let Some(provider) = self.species_lists_provider.as_ref()
+            && self.lists_refreshed.elapsed() >= SPECIES_LISTS_TTL
+        {
+            self.species_filter.set_lists(provider.get());
+            self.lists_refreshed = Instant::now();
+        }
+    }
 
-                super::apply_threshold_floor(
-                    &mut registry,
-                    &loaded_thresholds,
-                    threshold_floor.as_deref(),
-                );
+    fn apply_threshold_floor(&mut self) {
+        super::apply_threshold_floor(
+            &mut self.registry,
+            &self.loaded_thresholds,
+            self.threshold_floor.as_deref(),
+        );
+    }
 
-                // Claimed for as long as the pipeline reads it (PR-1 / S-3):
-                // the stream directory's purge skips a claimed name. Each
-                // event carries a share of the claim, so it lasts until the
-                // processor has cut the clips too (PIPE8a).
-                let lease = in_flight
-                    .as_ref()
-                    .map(|table| std::sync::Arc::new(table.claim(&path)));
-                let route = route_for_segment(&registry, &path);
-                let outcome = process_and_infer_filtered(
-                    &path,
-                    &pipeline_config,
-                    &mut registry,
-                    &route,
-                    &chunk_filters,
-                    &mut species_filter,
-                    filter_observer.as_ref(),
-                    lat,
-                    lon,
-                    &correlation_id,
+    /// One file through the pipeline, its events handed on.
+    ///
+    /// The file is claimed for as long as the pipeline reads it (PR-1 / S-3):
+    /// the stream directory's purge skips a claimed name. Each event carries a
+    /// share of the claim, so it lasts until the processor has cut the clips
+    /// too (`PIPE8a`).
+    fn analyse(&mut self, path: &Path, correlation_id: &str) -> Analysed {
+        let lease = self
+            .in_flight
+            .as_ref()
+            .map(|table| Arc::new(table.claim(path)));
+        let route = route_for_segment(&self.registry, path);
+        let outcome = process_and_infer_filtered(
+            path,
+            &self.pipeline_config,
+            &mut self.registry,
+            &route,
+            &self.chunk_filters,
+            &mut self.species_filter,
+            self.model_state.as_ref(),
+            self.lat,
+            self.lon,
+            correlation_id,
+        );
+        // After every file, failed or not: a classifier that fails every
+        // window fails every file, and that is the case this report exists
+        // for.
+        if let Some(observer) = self.throughput.as_ref() {
+            observer.model_health(&self.registry.health());
+        }
+        let file = match outcome {
+            Ok(file) => file,
+            Err(e) => return Analysed::Failed(e),
+        };
+        warn_if_narrow(&mut self.band_watch, &self.registry, &route, path, &file);
+        // Counted here and not before the call: this says "analysed", and a
+        // file the pipeline failed on was not. The counter is the only thing
+        // that separates a model answering nothing from a pipeline that is not
+        // running, so it must mean exactly one thing.
+        if let Some(observer) = self.throughput.as_ref() {
+            observer.analysed(path);
+            observer.filtered(path, &file.tally);
+        }
+        for mut event in file.events {
+            event.lease.clone_from(&lease);
+            if self.event_tx.send(event).is_err() {
+                return Analysed::ReceiverGone;
+            }
+        }
+        Analysed::Done
+    }
+
+    /// A live file the pipeline failed on: a warning, and a dropped segment
+    /// when it is gone — the same loss as a vanished pending file, counted
+    /// the same way.
+    fn report_failure(&self, path: &Path, correlation_id: &str, error: &DaemonError) {
+        if path.exists() {
+            tracing::warn!(
+                correlation_id = %correlation_id,
+                file = %path.display(),
+                error = %error,
+                "failed to process file"
+            );
+        } else {
+            tracing::warn!(
+                correlation_id = %correlation_id,
+                file = %path.display(),
+                "segment vanished while being analysed — recorded audio the \
+                 pipeline never finished reading is gone"
+            );
+            if let Some(observer) = self.throughput.as_ref() {
+                observer.dropped(path);
+            }
+        }
+    }
+
+    /// Process any audio files already present in the watch directory.
+    ///
+    /// A file modified within [`FILE_SETTLE`] may still be being written, so
+    /// it is handed to `pending` — the watcher's queue, which analyses it once
+    /// it has settled — instead of being read now (`PIPE8c`). Read here, it was
+    /// decoded part-written and then again by the watcher when the recorder
+    /// finished it. Each file read here is claimed in `in_flight` like the
+    /// loop's, and its events carry the claim.
+    fn process_existing_files(&mut self, dir: &Path) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                tracing::warn!(
+                    dir = %dir.display(),
+                    error = %e,
+                    "cannot read watch directory for existing files"
                 );
-                // After every file, failed or not: a classifier that fails
-                // every window fails every file, and that is the case this
-                // report exists for.
-                if let Some(observer) = throughput.as_ref() {
-                    observer.model_health(&registry.health());
+                return;
+            }
+        };
+
+        let mut count = 0_u32;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() || !is_audio_file(&path) {
+                continue;
+            }
+            let recently_written = entry
+                .metadata()
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.elapsed().ok())
+                .is_none_or(|age| age < FILE_SETTLE);
+            if recently_written {
+                self.pending.note(path, Instant::now());
+                continue;
+            }
+            let correlation_id = new_event_correlation_id();
+            // As in the live loop: a backlog the station restarts into is read
+            // by the same classifiers, and one failing them is no less broken.
+            match self.analyse(&path, &correlation_id) {
+                Analysed::Done => count += 1,
+                // Surfaced rather than swallowed: a consumer that dropped
+                // mid-backlog would otherwise leave this spinning through the
+                // rest of the watch directory pointlessly. The main loop treats
+                // a closed receiver as fatal; so does this.
+                Analysed::ReceiverGone => {
+                    tracing::debug!("existing-file backlog stopping: event receiver closed");
+                    return;
                 }
-                match outcome {
-                    Ok(file) => {
-                        warn_if_narrow(&mut band_watch, &registry, &route, &path, &file);
-                        // Counted here and not before the call: this says
-                        // "analysed", and a file the pipeline failed on was
-                        // not. The counter is the only thing that separates a
-                        // model answering nothing from a pipeline that is not
-                        // running, so it must mean exactly one thing.
-                        if let Some(observer) = throughput.as_ref() {
-                            observer.analysed(&path);
-                            observer.filtered(&path, &file.tally);
-                        }
-                        for mut event in file.events {
-                            event.lease.clone_from(&lease);
-                            if event_tx.send(event).is_err() {
-                                tracing::warn!(
-                                    correlation_id = %correlation_id,
-                                    "event receiver dropped, stopping daemon"
-                                );
-                                return;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // Gone between settling and opening: the same loss as
-                        // a vanished pending file, counted the same way.
-                        if path.exists() {
-                            tracing::warn!(
-                                correlation_id = %correlation_id,
-                                file = %path.display(),
-                                error = %e,
-                                "failed to process file"
-                            );
-                        } else {
-                            tracing::warn!(
-                                correlation_id = %correlation_id,
-                                file = %path.display(),
-                                "segment vanished while being analysed — recorded audio the \
-                                 pipeline never finished reading is gone"
-                            );
-                            if let Some(observer) = throughput.as_ref() {
-                                observer.dropped(&path);
-                            }
-                        }
-                    }
+                Analysed::Failed(e) => {
+                    tracing::debug!(
+                        correlation_id = %correlation_id,
+                        file = %path.display(),
+                        error = %e,
+                        "skipping existing file"
+                    );
                 }
             }
         }
-
-        tracing::info!("detection daemon stopped");
-    });
-
-    Ok(DaemonHandle {
-        stop_tx,
-        heartbeat,
-        running,
-    })
+        if count > 0 {
+            tracing::info!(count, "processed existing audio files");
+        }
+    }
 }
 
 /// The whole-chunk filters, sized to the chunks the pipeline actually cuts.
@@ -803,9 +1115,10 @@ pub fn fit_pipeline_to_classifiers(
 /// A capture source names its segments with its id — the `audio_sources` row
 /// id, the key routes are written against — so the id is read back from the
 /// file name. A name without one (a lone microphone's BirdNET-Pi-style name, or
-/// a file dropped in by hand) gets the default route, the primary, as does a
-/// source with no route. Before this every segment got the default, whatever
-/// its source, and no route ever applied.
+/// a file dropped in by hand) is the [`LOCAL_SOURCE`], whose route is written
+/// as `local:…` (MDL-07); a source with no route gets the primary. Before this
+/// every segment got the default, whatever its source, and no route ever
+/// applied.
 fn route_for_segment(registry: &ClassifierRegistry, path: &Path) -> Vec<usize> {
     registry.route_for(segment_source(path).as_deref())
 }
@@ -825,8 +1138,8 @@ fn segment_source(path: &Path) -> Option<String> {
 /// starts: capture does not know the classifiers' rates (the registry is loaded
 /// on this thread), and the decoded rate is what actually reached them,
 /// including a microphone the capture layer fell back to another rate for. The
-/// source is the segment's id as [`route_for_segment`] reads it (`default` for
-/// a name with none), and the classifier rate is the highest among those the
+/// source is the segment's id as the file name carries it (`default` for a
+/// name with none), and the classifier rate is the highest among those the
 /// route sends it to: the widest band any of them listens to.
 ///
 /// An RTSP stream cannot be judged here. ffmpeg resamples it to 48 kHz before
@@ -898,122 +1211,6 @@ fn report_unanalysed(
     }
 }
 
-/// Process any audio files already present in the watch directory.
-///
-/// A file modified within [`FILE_SETTLE`] may still be being written, so it is
-/// handed to `pending` — the watcher's queue, which analyses it once it has
-/// settled — instead of being read now (`PIPE8c`). Read here, it was decoded
-/// part-written and then again by the watcher when the recorder finished it.
-/// Each file read here is claimed in `in_flight` like the loop's, and its
-/// events carry the claim.
-#[allow(clippy::too_many_arguments)]
-fn process_existing_files(
-    dir: &Path,
-    pipeline_config: &PipelineConfig,
-    registry: &mut ClassifierRegistry,
-    chunk_filters: &ChunkFilters,
-    species_filter: &mut SpeciesFilter,
-    filter_observer: Option<&super::SpeciesFilterObserver>,
-    throughput: Option<&super::ThroughputObserver>,
-    in_flight: Option<&super::InFlight>,
-    pending: &mut PendingFiles,
-    band_watch: &mut BandWatch,
-    lat: Option<f64>,
-    lon: Option<f64>,
-    event_tx: &mpsc::SyncSender<DetectionEvent>,
-) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(e) => {
-            tracing::warn!(
-                dir = %dir.display(),
-                error = %e,
-                "cannot read watch directory for existing files"
-            );
-            return;
-        }
-    };
-
-    let mut count = 0_u32;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-
-        if !is_audio_file(&path) {
-            continue;
-        }
-
-        let recently_written = entry
-            .metadata()
-            .and_then(|m| m.modified())
-            .ok()
-            .and_then(|t| t.elapsed().ok())
-            .is_none_or(|age| age < FILE_SETTLE);
-        if recently_written {
-            pending.note(path, Instant::now());
-            continue;
-        }
-
-        let lease = in_flight.map(|table| std::sync::Arc::new(table.claim(&path)));
-        let correlation_id = new_event_correlation_id();
-        let route = route_for_segment(registry, &path);
-        let outcome = process_and_infer_filtered(
-            &path,
-            pipeline_config,
-            registry,
-            &route,
-            chunk_filters,
-            species_filter,
-            filter_observer,
-            lat,
-            lon,
-            &correlation_id,
-        );
-        // As in the live loop: a backlog the station restarts into is read
-        // by the same classifiers, and one failing them is no less broken.
-        if let Some(observer) = throughput {
-            observer.model_health(&registry.health());
-        }
-        match outcome {
-            Ok(file) => {
-                warn_if_narrow(band_watch, registry, &route, &path, &file);
-                if let Some(observer) = throughput {
-                    observer.analysed(&path);
-                    observer.filtered(&path, &file.tally);
-                }
-                for mut event in file.events {
-                    event.lease.clone_from(&lease);
-                    // Surface a closed receiver instead of swallowing it: with
-                    // the prior `let _ =` a consumer that dropped mid-backlog
-                    // left this loop spinning through the rest of the watch
-                    // directory pointlessly (each `send` errored, was ignored,
-                    // and we processed the next file anyway). The main runtime
-                    // loop treats a closed receiver as fatal — match that here.
-                    if event_tx.send(event).is_err() {
-                        tracing::debug!("existing-file backlog stopping: event receiver closed");
-                        return;
-                    }
-                }
-                count += 1;
-            }
-            Err(e) => {
-                tracing::debug!(
-                    correlation_id = %correlation_id,
-                    file = %path.display(),
-                    error = %e,
-                    "skipping existing file"
-                );
-            }
-        }
-    }
-
-    if count > 0 {
-        tracing::info!(count, "processed existing audio files");
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1050,7 +1247,7 @@ mod tests {
             metadata_model_path: None,
             metadata_labels_path: None,
             species_aliases_path: None,
-            on_species_filter_state: None,
+            on_model_state: None,
             on_file_analysed: None,
             in_flight: None,
             shed: None,

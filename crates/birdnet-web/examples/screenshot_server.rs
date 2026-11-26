@@ -1300,6 +1300,134 @@ fn seed_model_health(state: &AppState) {
     state.metrics().set_model_info(&info);
 }
 
+/// What the start-up publishes about the station's models (MDL-03 to MDL-15),
+/// to match `BNB_FIXTURE_MODELS`: a running detector with the classifiers the
+/// window record names and the occurrence filter on, unless
+///
+/// * `left-out`: the second classifier's file is damaged and it was left out,
+///   and the geomodel the configuration names is not there, so the filter is
+///   off. The model folder holds a V3.0 file of the pinned size (sparse,
+///   unhashed, so a poll reads it as in place), a damaged Perch file and no
+///   geomodel, and the Capture tab's panel is configured over it: its rows,
+///   the Repair button and the notices that link to it are on screen;
+/// * `not-detecting`: the detector did not start, the reason the start-up
+///   gave in its words.
+fn seed_model_state(state: &AppState, models: &std::path::Path) {
+    use birdnet_core::inference::model_state::{
+        ClassifierFault, ClassifierState, ClassifierStatus, DetectorState, FilterOff, FilterState,
+    };
+    let classifier = |id: &str, primary: bool, status| ClassifierState {
+        id: id.to_owned(),
+        primary,
+        model_path: models.join(format!("{id}.onnx")),
+        labels_path: Some(models.join(format!("{id}_labels.csv"))),
+        status,
+    };
+    let judging = |primary: bool| ClassifierStatus::Judging {
+        sources: Vec::new(),
+        unrouted_sources: primary,
+    };
+    let mode = std::env::var("BNB_FIXTURE_MODELS").unwrap_or_default();
+    let ids: &[&str] = match mode.as_str() {
+        "none" => &[],
+        "one" => &["birdnet-v24"],
+        _ => &["birdnet-v3", "perch-v2"],
+    };
+    let mut classifiers: Vec<ClassifierState> = ids
+        .iter()
+        .enumerate()
+        .map(|(i, id)| classifier(id, i == 0, judging(i == 0)))
+        .collect();
+    let mut filter = FilterState::Active {
+        candidates: Some(212),
+    };
+    let mut detector = DetectorState::Running;
+    match mode.as_str() {
+        "left-out" => {
+            let geomodel = models.join("birdnet-v3-geomodel.onnx");
+            classifiers[1].status = ClassifierStatus::left_out(
+                ClassifierFault::WillNotLoad,
+                format!(
+                    "its model file {} will not load (Protobuf parsing failed); a truncated or \
+                     damaged download does this: install it again",
+                    classifiers[1].model_path.display()
+                ),
+            );
+            filter = FilterState::off(
+                FilterOff::ModelMissing,
+                format!(
+                    "its model file {} is not there; install it again or correct \
+                     METADATA_MODEL_PATH",
+                    geomodel.display()
+                ),
+            );
+            seed_model_files(models);
+            // What the repair thread publishes while it cannot reach an
+            // origin (MDL-10): the pages say the station is at it, and when
+            // it tries next.
+            state
+                .metrics()
+                .set_model_file(birdnet_core::inference::model_state::ModelFile {
+                    catalogue_id: "perch-v2".to_owned(),
+                    path: classifiers[1].model_path.clone(),
+                    repair: birdnet_core::inference::model_state::RepairState::WillRetry {
+                        at_unix: birdnet_core::inference::health::unix_now() + 40 * 60,
+                        attempts: 3,
+                        why: "no origin answered".to_owned(),
+                    },
+                });
+            state
+                .classifier_setup()
+                .configure(birdnet_web::classifier_setup::Layout {
+                    model_dir: models.to_path_buf(),
+                    model: Some(models.join("birdnet-v3.onnx")),
+                    range_filter: Some(geomodel),
+                    started: true,
+                    web_only: false,
+                });
+        }
+        "not-detecting" => {
+            detector = DetectorState::Failed {
+                why: "model: classifier `birdnet-v3` could not be loaded: its model scores \
+                      11560 classes and its labels file names 6522; species are assigned by \
+                      position, so every detection would carry the wrong name. Install the \
+                      labels file that shipped with this model"
+                    .to_owned(),
+            };
+        }
+        _ => {}
+    }
+    let metrics = state.metrics();
+    metrics.set_classifier_states(classifiers);
+    metrics.set_occurrence_filter(filter);
+    metrics.set_detector_state(detector);
+}
+
+/// The model folder of `BNB_FIXTURE_MODELS=left-out`: the V3.0 classifier and
+/// its labels at the pinned sizes (sparse: nothing is written), and a Perch
+/// file far too short.
+fn seed_model_files(models: &std::path::Path) {
+    use birdnet_integrations::model_catalog::{find, installed_paths};
+    std::fs::create_dir_all(models).expect("fixture model folder");
+    for (id, short) in [("birdnet-v3", false), ("perch-v2", true)] {
+        let Some(entry) = find(id) else { continue };
+        let (model, labels) = installed_paths(entry, models);
+        let sized = |path: &std::path::Path, len: u64| {
+            std::fs::File::create(path)
+                .and_then(|f| f.set_len(len))
+                .expect("fixture model file");
+        };
+        sized(&model, if short { 1_000 } else { entry.model_bytes });
+        if let Some(labels) = labels {
+            match entry.labels_embedded {
+                Some(text) => std::fs::write(labels, text).expect("fixture labels"),
+                None => sized(&labels, entry.labels_bytes),
+            }
+        }
+    }
+    let _ = std::fs::remove_file(models.join("birdnet-v3-geomodel.onnx"));
+}
+
 /// Write synthetic bird-call WAVs for the given clip filenames into `dir`, so
 /// the spectrogram-thumbnail route has real audio to render previews from.
 fn seed_demo_audio(dir: &std::path::Path, clips: &[String]) {
@@ -1707,6 +1835,7 @@ async fn main() {
     // Labels match the seeded detection sources so "detections today" merges.
     let state = state.with_capture_status(seed_capture_status());
     seed_model_health(&state);
+    seed_model_state(&state, &dir.join("models"));
 
     // The range filter, so the "Why isn't a bird heard here?" page has data to
     // show. The fixture runs no detection daemon and loads no range model; this

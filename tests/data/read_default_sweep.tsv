@@ -170,9 +170,9 @@ setting-default	crates/birdnet-web/src/tracking.rs	resolve_windows	unwrap_or	bir
 setting-default	crates/birdnet-web/src/tracking.rs	resolve_windows	unwrap_or_else	birdnet_db::settings::get_or(conn, "rare_species_days", "30") .unwrap_or_else(|_| "30".to_owned())
 setting-default	crates/birdnet-web/src/tracking.rs	setting_u32	unwrap_or	birdnet_db::settings::get_or(conn, key, &default.to_string()) .unwrap_or_else(|_| default.to_string()) .trim()
 setting-default	crates/birdnet-web/src/tracking.rs	setting_u32	unwrap_or_else	birdnet_db::settings::get_or(conn, key, &default.to_string()) .unwrap_or_else(|_| default.to_string())
-handled	src/app.rs	serve	match-err	match tokio::task::spawn_blocking(move || { birdnet_integrations::auto_update::check_for_update(current_versio
-not-a-read	src/app.rs	serve	ok	conn.query_row("SELECT datetime('now')", [], |r| r.get::<_, String>(0)) .ok()
-task-panic	src/app.rs	serve	match-err	match tokio::task::spawn_blocking(move || { integrations::with_persisted_blur_seed(client, data_dir.as_deref()
+handled	src/app.rs	spawn_update_check	match-err	match tokio::task::spawn_blocking(move || { birdnet_integrations::auto_update::check_for_update(current_versio
+not-a-read	src/app.rs	start_detector	ok	conn.query_row("SELECT datetime('now')", [], |r| r.get::<_, String>(0)) .ok()
+task-panic	src/app.rs	build_integrations	match-err	match tokio::task::spawn_blocking(move || { integrations::with_persisted_blur_seed(client, data_dir.as_deref()
 handled	src/capture/sources.rs	resolve_sources_from_db	ok	AudioSourceStore::list(conn).ok()
 handled	src/capture/sources.rs	seed_sources_from_config	match-err	match state.with_db(|conn| conn.insert(&new)) { Err .. }
 handled	src/daemon/duplicate.rs	reread	match-err	match state.with_db(birdnet_db::sqlite::get_species_interval_map) { Err .. }

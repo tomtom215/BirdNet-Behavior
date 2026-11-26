@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# installer/test/classifier-docker.sh — which classifier does the CONTAINER run?
+# installer/test/classifier-docker.sh — which classifier does the CONTAINER run,
+# and how does it get its models?
 #
 # The same decision as the bare-metal installer, made by docker/entrypoint.sh:
 # a new data volume gets BirdNET V2.4 and its range filter; the BirdNET+ V3.0
@@ -8,27 +9,21 @@
 # line saying so and how to change it — because an image upgrade must never swap
 # the network under a running station's history.
 #
-# BirdNET V2.4 is installed by the binary (`birdnet-behavior --install-model`),
-# which owns its digests, its origins and the labels file it carries; the
-# entrypoint has none of that, so the binary is stubbed here (BNB_BINARY, the
-# same hook BNB_STRIP_LIB gives the blank-environment scrubber). BirdNET+ V3.0 is
-# still downloaded by the entrypoint and its download functions are recorded.
+# Every model is installed by the binary (`birdnet-behavior --install-model`,
+# MDL-09), which owns the digests, the origins, the retries and the labels file
+# V2.4 carries; the entrypoint has none of that. So the binary is stubbed here
+# (BNB_BINARY, the same hook BNB_STRIP_LIB gives the blank-environment
+# scrubber) by one that plays both parts the real one plays: with
+# --install-model it does what the real one does with the files — writes them
+# under the real names, adopts a file an earlier image left under its old V3.0
+# name (a hard link), refuses a --from-file that is not the pinned body — and
+# logs what it was asked and what it had to write; with anything else it is the
+# daemon and prints what it was started with. `curl` on PATH is a stub that
+# logs, so a download by the entrypoint itself is a failure here.
 #
-# Docker is not available to CI's hermetic suite, so this does not run a
-# container. It does the two things that can be done without one:
-#
-#   Part 1 sources the entrypoint's own functions (select_classifier,
-#          acquire_classifier_models, setup_occurrence_filter, ...) with the
-#          download functions replaced by recorders, and reads what each
-#          scenario asked for and exported.
-#   Part 2 runs the WHOLE entrypoint script, byte for byte, with a stub binary
-#          that plays both parts the real one plays here (installing a model,
-#          then being the daemon), and reads the log and the environment the
-#          daemon would have started with.
-#
-# What neither can show: that the image builds, that the real binary can reach
-# its origins from inside a container, that Compose passes the variable through.
-# See the report that accompanied this change for what was and was not run.
+# This runs the WHOLE entrypoint, byte for byte, once per scenario. What it
+# cannot show: that the image builds, that the real binary reaches its origins
+# from inside a container, that Compose passes the variables through.
 #
 # Usage: installer/test/classifier-docker.sh
 # Needs bash + coreutils. No docker, no root, no network.
@@ -44,298 +39,19 @@ fail() { printf '  FAIL  %s\n' "$*"; FAILED=1; }
 WORK="$(mktemp -d)"
 trap 'rm -rf "${WORK}"' EXIT
 
-# The file names and the V3.0 volume marker, as the contract says.
+# The file names, as the contract says.
 V24_MODEL="birdnet-v24.onnx"
 V24_LABELS="birdnet-v24_labels.txt"
 V24_RANGE="birdnet-v24-range-v2.onnx"
-V3_MODEL="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
-V3_LABELS="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
-GEO_MODEL="BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx"
-GEO_LABELS="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"
+V3_MODEL="birdnet-v3.onnx"
+V3_LABELS="birdnet-v3_labels.csv"
+GEO_MODEL="birdnet-v3-geomodel.onnx"
+GEO_LABELS="birdnet-v3-geomodel_labels.txt"
+OLD_V3_MODEL="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
+OLD_V3_LABELS="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
+OLD_GEO_MODEL="BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx"
+OLD_GEO_LABELS="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"
 
-# ── Part 1: the functions ───────────────────────────────────────────────────
-
-# Run the entrypoint's classifier-and-filter logic in a fresh volume.
-#
-#   run_logic <volume-contents...>   (names of files to pre-create in /model;
-#                                     a name prefixed "empty:" is made zero-byte)
-#
-# Environment for the scenario is whatever the caller exported/prefixed.
-# Writes ${WORK}/logic.out (everything logged), ${WORK}/logic.calls (what the
-# install/download functions were asked for) and ${WORK}/logic.env (what was
-# exported).
-run_logic() {
-    local vol="${WORK}/volume.$RANDOM"
-    mkdir -p "${vol}"
-    local f
-    for f in "$@"; do
-        case "${f}" in
-            empty:*) : >"${vol}/${f#empty:}" ;;
-            *) echo content >"${vol}/${f}" ;;
-        esac
-    done
-    : >"${WORK}/logic.calls"
-    rm -f "${WORK}/logic.env"
-    (
-        set -uo pipefail
-        log()  { echo "[birdnet] $*"; }
-        warn() { echo "[birdnet] WARNING: $*"; }
-        die()  { echo "[birdnet] ERROR: $*"; exit 1; }
-        rule() { :; }
-
-        MODEL_DIR="${vol}"
-        # What the entrypoint reads before these functions run (OOB-20). The
-        # waits are recorded, not slept.
-        # shellcheck disable=SC2034  # read by the sourced functions
-        {
-            MODEL_RETRY_WAITS="${BIRDNET_MODEL_RETRY_WAITS-30 90}"
-            LOCAL_MODEL="${BIRDNET_LOCAL_MODEL:-}"
-            CLASSIFIER_MISSING=0
-        }
-        sleep() { echo "sleep $1" >>"${WORK}/logic.calls"; }
-        # The V3.0 pins and the names, taken from the shipping file.
-        # shellcheck disable=SC1090
-        source <(grep -E '^(V24_[A-Z0-9_]*|V3_[A-Z0-9_]*|ZENODO_BASE|GEOMODEL_[A-Z0-9_]*)=' "${ENTRYPOINT}")
-        # shellcheck disable=SC1090
-        source <(sed -n '/^retry_with_backoff()/,/^}/p;/^classifier_not_installed()/,/^}/p;/^select_classifier()/,/^}/p;/^acquire_default_models()/,/^}/p;/^acquire_v24_models()/,/^}/p;/^acquire_classifier_models()/,/^}/p;/^setup_geomodel()/,/^}/p;/^setup_range_filter()/,/^}/p;/^setup_occurrence_filter()/,/^}/p' "${ENTRYPOINT}")
-
-        # The V3.0 download recorders: note the call, make the file, succeed.
-        ensure_model_file() {
-            echo "v3-model $1 | primary=$2 | fallback=$3 | sha=$4" >>"${WORK}/logic.calls"
-            [ "${FAIL_V3:-0}" = 1 ] && return 1
-            echo v3 >"$1"
-        }
-        ensure_geomodel_file() { echo "geomodel $1 | sha=$3" >>"${WORK}/logic.calls"; echo geo >"$1"; }
-        # The binary: note the id, write what the real one writes.
-        install_with_binary() {
-            echo "binary $1" >>"${WORK}/logic.calls"
-            case "$1" in
-                birdnet-v24) echo m >"${MODEL_DIR}/${V24_MODEL_FILE}"; echo l >"${MODEL_DIR}/${V24_LABELS_FILE}" ;;
-                birdnet-v24-range-v2) [ "${FAIL_RANGE:-0}" = 1 ] && return 1; echo r >"${MODEL_DIR}/${V24_RANGE_FILE}" ;;
-                *) return 1 ;;
-            esac
-        }
-
-        # Same order as the entrypoint's top level.
-        select_classifier
-        MODEL_DEFAULT="${MODEL_DIR}/${MODEL_FILE}"
-        LABELS_DEFAULT="${MODEL_DIR}/${LABELS_FILE}"
-        : "${BIRDNET_MODEL:=${MODEL_DEFAULT}}"
-        : "${BIRDNET_LABELS:=${LABELS_DEFAULT}}"
-        export BIRDNET_MODEL BIRDNET_LABELS
-        # shellcheck disable=SC2034  # read by the sourced setup_* functions
-        {
-            GEOMODEL_USER_SET=0
-            [ -n "${BIRDNET_METADATA_MODEL:-}" ] && GEOMODEL_USER_SET=1
-        }
-        acquire_classifier_models
-        setup_occurrence_filter
-        {
-            echo "CLASSIFIER=${CLASSIFIER}"
-            echo "BIRDNET_MODEL=${BIRDNET_MODEL}"
-            echo "BIRDNET_LABELS=${BIRDNET_LABELS}"
-            echo "BIRDNET_METADATA_MODEL=${BIRDNET_METADATA_MODEL:-}"
-            echo "BIRDNET_METADATA_LABELS=${BIRDNET_METADATA_LABELS:-}"
-            echo "VOLUME=${vol}"
-        } >"${WORK}/logic.env"
-    ) >"${WORK}/logic.out" 2>&1
-}
-envval() { sed -n "s/^$1=//p" "${WORK}/logic.env"; }
-classifier_lines() { grep -c '\[birdnet\] Classifier:' "${WORK}/logic.out" || true; }
-
-# the "never mixed" rule, read off what was exported
-assert_unmixed() { # $1 label
-    local m f
-    m="$(envval BIRDNET_MODEL)"; f="$(envval BIRDNET_METADATA_MODEL)"
-    case "${m##*/}" in
-        "${V24_MODEL}")
-            if [ -z "${f}" ] || [ "${f##*/}" = "${V24_RANGE}" ]; then pass "$1: V2.4 is never given the geomodel"
-            else fail "$1: V2.4 was given '${f##*/}'"; fi
-            [ -z "$(envval BIRDNET_METADATA_LABELS)" ] || fail "$1: V2.4 was given a metadata labels file"
-            ;;
-        "${V3_MODEL}")
-            if [ -z "${f}" ] || [ "${f##*/}" = "${GEO_MODEL}" ]; then pass "$1: V3.0 is never given the range filter"
-            else fail "$1: V3.0 was given '${f##*/}'"; fi
-            ;;
-    esac
-}
-
-echo "=== 1. a new volume runs BirdNET V2.4 and its range filter, both installed by the binary ==="
-run_logic
-rc=$?
-V="$(envval VOLUME)"
-[ "${rc}" -eq 0 ] && pass "the entrypoint logic ran" || { fail "it failed (exit ${rc})"; sed 's/^/        /' "${WORK}/logic.out"; }
-[ "$(envval CLASSIFIER)" = "birdnet-v24" ] && pass "CLASSIFIER is birdnet-v24" || fail "CLASSIFIER is '$(envval CLASSIFIER)'"
-[ "$(envval BIRDNET_MODEL)" = "${V}/${V24_MODEL}" ] && pass "BIRDNET_MODEL is the V2.4 model" || fail "BIRDNET_MODEL is '$(envval BIRDNET_MODEL)'"
-[ "$(envval BIRDNET_LABELS)" = "${V}/${V24_LABELS}" ] && pass "BIRDNET_LABELS is the V2.4 labels" || fail "BIRDNET_LABELS is '$(envval BIRDNET_LABELS)'"
-[ "$(envval BIRDNET_METADATA_MODEL)" = "${V}/${V24_RANGE}" ] && pass "BIRDNET_METADATA_MODEL is the v2 range filter" || fail "BIRDNET_METADATA_MODEL is '$(envval BIRDNET_METADATA_MODEL)'"
-[ -z "$(envval BIRDNET_METADATA_LABELS)" ] && pass "no BIRDNET_METADATA_LABELS: the filter needs none" || fail "BIRDNET_METADATA_LABELS is set"
-if [ "$(grep -c '^binary ' "${WORK}/logic.calls")" = 2 ] && grep -qx 'binary birdnet-v24' "${WORK}/logic.calls" && grep -qx 'binary birdnet-v24-range-v2' "${WORK}/logic.calls"; then
-    pass "the binary was asked for birdnet-v24 and for birdnet-v24-range-v2, once each"
-else
-    fail "the calls: $(tr '\n' ';' <"${WORK}/logic.calls")"
-fi
-if grep -qE '^(v3-model|geomodel) ' "${WORK}/logic.calls"; then
-    fail "the entrypoint downloaded something itself for a V2.4 volume: $(grep -E '^(v3-model|geomodel)' "${WORK}/logic.calls" | head -2)"
-else
-    pass "the entrypoint downloaded nothing itself: no V2.4 digest or URL of its own"
-fi
-[ "$(classifier_lines)" = 1 ] && grep -q 'Classifier: BirdNET V2.4' "${WORK}/logic.out" \
-    && pass "exactly one 'Classifier:' line, naming V2.4" || fail "the Classifier line(s): $(grep 'Classifier:' "${WORK}/logic.out")"
-grep 'Classifier:' "${WORK}/logic.out" | grep -q 'BIRDNET_CLASSIFIER=birdnet-v3' && pass "...which says how to choose the other" || fail "the line does not say how to choose V3.0"
-assert_unmixed "new volume"
-
-echo "=== 1b. the next start, with the files in the volume, installs nothing ==="
-run_logic "${V24_MODEL}" "${V24_LABELS}" "${V24_RANGE}"
-V="$(envval VOLUME)"
-if [ ! -s "${WORK}/logic.calls" ] && [ "$(envval BIRDNET_METADATA_MODEL)" = "${V}/${V24_RANGE}" ] && [ "$(envval BIRDNET_MODEL)" = "${V}/${V24_MODEL}" ]; then
-    pass "no call to the binary, and the range filter is still configured"
-else
-    fail "a start with a complete volume made calls: $(tr '\n' ';' <"${WORK}/logic.calls")"
-fi
-echo "=== 1c. counterpart: a missing or empty file IS installed ==="
-run_logic "${V24_LABELS}" "${V24_RANGE}"
-if grep -qx 'binary birdnet-v24' "${WORK}/logic.calls" && ! grep -qx 'binary birdnet-v24-range-v2' "${WORK}/logic.calls"; then
-    pass "a volume without the model gets the model (and keeps its range filter)"
-else
-    fail "calls: $(tr '\n' ';' <"${WORK}/logic.calls")"
-fi
-run_logic "empty:${V24_MODEL}" "${V24_LABELS}" "${V24_RANGE}"
-if grep -qx 'binary birdnet-v24' "${WORK}/logic.calls"; then
-    pass "a zero-byte model is treated as missing"
-else
-    fail "a zero-byte model was trusted: $(tr '\n' ';' <"${WORK}/logic.calls")"
-fi
-
-echo "=== 2. counterpart: a volume that already holds the V3.0 model keeps running it ==="
-run_logic "${V3_MODEL}" "${V3_LABELS}"
-V="$(envval VOLUME)"
-[ "$(envval CLASSIFIER)" = "birdnet-v3" ] && pass "CLASSIFIER stays birdnet-v3" || fail "CLASSIFIER is '$(envval CLASSIFIER)'"
-[ "$(envval BIRDNET_MODEL)" = "${V}/${V3_MODEL}" ] && pass "BIRDNET_MODEL is still the V3.0 model" || fail "BIRDNET_MODEL is '$(envval BIRDNET_MODEL)'"
-[ "$(envval BIRDNET_METADATA_MODEL)" = "${V}/${GEO_MODEL}" ] && [ "$(envval BIRDNET_METADATA_LABELS)" = "${V}/${GEO_LABELS}" ] \
-    && pass "and the geomodel with its labels is still the filter" || fail "the V3.0 filter changed: '$(envval BIRDNET_METADATA_MODEL)'"
-if grep -q '^binary ' "${WORK}/logic.calls"; then fail "the V2.4 installer was run for a V3.0 volume: $(grep '^binary' "${WORK}/logic.calls")"; else pass "the binary was not asked to install V2.4"; fi
-if [ "$(classifier_lines)" = 1 ] && grep 'Classifier:' "${WORK}/logic.out" | grep -q 'keeps running it' \
-    && grep 'Classifier:' "${WORK}/logic.out" | grep -q 'BIRDNET_CLASSIFIER=birdnet-v24'; then
-    pass "exactly one log line says it kept V3.0 and how to move to V2.4"
-else
-    fail "the notice: $(grep 'Classifier:' "${WORK}/logic.out")"
-fi
-assert_unmixed "V3.0 volume"
-
-echo "=== 3. BIRDNET_CLASSIFIER=birdnet-v3 on a new volume is V3.0, downloaded as before ==="
-BIRDNET_CLASSIFIER=birdnet-v3 run_logic
-V="$(envval VOLUME)"
-[ "$(envval BIRDNET_MODEL)" = "${V}/${V3_MODEL}" ] && [ "$(envval BIRDNET_METADATA_MODEL)" = "${V}/${GEO_MODEL}" ] \
-    && pass "the V3.0 model and the geomodel" || fail "model '$(envval BIRDNET_MODEL)' filter '$(envval BIRDNET_METADATA_MODEL)'"
-if grep -q '^binary ' "${WORK}/logic.calls"; then fail "the binary was asked to install V2.4: $(grep '^binary' "${WORK}/logic.calls")"; else pass "the binary was not asked to install anything"; fi
-grep -q "primary=https://github.com/tomtom215/BirdNet-Behavior/releases/download/models-v3.0-preview3/" "${WORK}/logic.calls" \
-    && grep -q "fallback=https://zenodo.org/api/records/18247420/files/" "${WORK}/logic.calls" \
-    && pass "from the V3.0 release, falling back to Zenodo, as before" || fail "the V3.0 origins changed: $(grep '^v3-model' "${WORK}/logic.calls")"
-grep 'Classifier:' "${WORK}/logic.out" | grep -q 'BIRDNET_CLASSIFIER=birdnet-v3' && pass "the log says the choice came from BIRDNET_CLASSIFIER" || fail "the log does not credit BIRDNET_CLASSIFIER"
-assert_unmixed "explicit V3.0"
-
-echo "=== 4. BIRDNET_CLASSIFIER=birdnet-v24 on a V3.0 volume moves it, because someone asked ==="
-BIRDNET_CLASSIFIER=birdnet-v24 run_logic "${V3_MODEL}" "${V3_LABELS}"
-V="$(envval VOLUME)"
-[ "$(envval BIRDNET_MODEL)" = "${V}/${V24_MODEL}" ] && [ "$(envval BIRDNET_METADATA_MODEL)" = "${V}/${V24_RANGE}" ] \
-    && pass "the V2.4 model and the range filter" || fail "model '$(envval BIRDNET_MODEL)' filter '$(envval BIRDNET_METADATA_MODEL)'"
-assert_unmixed "explicit V2.4 on a V3.0 volume"
-
-echo "=== 5. a value that is neither id stops the container, naming the two that are ==="
-BIRDNET_CLASSIFIER=birdnet-v2.4 run_logic
-rc=$?
-if [ "${rc}" -ne 0 ] && grep -q 'birdnet-v24' "${WORK}/logic.out" && grep -q 'birdnet-v3' "${WORK}/logic.out" && [ ! -s "${WORK}/logic.calls" ]; then
-    pass "exit ${rc}, both valid ids named, nothing installed or fetched"
-else
-    fail "exit ${rc}; output: $(cat "${WORK}/logic.out")"
-fi
-
-echo "=== 6. a model of the operator's own keeps the V3.0 defaults it always had ==="
-BIRDNET_MODEL=/data/model/my-own.onnx run_logic
-V="$(envval VOLUME)"
-if [ "$(envval BIRDNET_MODEL)" = "/data/model/my-own.onnx" ] && [ "$(envval CLASSIFIER)" = "birdnet-v3" ] \
-    && [ "$(envval BIRDNET_METADATA_MODEL)" = "${V}/${GEO_MODEL}" ] && ! grep -q "^v3-model /data/model/my-own.onnx" "${WORK}/logic.calls"; then
-    pass "their model is untouched and unverified; labels and the geomodel default as before"
-else
-    fail "own-model handling changed: classifier '$(envval CLASSIFIER)', filter '$(envval BIRDNET_METADATA_MODEL)'"
-fi
-
-echo "=== 6b. BIRDNET_MODEL naming the V2.4 file is V2.4 ==="
-# select_classifier compares BIRDNET_MODEL with ${MODEL_DIR}/<file>, and the
-# helper picks MODEL_DIR itself; give it a fixed one to compare against.
-(
-    set -uo pipefail
-    log()  { echo "[birdnet] $*"; }
-    warn() { :; }
-    die()  { echo "[birdnet] ERROR: $*"; exit 1; }
-    MODEL_DIR="${WORK}/fixed-model-dir"
-    mkdir -p "${MODEL_DIR}"
-    # shellcheck disable=SC1090
-    source <(grep -E '^(V24_[A-Z0-9_]*|V3_[A-Z0-9_]*|ZENODO_BASE)=' "${ENTRYPOINT}")
-    # shellcheck disable=SC1090
-    source <(sed -n '/^select_classifier()/,/^}/p' "${ENTRYPOINT}")
-    BIRDNET_MODEL="${MODEL_DIR}/${V24_MODEL}"
-    select_classifier >/dev/null
-    echo "${CLASSIFIER}"
-) >"${WORK}/6b.out" 2>&1
-[ "$(cat "${WORK}/6b.out")" = "birdnet-v24" ] && pass "BIRDNET_MODEL=<model dir>/${V24_MODEL} selects V2.4" || fail "selected '$(cat "${WORK}/6b.out")'"
-
-echo "=== 7. an operator-set BIRDNET_METADATA_MODEL is theirs ==="
-BIRDNET_METADATA_MODEL=/data/mine/filter.onnx run_logic
-if [ "$(envval BIRDNET_METADATA_MODEL)" = "/data/mine/filter.onnx" ] && ! grep -qx 'binary birdnet-v24-range-v2' "${WORK}/logic.calls"; then
-    pass "the V2.4 range filter was not installed over it"
-else
-    fail "BIRDNET_METADATA_MODEL was replaced: '$(envval BIRDNET_METADATA_MODEL)'; calls: $(tr '\n' ';' <"${WORK}/logic.calls")"
-fi
-
-echo "=== 8. BIRDNET_METADATA_LABELS beside the range filter is flagged, not silently paired ==="
-BIRDNET_METADATA_LABELS=/data/mine/geo-labels.txt run_logic
-if grep -q 'WARNING: BIRDNET_METADATA_LABELS is set, but the V2.4 range filter' "${WORK}/logic.out"; then
-    pass "a warning says the V2.4 range filter needs no labels file"
-else
-    fail "no warning for a label file set beside the V2.4 range filter"
-fi
-
-echo "=== 9. BIRDNET_SKIP_MODEL_DOWNLOAD=1 installs nothing and still says which classifier ==="
-BIRDNET_SKIP_MODEL_DOWNLOAD=1 run_logic
-V="$(envval VOLUME)"
-if [ ! -s "${WORK}/logic.calls" ] && [ "$(envval BIRDNET_MODEL)" = "${V}/${V24_MODEL}" ] && [ -z "$(envval BIRDNET_METADATA_MODEL)" ] && [ "$(classifier_lines)" = 1 ]; then
-    pass "no install, the V2.4 paths are set, no filter is claimed, one Classifier line"
-else
-    fail "skip handling: calls=$(wc -l <"${WORK}/logic.calls") model=$(envval BIRDNET_MODEL) filter='$(envval BIRDNET_METADATA_MODEL)'"
-fi
-
-echo "=== 10. the range filter failing leaves a working container without it ==="
-FAIL_RANGE=1 run_logic
-rc=$?
-V="$(envval VOLUME)"
-if [ "${rc}" -eq 0 ] && [ "$(envval BIRDNET_MODEL)" = "${V}/${V24_MODEL}" ] && [ -z "$(envval BIRDNET_METADATA_MODEL)" ] \
-    && grep -q 'species occurrence filtering is OFF' "${WORK}/logic.out"; then
-    pass "the classifier is configured, no filter is claimed, and the log says filtering is off"
-else
-    fail "exit ${rc}; filter '$(envval BIRDNET_METADATA_MODEL)'; $(grep -c 'filtering is OFF' "${WORK}/logic.out") notice(s)"
-fi
-
-echo "=== 10b. the V3.0 model failing is retried, then the container carries on and says so ==="
-BIRDNET_CLASSIFIER=birdnet-v3 FAIL_V3=1 run_logic
-rc=$?
-V="$(envval VOLUME)"
-if [ "${rc}" -eq 0 ] && [ "$(envval BIRDNET_MODEL)" = "${V}/${V3_MODEL}" ] \
-    && [ "$(grep -c '^v3-model ' "${WORK}/logic.calls")" -eq 3 ] \
-    && [ "$(grep '^sleep' "${WORK}/logic.calls" | tr '\n' ' ')" = "sleep 30 sleep 90 " ] \
-    && grep -q 'NOT DETECTING BIRDS' "${WORK}/logic.out"; then
-    pass "three attempts, 30 s and 90 s apart, then on to the daemon with the warning"
-else
-    fail "exit ${rc}; calls: $(tr '\n' ';' <"${WORK}/logic.calls")"
-fi
-
-# ── Part 2: the whole script ────────────────────────────────────────────────
-echo "=== 11. the real entrypoint, end to end ==="
-# BNB_BINARY is a stub that plays both parts the real binary plays: with
-# --install-model it writes what the real one writes (the same names) and
-# records the id; with anything else it is the daemon and prints what it was
-# started with.
 STUB="${WORK}/binary-stub"
 cat >"${STUB}" <<'SH'
 #!/bin/sh
@@ -350,168 +66,321 @@ for a in "$@"; do
     [ "${a}" = "--install-model" ] && next=id
     [ "${a}" = "--from-file" ] && next=from
 done
-if [ -n "${id}" ]; then
-    # The daemon would report any BIRDNET_* variable it does not read; so would
-    # this install, and it must not be handed BIRDNET_CLASSIFIER.
-    [ -n "${BIRDNET_CLASSIFIER:-}" ] && echo "STUB-SAW-BIRDNET_CLASSIFIER" >>"${STUB_LOG}"
-    if [ -n "${from}" ]; then
-        echo "STUB-INSTALL: ${id} (dir=${BIRDNET_MODEL_DIR}) from=${from}" >>"${STUB_LOG}"
-        # Stands in for the real binary's sha256-and-size check of the file.
-        [ "$(cat "${from}")" = "the pinned model" ] || { echo "Install failed: sha256 mismatch" >&2; exit 1; }
-    else
-        echo "STUB-INSTALL: ${id} (dir=${BIRDNET_MODEL_DIR})" >>"${STUB_LOG}"
-    fi
-    [ "${STUB_FAIL:-}" = "${id}" ] && { echo "Install failed: network error" >&2; exit 1; }
-    case "${id}" in
-        birdnet-v24) echo model >"${BIRDNET_MODEL_DIR}/birdnet-v24.onnx"; echo labels >"${BIRDNET_MODEL_DIR}/birdnet-v24_labels.txt" ;;
-        birdnet-v24-range-v2) echo range >"${BIRDNET_MODEL_DIR}/birdnet-v24-range-v2.onnx" ;;
-        *) echo "Install failed: no classifier called ${id}" >&2; exit 1 ;;
-    esac
+if [ -z "${id}" ]; then
+    echo "DAEMON-ARGS: $*"
+    env | sort | grep -E '^BIRDNET_' | sed 's/^/DAEMON-ENV: /'
     exit 0
 fi
-echo "DAEMON-ARGS: $*"
-env | sort | grep -E '^BIRDNET_' | sed 's/^/DAEMON-ENV: /'
+dir="${BIRDNET_MODEL_DIR}"
+# The binary reports any BIRDNET_* variable it does not read.
+[ -n "${BIRDNET_CLASSIFIER:-}" ] && echo "STUB-SAW-BIRDNET_CLASSIFIER" >>"${STUB_LOG}"
+[ -n "${BIRDNET_LOCAL_MODEL:-}" ] && echo "STUB-SAW-BIRDNET_LOCAL_MODEL" >>"${STUB_LOG}"
+if [ -n "${from}" ]; then
+    echo "STUB-INSTALL: ${id} (dir=${dir}) from=${from}" >>"${STUB_LOG}"
+else
+    echo "STUB-INSTALL: ${id} (dir=${dir})" >>"${STUB_LOG}"
+fi
+echo "STUB-WAITS: ${id} ${BIRDNET_MODEL_RETRY_WAITS-<unset>}" >>"${STUB_LOG}"
+case "${id}" in
+    birdnet-v24) model=birdnet-v24.onnx; labels=birdnet-v24_labels.txt; old=""; old_labels="" ;;
+    birdnet-v24-range-v2) model=birdnet-v24-range-v2.onnx; labels=""; old=""; old_labels="" ;;
+    birdnet-v3) model=birdnet-v3.onnx; labels=birdnet-v3_labels.csv
+        old="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"; old_labels="BirdNET+_V3.0-preview3_Global_11K_Labels.csv" ;;
+    birdnet-v3-geomodel) model=birdnet-v3-geomodel.onnx; labels=birdnet-v3-geomodel_labels.txt
+        old="BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx"; old_labels="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt" ;;
+    *) echo "Install failed: no model called ${id}" >&2; exit 1 ;;
+esac
+# The "pinned" body of every file is "pinned <name>".
+place() { # NAME OLD
+    [ "$(cat "${dir}/$1" 2>/dev/null)" = "pinned $1" ] && return 0
+    if [ -n "$2" ] && [ "$(cat "${dir}/$2" 2>/dev/null)" = "pinned $1" ]; then
+        rm -f "${dir}/$1"; ln "${dir}/$2" "${dir}/$1"; echo "STUB-ADOPTED: $2" >>"${STUB_LOG}"; return 0
+    fi
+    [ "${STUB_FAIL:-}" = "${id}" ] && { echo "Install failed: no origin served the verified file" >&2; return 1; }
+    echo "STUB-WROTE: $1" >>"${STUB_LOG}"
+    echo "pinned $1" >"${dir}/$1"
+}
+if [ -n "${from}" ]; then
+    [ "$(cat "${from}")" = "pinned ${model}" ] || { echo "Install failed: sha256 mismatch" >&2; exit 1; }
+    echo "pinned ${model}" >"${dir}/${model}"
+else
+    place "${model}" "${old}" || exit 1
+fi
+[ -z "${labels}" ] || place "${labels}" "${old_labels}" || exit 1
+exit 0
 SH
 chmod +x "${STUB}"
+mkdir -p "${WORK}/bin"
+printf '#!/bin/sh\necho "CURL $*" >>"${STUB_LOG}"\nexit 1\n' >"${WORK}/bin/curl"
+chmod +x "${WORK}/bin/curl"
+
+# Seed VOL with files whose content is the stub's "pinned" body for NAME, or,
+# for OLD:NEW, NEW's body under the old name OLD.
+seed() {
+    local vol="$1" f; shift
+    mkdir -p "${vol}"
+    for f in "$@"; do
+        case "${f}" in
+            *:*) echo "pinned ${f#*:}" >"${vol}/${f%%:*}" ;;
+            *) echo "pinned ${f}" >"${vol}/${f}" ;;
+        esac
+    done
+}
+old_v3_volume() { # the four V3.0 files as an earlier image left them
+    seed "$1" "${OLD_V3_MODEL}:${V3_MODEL}" "${OLD_V3_LABELS}:${V3_LABELS}" \
+        "${OLD_GEO_MODEL}:${GEO_MODEL}" "${OLD_GEO_LABELS}:${GEO_LABELS}"
+}
 
 run_entrypoint() { # volume dir, then extra env as NAME=VALUE...
     local vol="$1"; shift
     mkdir -p "${vol}"
     : >"${WORK}/stub.log"
-    env -i PATH="${PATH}" HOME="${WORK}" TZ=UTC STUB_LOG="${WORK}/stub.log" \
+    env -i PATH="${WORK}/bin:${PATH}" HOME="${WORK}" TZ=UTC STUB_LOG="${WORK}/stub.log" \
         BNB_STRIP_LIB="${REPO_ROOT}/docker/strip-blank-env.sh" BNB_BINARY="${STUB}" \
         BIRDNET_MODEL_DIR="${vol}" BIRDNET_ALSA_DEVICE=hw:0 "$@" \
         sh "${ENTRYPOINT}" --some-arg >"${WORK}/e2e.out" 2>&1
 }
 denv() { sed -n "s/^DAEMON-ENV: $1=//p" "${WORK}/e2e.out"; }
+asked() { sed -n 's/^STUB-INSTALL: \([^ ]*\) .*/\1/p' "${WORK}/stub.log" | tr '\n' ' '; }
+wrote() { grep -c '^STUB-WROTE' "${WORK}/stub.log" || true; }
+classifier_lines() { grep -c '\[birdnet\] Classifier:' "${WORK}/e2e.out" || true; }
+started() { grep -q 'DAEMON-ARGS: --some-arg' "${WORK}/e2e.out"; }
+no_downloads_of_its_own() {
+    if grep -q '^CURL' "${WORK}/stub.log"; then fail "$1: the entrypoint downloaded something itself: $(grep '^CURL' "${WORK}/stub.log" | head -2)"
+    else pass "$1: the entrypoint downloaded nothing itself"; fi
+}
+# The "never mixed" rule, read off what the daemon is started with.
+assert_unmixed() { # $1 label
+    local m f
+    m="$(denv BIRDNET_MODEL)"; f="$(denv BIRDNET_METADATA_MODEL)"
+    case "${m##*/}" in
+        "${V24_MODEL}")
+            if [ -z "${f}" ] || [ "${f##*/}" = "${V24_RANGE}" ]; then pass "$1: V2.4 is never given the geomodel"
+            else fail "$1: V2.4 was given '${f##*/}'"; fi
+            [ -z "$(denv BIRDNET_METADATA_LABELS)" ] || fail "$1: V2.4 was given a metadata labels file"
+            ;;
+        "${V3_MODEL}")
+            if [ -z "${f}" ] || [ "${f##*/}" = "${GEO_MODEL}" ]; then pass "$1: V3.0 is never given the range filter"
+            else fail "$1: V3.0 was given '${f##*/}'"; fi
+            ;;
+    esac
+}
 
-vol="${WORK}/e2e-new"
+echo "=== 1. a new volume runs BirdNET V2.4 and its range filter, both installed by the binary ==="
+vol="${WORK}/new"
 run_entrypoint "${vol}"; rc=$?
-[ "${rc}" -eq 0 ] && pass "a new volume: the entrypoint installed V2.4 and ran on to the daemon" || { fail "exit ${rc}"; sed 's/^/        /' "${WORK}/e2e.out"; }
-if [ "$(grep -c '^STUB-INSTALL' "${WORK}/stub.log")" = 2 ] \
-    && grep -qx "STUB-INSTALL: birdnet-v24 (dir=${vol})" "${WORK}/stub.log" \
-    && grep -qx "STUB-INSTALL: birdnet-v24-range-v2 (dir=${vol})" "${WORK}/stub.log"; then
-    pass "the binary was asked for birdnet-v24 and birdnet-v24-range-v2, into the model directory"
-else
-    fail "binary calls: $(tr '\n' ';' <"${WORK}/stub.log")"
-fi
+[ "${rc}" -eq 0 ] && started && pass "the entrypoint ran on to the daemon" || { fail "exit ${rc}"; sed 's/^/        /' "${WORK}/e2e.out"; }
+[ "$(asked)" = "birdnet-v24 birdnet-v24-range-v2 " ] && grep -qx "STUB-INSTALL: birdnet-v24 (dir=${vol})" "${WORK}/stub.log" \
+    && pass "the binary was asked for birdnet-v24 and birdnet-v24-range-v2, into the model directory" \
+    || fail "binary calls: $(asked)"
 [ "$(denv BIRDNET_MODEL)" = "${vol}/${V24_MODEL}" ] && [ "$(denv BIRDNET_LABELS)" = "${vol}/${V24_LABELS}" ] \
-    && [ "$(denv BIRDNET_METADATA_MODEL)" = "${vol}/${V24_RANGE}" ] \
-    && pass "the daemon starts with the V2.4 model, labels and range filter" || fail "daemon env: model '$(denv BIRDNET_MODEL)' filter '$(denv BIRDNET_METADATA_MODEL)'"
+    && [ "$(denv BIRDNET_METADATA_MODEL)" = "${vol}/${V24_RANGE}" ] && [ -z "$(denv BIRDNET_METADATA_LABELS)" ] \
+    && pass "the daemon starts with the V2.4 model, labels and range filter, and no filter labels" \
+    || fail "daemon env: model '$(denv BIRDNET_MODEL)' filter '$(denv BIRDNET_METADATA_MODEL)'"
+[ "$(classifier_lines)" = 1 ] && grep -q 'Classifier: BirdNET V2.4' "${WORK}/e2e.out" \
+    && grep 'Classifier:' "${WORK}/e2e.out" | grep -q 'BIRDNET_CLASSIFIER=birdnet-v3' \
+    && pass "one Classifier line, V2.4, saying how to choose the other" || fail "Classifier lines: $(grep 'Classifier:' "${WORK}/e2e.out")"
 grep -q 'DAEMON-ARGS: --some-arg' "${WORK}/e2e.out" && pass "extra arguments are forwarded" || fail "arguments were not forwarded"
-grep -c '\[birdnet\] Classifier:' "${WORK}/e2e.out" | grep -qx 1 && grep -q 'Classifier: BirdNET V2.4' "${WORK}/e2e.out" \
-    && pass "one Classifier line, V2.4" || fail "Classifier lines: $(grep 'Classifier:' "${WORK}/e2e.out")"
+no_downloads_of_its_own "new volume"
+assert_unmixed "new volume"
 
+echo "=== 1b. the next start re-checks the files through the binary and downloads nothing ==="
 run_entrypoint "${vol}"; rc=$?
-if [ "${rc}" -eq 0 ] && [ ! -s "${WORK}/stub.log" ] && [ "$(denv BIRDNET_METADATA_MODEL)" = "${vol}/${V24_RANGE}" ]; then
-    pass "the second start, on the same volume, installs nothing and still configures the filter"
+if [ "${rc}" -eq 0 ] && [ "$(asked)" = "birdnet-v24 birdnet-v24-range-v2 " ] && [ "$(wrote)" = 0 ] \
+    && [ "$(denv BIRDNET_METADATA_MODEL)" = "${vol}/${V24_RANGE}" ]; then
+    pass "every start hands the files to the binary's check (a cached file is not trusted for being there), nothing is fetched, and the filter is on"
 else
-    fail "second start: exit ${rc}; binary calls: $(tr '\n' ';' <"${WORK}/stub.log")"
+    fail "second start: exit ${rc}; calls: $(tr '\n' ';' <"${WORK}/stub.log")"
 fi
+echo "=== 1c. counterpart: a missing or damaged file IS fetched, and only that one ==="
+vol="${WORK}/missing-model"
+seed "${vol}" "${V24_LABELS}" "${V24_RANGE}"
+run_entrypoint "${vol}"
+[ "$(wrote)" = 1 ] && grep -qx "STUB-WROTE: ${V24_MODEL}" "${WORK}/stub.log" \
+    && pass "a volume without the model gets the model, and keeps the rest" || fail "calls: $(tr '\n' ';' <"${WORK}/stub.log")"
+vol="${WORK}/damaged-model"
+seed "${vol}" "${V24_LABELS}" "${V24_RANGE}"
+echo "truncated" >"${vol}/${V24_MODEL}"
+run_entrypoint "${vol}"
+grep -qx "STUB-WROTE: ${V24_MODEL}" "${WORK}/stub.log" && pass "a model with the wrong bytes is replaced" \
+    || fail "a damaged model was trusted: $(tr '\n' ';' <"${WORK}/stub.log")"
 
-vol="${WORK}/e2e-v3"
-mkdir -p "${vol}"; : >"${vol}/${V3_MODEL}"
-run_entrypoint "${vol}" BIRDNET_SKIP_MODEL_DOWNLOAD=1; rc=$?
-[ "${rc}" -eq 0 ] && [ "$(denv BIRDNET_MODEL)" = "${vol}/${V3_MODEL}" ] && [ ! -s "${WORK}/stub.log" ] \
-    && pass "a volume holding the V3.0 model starts the daemon on it, without touching the binary's installer" || fail "exit ${rc}; model '$(denv BIRDNET_MODEL)'"
-grep 'Classifier:' "${WORK}/e2e.out" | grep -q 'keeps running it' && pass "with the notice" || fail "no notice: $(grep 'Classifier:' "${WORK}/e2e.out")"
+echo "=== 1d. a range filter put on the volume since the last start is switched on by this one ==="
+vol="${WORK}/filter-later"
+seed "${vol}" "${V24_MODEL}" "${V24_LABELS}"
+run_entrypoint "${vol}" STUB_FAIL=birdnet-v24-range-v2
+[ -z "$(denv BIRDNET_METADATA_MODEL)" ] && pass "precondition: without the file, no filter" || fail "precondition: a filter was claimed"
+seed "${vol}" "${V24_RANGE}"
+run_entrypoint "${vol}" STUB_FAIL=birdnet-v24-range-v2
+[ "$(denv BIRDNET_METADATA_MODEL)" = "${vol}/${V24_RANGE}" ] && pass "with it verified on the volume, the daemon is pointed at it" \
+    || fail "the filter on the volume was not exported: '$(denv BIRDNET_METADATA_MODEL)'"
 
-vol="${WORK}/e2e-v3-explicit"
-run_entrypoint "${vol}" BIRDNET_CLASSIFIER=birdnet-v3 BIRDNET_SKIP_MODEL_DOWNLOAD=1; rc=$?
-[ "${rc}" -eq 0 ] && [ "$(denv BIRDNET_MODEL)" = "${vol}/${V3_MODEL}" ] \
-    && pass "BIRDNET_CLASSIFIER=birdnet-v3 on a new volume starts V3.0" || fail "exit ${rc}; model '$(denv BIRDNET_MODEL)'"
+echo "=== 2. a volume an earlier image left with the V3.0 files keeps running V3.0, and keeps the files ==="
+vol="${WORK}/old-v3"
+old_v3_volume "${vol}"
+inode="$(stat -c %i "${vol}/${OLD_V3_MODEL}")"
+run_entrypoint "${vol}"; rc=$?
+[ "${rc}" -eq 0 ] && started && pass "the entrypoint ran on to the daemon" || { fail "exit ${rc}"; sed 's/^/        /' "${WORK}/e2e.out" | tail -6; }
+[ "$(asked)" = "birdnet-v3 birdnet-v3-geomodel " ] && pass "the binary was asked for birdnet-v3 and its geomodel" || fail "calls: $(asked)"
+[ "$(wrote)" = 0 ] && [ "$(grep -c '^STUB-ADOPTED' "${WORK}/stub.log")" = 4 ] \
+    && pass "nothing was downloaded: the four files were adopted where they were" || fail "calls: $(tr '\n' ';' <"${WORK}/stub.log")"
+[ "$(stat -c %i "${vol}/${V3_MODEL}" 2>/dev/null)" = "${inode}" ] && pass "the model is the same file (no 541 MB copy)" || fail "the model was copied or replaced"
+[ "$(denv BIRDNET_MODEL)" = "${vol}/${V3_MODEL}" ] && [ "$(denv BIRDNET_LABELS)" = "${vol}/${V3_LABELS}" ] \
+    && [ "$(denv BIRDNET_METADATA_MODEL)" = "${vol}/${GEO_MODEL}" ] && [ "$(denv BIRDNET_METADATA_LABELS)" = "${vol}/${GEO_LABELS}" ] \
+    && pass "the daemon starts on V3.0 and the geomodel, under the binary's names" \
+    || fail "daemon env: model '$(denv BIRDNET_MODEL)' filter '$(denv BIRDNET_METADATA_MODEL)'"
+left=""
+for f in "${vol}"/BirdNET+_*; do [ -e "${f}" ] && left="${left} ${f##*/}"; done
+if [ -n "${left}" ]; then fail "old names left:${left}"; else pass "the old names are gone"; fi
+if [ "$(classifier_lines)" = 1 ] && grep 'Classifier:' "${WORK}/e2e.out" | grep -q 'keeps running it' \
+    && grep 'Classifier:' "${WORK}/e2e.out" | grep -q 'BIRDNET_CLASSIFIER=birdnet-v24'; then
+    pass "exactly one log line says it kept V3.0 and how to move to V2.4"
+else
+    fail "the notice: $(grep 'Classifier:' "${WORK}/e2e.out")"
+fi
+assert_unmixed "V3.0 volume"
+no_downloads_of_its_own "V3.0 volume"
 
-vol="${WORK}/e2e-blank"
+echo "=== 2b. a BIRDNET_MODEL pointed at the old V3.0 name follows the file to its new one ==="
+vol="${WORK}/old-v3-named"
+old_v3_volume "${vol}"
+run_entrypoint "${vol}" BIRDNET_MODEL="${vol}/${OLD_V3_MODEL}" BIRDNET_METADATA_MODEL="${vol}/${OLD_GEO_MODEL}"
+[ "$(denv BIRDNET_MODEL)" = "${vol}/${V3_MODEL}" ] && [ "$(denv BIRDNET_METADATA_MODEL)" = "${vol}/${GEO_MODEL}" ] \
+    && [ -e "${vol}/${V3_MODEL}" ] && [ ! -e "${vol}/${OLD_V3_MODEL}" ] \
+    && pass "BIRDNET_MODEL and BIRDNET_METADATA_MODEL name the adopted files, and the old names are gone" \
+    || fail "model '$(denv BIRDNET_MODEL)' filter '$(denv BIRDNET_METADATA_MODEL)'; $(ls "${vol}" | tr '\n' ' ')"
+
+echo "=== 3. BIRDNET_CLASSIFIER=birdnet-v3 on a new volume is V3.0 and its geomodel ==="
+vol="${WORK}/v3-new"
+run_entrypoint "${vol}" BIRDNET_CLASSIFIER=birdnet-v3
+[ "$(denv BIRDNET_MODEL)" = "${vol}/${V3_MODEL}" ] && [ "$(denv BIRDNET_METADATA_MODEL)" = "${vol}/${GEO_MODEL}" ] \
+    && [ "$(asked)" = "birdnet-v3 birdnet-v3-geomodel " ] \
+    && pass "the binary installed the V3.0 model and the geomodel" || fail "model '$(denv BIRDNET_MODEL)' calls '$(asked)'"
+grep 'Classifier:' "${WORK}/e2e.out" | grep -q 'BIRDNET_CLASSIFIER=birdnet-v3' && pass "the log credits BIRDNET_CLASSIFIER" || fail "the log does not credit BIRDNET_CLASSIFIER"
+no_downloads_of_its_own "explicit V3.0"
+assert_unmixed "explicit V3.0"
+
+echo "=== 4. BIRDNET_CLASSIFIER=birdnet-v24 on a V3.0 volume moves it, because someone asked ==="
+vol="${WORK}/v3-to-v24"
+old_v3_volume "${vol}"
+run_entrypoint "${vol}" BIRDNET_CLASSIFIER=birdnet-v24
+[ "$(denv BIRDNET_MODEL)" = "${vol}/${V24_MODEL}" ] && [ "$(denv BIRDNET_METADATA_MODEL)" = "${vol}/${V24_RANGE}" ] \
+    && pass "the V2.4 model and the range filter" || fail "model '$(denv BIRDNET_MODEL)' filter '$(denv BIRDNET_METADATA_MODEL)'"
+assert_unmixed "explicit V2.4 on a V3.0 volume"
+
+echo "=== 5. a value that is neither id stops the container, naming the two that are ==="
+vol="${WORK}/bad"
+run_entrypoint "${vol}" BIRDNET_CLASSIFIER=birdnet-v2.4; rc=$?
+if [ "${rc}" -ne 0 ] && ! started && grep -q 'birdnet-v24' "${WORK}/e2e.out" && grep -q 'birdnet-v3' "${WORK}/e2e.out" && [ ! -s "${WORK}/stub.log" ]; then
+    pass "exit ${rc}, both valid ids named, nothing installed"
+else
+    fail "exit ${rc}; output: $(tail -3 "${WORK}/e2e.out")"
+fi
+vol="${WORK}/blank"
 run_entrypoint "${vol}" BIRDNET_CLASSIFIER=; rc=$?
 [ "${rc}" -eq 0 ] && [ "$(denv BIRDNET_MODEL)" = "${vol}/${V24_MODEL}" ] \
     && pass "a blank BIRDNET_CLASSIFIER (what Compose's \${VAR:-} makes of an unset one) means unset" || fail "exit ${rc}; model '$(denv BIRDNET_MODEL)'"
-
-# The daemon does not read BIRDNET_CLASSIFIER, and it reports every BIRDNET_*
-# variable it does not read at each start.
-vol="${WORK}/e2e-unset"
+vol="${WORK}/unset"
 run_entrypoint "${vol}" BIRDNET_CLASSIFIER=birdnet-v24; rc=$?
-if [ -z "$(denv BIRDNET_CLASSIFIER)" ] && [ "${rc}" -eq 0 ]; then
-    pass "BIRDNET_CLASSIFIER is removed before the daemon starts (it would be reported as an unknown variable)"
-else
-    fail "the daemon would see BIRDNET_CLASSIFIER='$(denv BIRDNET_CLASSIFIER)'"
-fi
+[ -z "$(denv BIRDNET_CLASSIFIER)" ] && [ "${rc}" -eq 0 ] \
+    && pass "BIRDNET_CLASSIFIER is removed before the daemon starts (it would be reported as an unknown variable)" \
+    || fail "the daemon would see BIRDNET_CLASSIFIER='$(denv BIRDNET_CLASSIFIER)'"
+! grep -q 'STUB-SAW-BIRDNET_CLASSIFIER' "${WORK}/stub.log" && [ -s "${WORK}/stub.log" ] \
+    && pass "and the binary's installs never see it" || fail "an --install-model run was handed BIRDNET_CLASSIFIER"
 
-if [ -s "${WORK}/stub.log" ] && ! grep -q 'STUB-SAW-BIRDNET_CLASSIFIER' "${WORK}/stub.log"; then
-    pass "the binary's installs never see BIRDNET_CLASSIFIER (it would report it as an unknown variable)"
+echo "=== 6. a model of the operator's own keeps the V3.0 defaults it always had ==="
+vol="${WORK}/own"
+run_entrypoint "${vol}" BIRDNET_MODEL=/data/mine/my-own.onnx
+if [ "$(denv BIRDNET_MODEL)" = "/data/mine/my-own.onnx" ] && [ "$(asked)" = "birdnet-v3-geomodel " ] \
+    && [ "$(denv BIRDNET_METADATA_MODEL)" = "${vol}/${GEO_MODEL}" ]; then
+    pass "their model is untouched and not installed over; the geomodel defaults as before"
 else
-    fail "an --install-model run was handed BIRDNET_CLASSIFIER"
+    fail "own-model handling: model '$(denv BIRDNET_MODEL)', calls '$(asked)', filter '$(denv BIRDNET_METADATA_MODEL)'"
 fi
+vol="${WORK}/own-v24"
+run_entrypoint "${vol}" BIRDNET_MODEL="${vol}/${V24_MODEL}"
+grep 'Classifier:' "${WORK}/e2e.out" | grep -q 'BIRDNET_MODEL is the V2.4 file' \
+    && pass "BIRDNET_MODEL naming the V2.4 file is V2.4" || fail "selected: $(grep 'Classifier:' "${WORK}/e2e.out")"
 
-vol="${WORK}/e2e-bad"
-run_entrypoint "${vol}" BIRDNET_CLASSIFIER=nonsense; rc=$?
-if [ "${rc}" -ne 0 ] && ! grep -q 'DAEMON-ARGS' "${WORK}/e2e.out" && grep -q 'birdnet-v24' "${WORK}/e2e.out" && [ ! -s "${WORK}/stub.log" ]; then
-    pass "an unknown value stops the container before the daemon, naming the valid ones"
-else
-    fail "exit ${rc}; the daemon $(grep -q DAEMON-ARGS "${WORK}/e2e.out" && echo started || echo did not start)"
-fi
+echo "=== 7. an operator-set BIRDNET_METADATA_MODEL is theirs ==="
+vol="${WORK}/own-filter"
+run_entrypoint "${vol}" BIRDNET_METADATA_MODEL=/data/mine/filter.onnx
+[ "$(denv BIRDNET_METADATA_MODEL)" = "/data/mine/filter.onnx" ] && [ "$(asked)" = "birdnet-v24 " ] \
+    && pass "the range filter was not installed over it" || fail "filter '$(denv BIRDNET_METADATA_MODEL)', calls '$(asked)'"
 
-# OOB-20 (decision 7 of 2026-11-25): this used to stop the container, which
-# Compose restarted into the same failure with no dashboard to say why. Now the
-# install is retried, and then the container starts anyway and says loudly that
-# nothing is being identified.
-vol="${WORK}/e2e-install-fails"
-run_entrypoint "${vol}" STUB_FAIL=birdnet-v24 BIRDNET_MODEL_RETRY_WAITS="0 0"; rc=$?
-if [ "${rc}" -eq 0 ] && grep -q 'DAEMON-ARGS' "${WORK}/e2e.out"; then
-    pass "a V2.4 that cannot be installed does not stop the container: the daemon (and the dashboard) start"
-else
-    fail "exit ${rc}; the daemon $(grep -q DAEMON-ARGS "${WORK}/e2e.out" && echo started || echo did not start)"
-    sed 's/^/        /' "${WORK}/e2e.out" | tail -6
-fi
-tries="$(grep -c '^STUB-INSTALL: birdnet-v24 ' "${WORK}/stub.log")"
-[ "${tries}" -eq 3 ] && pass "after three attempts" || fail "${tries} attempts, not 3"
-if grep -q 'NOT DETECTING BIRDS' "${WORK}/e2e.out" && grep -q 'BIRDNET_LOCAL_MODEL' "${WORK}/e2e.out" \
-    && grep -q 'Starting WITHOUT a classifier' "${WORK}/e2e.out" && grep -q 'BIRDNET_CLASSIFIER=birdnet-v3' "${WORK}/e2e.out"; then
-    pass "the log says the station is not detecting, how to install the model, and offers birdnet-v3"
-else
-    fail "the log does not say it: $(tail -8 "${WORK}/e2e.out" | tr '\n' '|')"
-fi
-if [ -z "$(denv BIRDNET_MODEL_RETRY_WAITS)" ] && ! grep -q 'DAEMON-ENV: BIRDNET_MODEL_RETRY_WAITS' "${WORK}/e2e.out"; then
-    pass "the daemon is not handed BIRDNET_MODEL_RETRY_WAITS (it would report it as unknown)"
-else
-    fail "the daemon would see BIRDNET_MODEL_RETRY_WAITS"
-fi
-# Counterpart: a success is quiet.
-vol="${WORK}/e2e-install-works"
-run_entrypoint "${vol}"; rc=$?
-if [ "${rc}" -eq 0 ] && ! grep -q 'NOT DETECTING' "${WORK}/e2e.out" && [ "$(grep -c '^STUB-INSTALL: birdnet-v24 ' "${WORK}/stub.log")" -eq 1 ]; then
-    pass "counterpart: an install that works is one attempt and no warning"
-else
-    fail "counterpart: exit ${rc}; $(grep -c 'NOT DETECTING' "${WORK}/e2e.out") warning(s)"
-fi
+echo "=== 8. BIRDNET_METADATA_LABELS beside the range filter is flagged, not silently paired ==="
+vol="${WORK}/labels-beside-range"
+run_entrypoint "${vol}" BIRDNET_METADATA_LABELS=/data/mine/geo-labels.txt
+grep -q 'WARNING: BIRDNET_METADATA_LABELS is set, but the V2.4 range filter' "${WORK}/e2e.out" \
+    && pass "a warning says the V2.4 range filter needs no labels file" || fail "no warning for a label file set beside the V2.4 range filter"
 
-# A local model file: handed to the binary's own check, and refused when wrong.
-vol="${WORK}/e2e-local"
-printf 'the pinned model' >"${WORK}/local.onnx"
+echo "=== 9. BIRDNET_SKIP_MODEL_DOWNLOAD=1 installs nothing and still says which classifier ==="
+vol="${WORK}/skip"
+run_entrypoint "${vol}" BIRDNET_SKIP_MODEL_DOWNLOAD=1
+[ ! -s "${WORK}/stub.log" ] && [ "$(denv BIRDNET_MODEL)" = "${vol}/${V24_MODEL}" ] && [ -z "$(denv BIRDNET_METADATA_MODEL)" ] && [ "$(classifier_lines)" = 1 ] \
+    && pass "no install, the V2.4 paths are set, no filter is claimed, one Classifier line" \
+    || fail "skip handling: calls '$(asked)' model '$(denv BIRDNET_MODEL)' filter '$(denv BIRDNET_METADATA_MODEL)'"
+vol="${WORK}/skip-old-v3"
+seed "${vol}" "${OLD_V3_MODEL}:${V3_MODEL}"
+run_entrypoint "${vol}" BIRDNET_SKIP_MODEL_DOWNLOAD=1
+grep 'Classifier:' "${WORK}/e2e.out" | grep -q 'keeps running it' && [ ! -s "${WORK}/stub.log" ] \
+    && pass "a volume holding the old V3.0 model is still recognised as V3.0" || fail "$(grep 'Classifier:' "${WORK}/e2e.out")"
+
+echo "=== 10. the filter failing leaves a working container without it ==="
+vol="${WORK}/range-fails"
+run_entrypoint "${vol}" STUB_FAIL=birdnet-v24-range-v2; rc=$?
+[ "${rc}" -eq 0 ] && started && [ -z "$(denv BIRDNET_METADATA_MODEL)" ] && [ "$(denv BIRDNET_MODEL)" = "${vol}/${V24_MODEL}" ] \
+    && grep -q 'species occurrence filtering is OFF' "${WORK}/e2e.out" \
+    && pass "the classifier is configured, no filter is claimed, and the log says filtering is off" \
+    || fail "exit ${rc}; filter '$(denv BIRDNET_METADATA_MODEL)'"
+vol="${WORK}/geo-fails"
+run_entrypoint "${vol}" BIRDNET_CLASSIFIER=birdnet-v3 STUB_FAIL=birdnet-v3-geomodel
+[ -z "$(denv BIRDNET_METADATA_MODEL)" ] && [ -z "$(denv BIRDNET_METADATA_LABELS)" ] && grep -q 'species occurrence filtering is OFF' "${WORK}/e2e.out" \
+    && pass "a geomodel that cannot be installed: neither half is configured" || fail "filter '$(denv BIRDNET_METADATA_MODEL)' labels '$(denv BIRDNET_METADATA_LABELS)'"
+
+echo "=== 11. a classifier that cannot be installed: the container starts anyway, and says so ==="
+for id in birdnet-v24 birdnet-v3; do
+    vol="${WORK}/fails-${id}"
+    run_entrypoint "${vol}" BIRDNET_CLASSIFIER="${id}" STUB_FAIL="${id}" BIRDNET_MODEL_RETRY_WAITS="0 0"; rc=$?
+    if [ "${rc}" -eq 0 ] && started && grep -q 'NOT DETECTING BIRDS' "${WORK}/e2e.out" \
+        && grep -q 'BIRDNET_LOCAL_MODEL' "${WORK}/e2e.out" && grep -q 'Starting WITHOUT a classifier' "${WORK}/e2e.out"; then
+        pass "${id}: the daemon (and the dashboard) start, and the log says nothing is being identified and how to fix it"
+    else
+        fail "${id}: exit ${rc}; $(tail -6 "${WORK}/e2e.out" | tr '\n' '|')"
+    fi
+    [ "$(grep -c "^STUB-INSTALL: ${id} " "${WORK}/stub.log")" = 1 ] && grep -qx "STUB-WAITS: ${id} 0 0" "${WORK}/stub.log" \
+        && pass "${id}: asked once, with the retry schedule, which the binary carries out" \
+        || fail "${id}: $(tr '\n' ';' <"${WORK}/stub.log")"
+done
+vol="${WORK}/default-waits"
+run_entrypoint "${vol}"
+grep -qx 'STUB-WAITS: birdnet-v24 <unset>' "${WORK}/stub.log" \
+    && pass "unset, the schedule is the binary's own default (30 90)" || fail "$(grep WAITS "${WORK}/stub.log")"
+! grep -q 'NOT DETECTING' "${WORK}/e2e.out" && pass "counterpart: an install that works gives no warning" || fail "a working install warned"
+
+echo "=== 12. a local model file is handed to the binary's own check ==="
+vol="${WORK}/local"
+echo "pinned ${V24_MODEL}" >"${WORK}/local.onnx"
 run_entrypoint "${vol}" BIRDNET_LOCAL_MODEL="${WORK}/local.onnx"; rc=$?
 if [ "${rc}" -eq 0 ] && grep -qx "STUB-INSTALL: birdnet-v24 (dir=${vol}) from=${WORK}/local.onnx" "${WORK}/stub.log" \
-    && [ -s "${vol}/${V24_MODEL}" ] && ! grep -q 'DAEMON-ENV: BIRDNET_LOCAL_MODEL' "${WORK}/e2e.out"; then
-    pass "BIRDNET_LOCAL_MODEL is installed through the binary's check (--from-file), and not passed to the daemon"
+    && [ -s "${vol}/${V24_MODEL}" ] && [ -z "$(denv BIRDNET_LOCAL_MODEL)" ] && ! grep -q 'STUB-SAW-BIRDNET_LOCAL_MODEL' "${WORK}/stub.log"; then
+    pass "BIRDNET_LOCAL_MODEL is installed through --from-file, and passed to neither the binary's environment nor the daemon"
 else
     fail "BIRDNET_LOCAL_MODEL: exit ${rc}; calls: $(tr '\n' ';' <"${WORK}/stub.log")"
 fi
-vol="${WORK}/e2e-local-wrong"
-printf 'something else' >"${WORK}/wrong.onnx"
+vol="${WORK}/local-wrong"
+echo "something else" >"${WORK}/wrong.onnx"
 run_entrypoint "${vol}" BIRDNET_LOCAL_MODEL="${WORK}/wrong.onnx"; rc=$?
-if [ "${rc}" -eq 0 ] && [ ! -e "${vol}/${V24_MODEL}" ] && [ "$(grep -c '^STUB-INSTALL: birdnet-v24 ' "${WORK}/stub.log")" -eq 1 ] \
-    && grep -q 'was refused' "${WORK}/e2e.out" && grep -q 'DAEMON-ARGS' "${WORK}/e2e.out"; then
-    pass "a local file that does not match is refused once, nothing is installed, and the container still starts"
-else
-    fail "a wrong BIRDNET_LOCAL_MODEL: exit ${rc}; model $([ -e "${vol}/${V24_MODEL}" ] && echo present || echo absent)"
-fi
+[ "${rc}" -eq 0 ] && [ ! -e "${vol}/${V24_MODEL}" ] && grep -q 'was refused' "${WORK}/e2e.out" && started \
+    && pass "a local file that does not match is refused, nothing is installed, and the container still starts" \
+    || fail "a wrong BIRDNET_LOCAL_MODEL: exit ${rc}"
 
-vol="${WORK}/e2e-range-fails"
-run_entrypoint "${vol}" STUB_FAIL=birdnet-v24-range-v2; rc=$?
-if [ "${rc}" -eq 0 ] && [ -z "$(denv BIRDNET_METADATA_MODEL)" ] && [ "$(denv BIRDNET_MODEL)" = "${vol}/${V24_MODEL}" ] \
-    && grep -q 'species occurrence filtering is OFF' "${WORK}/e2e.out"; then
-    pass "a range filter that cannot be installed leaves a running container with filtering off, said so"
-else
-    fail "exit ${rc}; filter '$(denv BIRDNET_METADATA_MODEL)'"
-fi
+echo "=== 13. the old download mirrors are reported, not silently ignored ==="
+vol="${WORK}/old-mirror"
+run_entrypoint "${vol}" BIRDNET_MODEL_BASE=https://mirror.example/models
+grep -q 'BIRDNET_MODEL_BASE is no longer read' "${WORK}/e2e.out" && grep -q 'BIRDNET_MODEL_MIRROR' "${WORK}/e2e.out" \
+    && [ -z "$(denv BIRDNET_MODEL_BASE)" ] && pass "a warning names the variable that replaced it, and the daemon is not handed it" \
+    || fail "no warning for BIRDNET_MODEL_BASE"
 
 echo
 if [ "${FAILED}" -ne 0 ]; then

@@ -43,7 +43,10 @@ use crate::helpers::resolve;
 /// CLI default, the config value (if present) wins; otherwise the CLI
 /// value (the operator's override) wins.
 #[must_use]
-#[allow(clippy::float_cmp)] // see docs above — `==` is the contract here.
+#[allow(
+    clippy::float_cmp,
+    reason = "exact equality with the flag's default is the contract: see the docs above"
+)]
 pub fn resolve_f32_with_default(
     cli_value: f32,
     cli_default: f32,
@@ -317,7 +320,11 @@ pub(super) fn resolve_dynamic_threshold(
         valid_hours: number("BIRDNET_DYNAMIC_THRESHOLD_HOURS")
             .filter(|v| *v >= 1.0 && *v <= 8760.0)
             .map_or(defaults.valid_hours, |v| {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_sign_loss,
+                    reason = "filtered to 1..=8760 just above"
+                )]
                 {
                     v as u32
                 }

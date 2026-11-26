@@ -80,9 +80,8 @@ SERVICE_WAS_RUNNING=0
 #
 # Two are supported. `--classifier` (or BIRDNET_CLASSIFIER) picks one for a new
 # install; select_classifier in 52-classifier.sh copies the chosen one's names
-# (and, for V3.0, its pins) into the unprefixed MODEL_FILE / LABELS_FILE /
-# MODEL_SHA256 / LABELS_SHA256 / MODEL_RELEASE_TAG that the rest of the
-# installer reads.
+# into the unprefixed CLASSIFIER / MODEL_FILE / LABELS_FILE / FILTER_ID that the
+# rest of the installer reads.
 #
 #   birdnet-v24  BirdNET V2.4 + its range (occurrence) filter v2. THE DEFAULT.
 #                The network BirdNET-Pi and birdnet-go run, so a station that
@@ -96,9 +95,22 @@ SERVICE_WAS_RUNNING=0
 # A classifier and its occurrence filter are a pair and are never mixed: the
 # V2.4 range filter is indexed like the V2.4 labels (by position) and means
 # nothing to another network; the geomodel is matched by name through its own
-# label file. The V3.0 pins below are also in the Rust catalogue and in the
-# container's entrypoint; installer/test/model-pins-match-catalogue.sh fails
-# when they disagree.
+# label file.
+#
+# Every model file is installed by the binary, not by this script (MDL-09):
+# `birdnet-behavior --install-model <id>` for each of the four ids below. The
+# digests, the sizes, the origins (this project's release first, then the
+# publisher's), the retries, the resume and the timeouts all live in
+# crates/birdnet-integrations/src/model_catalog.rs, and the binary verifies
+# every file against them and renames it into place only when it matches.
+# Nothing about the bytes is pinned here — no digest, no URL, no size — so there
+# is no second copy to go stale. What IS here is the names the binary gives the
+# files, so the config can point at them, and the names this installer used to
+# give the V3.0 files itself, so an existing station's config can be moved onto
+# the new names (the binary adopts a verified file under an old name in place,
+# without downloading it again). installer/test/model-pins-match-catalogue.sh
+# holds every name to the catalogue, and fails if a digest or a URL of any
+# catalogue file appears in this file or in the container's entrypoint.
 # ---------------------------------------------------------------------------
 CLASSIFIER_V24="birdnet-v24"
 CLASSIFIER_V3="birdnet-v3"
@@ -109,39 +121,41 @@ DEFAULT_CLASSIFIER="${CLASSIFIER_V24}"
 # is already installed, into CLASSIFIER.
 CLASSIFIER_REQUEST="${BIRDNET_CLASSIFIER:-}"
 
-# ---------------------------------------------------------------------------
-# BirdNET V2.4 (the default). FP32 ONNX (~54 MB) + labels (~0.3 MB) + range
-# filter v2 (~30 MB), arch-independent.
-#
-# Installed by the binary, not by this script: `birdnet-behavior --install-model
-# birdnet-v24` and `... birdnet-v24-range-v2`. Nothing about those files is
-# pinned here — no digest, no URL, no size. The digests, the origins and the
-# size check live in crates/birdnet-integrations/src/model_catalog.rs, and the
-# binary verifies each file against them and renames it into place only when it
-# matches. That is deliberate and it is not only tidiness: the V2.4 labels are a
-# file the binary itself carries (BirdNET-Pi's English names on V2.4's class
-# order — the file birdnet-go publishes names 460 of 6 522 classes differently,
-# which would split a species in two the day a BirdNET-Pi history is imported),
-# so there is nothing for this script to download, and a second copy of the
-# other two pins would be a second place for them to go stale.
-#
-# What IS here is the names the binary gives the files, so the config can point
-# at them. installer/test/model-pins-match-catalogue.sh holds them to the
-# catalogue's ids, and fails if a digest or a URL for V2.4 ever appears in this
-# file or in the container's entrypoint.
-# ---------------------------------------------------------------------------
+# BirdNET V2.4 (the default): FP32 ONNX (~54 MB), labels the binary carries
+# (BirdNET-Pi's English names on V2.4's class order — the file birdnet-go
+# publishes names 460 of 6 522 classes differently, which would split a species
+# in two the day a BirdNET-Pi history is imported), and the range filter v2
+# (~30 MB).
 V24_MODEL_ID="birdnet-v24"
 V24_RANGE_ID="birdnet-v24-range-v2"
 V24_MODEL_FILE="birdnet-v24.onnx"
 V24_LABELS_FILE="birdnet-v24_labels.txt"
 V24_RANGE_FILE="birdnet-v24-range-v2.onnx"
 
+# BirdNET+ V3.0 preview (opt-in; what every install before V2.4 became the
+# default runs): FP32 ONNX (~541 MB) + labels, and the BirdNET geomodel V3.0.2
+# (~14 MB) + its own labels, which score a different species list (12 012
+# against 11 560) and are matched to the classifier's by name.
+V3_MODEL_ID="birdnet-v3"
+V3_GEOMODEL_ID="birdnet-v3-geomodel"
+V3_MODEL_FILE="birdnet-v3.onnx"
+V3_LABELS_FILE="birdnet-v3_labels.csv"
+GEOMODEL_FILE="birdnet-v3-geomodel.onnx"
+GEOMODEL_LABELS_FILE="birdnet-v3-geomodel_labels.txt"
+# The names this installer gave those four files before the binary installed
+# them (the publishers' own names). A station's config may name them; the
+# update moves it onto the names above once the binary has adopted the files.
+V3_LEGACY_MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
+V3_LEGACY_LABELS_FILE="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
+GEOMODEL_LEGACY_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx"
+GEOMODEL_LEGACY_LABELS_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"
+
 # ---------------------------------------------------------------------------
 # When the classifier cannot be installed (OOB-20; decision 7 of 2026-11-25).
 #
 # A failed classifier download used to be `fatal` before the config and the
-# service existed, leaving a binary and nothing else. Now the fetch is retried
-# a bounded number of times, and if it still fails the install FINISHES — the
+# service existed, leaving a binary and nothing else. Now the binary retries a
+# bounded number of times, and if it still fails the install FINISHES — the
 # config, the unit, the dashboard — and says loudly, last thing on the screen,
 # that the station is not detecting and how to install the model. The run then
 # exits with EXIT_NO_CLASSIFIER, so a script can tell "installed, not
@@ -149,16 +163,17 @@ V24_RANGE_FILE="birdnet-v24-range-v2.onnx"
 # status a failing command gives under `set -e`). 75 is sysexits' EX_TEMPFAIL:
 # "a temporary failure; try again later", which is exactly the remedy.
 #
-#   BIRDNET_MODEL_RETRY_WAITS  seconds to wait before each retry, space
-#                              separated: "30 90" is three attempts over two
-#                              minutes. "" is one attempt. Tests set "0 0".
+#   BIRDNET_MODEL_RETRY_WAITS  seconds to wait before each further round of a
+#                              model's origins, space separated: "30 90" is
+#                              three rounds over two minutes. "" is one round.
+#                              Read by the binary, which does the retrying for
+#                              every model (each round resumes what the last
+#                              one received); tests set "0 0".
 #   BIRDNET_LOCAL_MODEL        (or --local-model PATH) install the classifier
 #                              from a file already on this machine instead of
-#                              downloading it. It is checked against the same
-#                              pins as a download (V2.4: the sha256 AND size the
-#                              binary carries; V3.0: the sha256 below) and a
-#                              file that does not match is refused, never
-#                              installed. For an offline install.
+#                              downloading it. The binary checks it against the
+#                              same sha256 and size as a download and refuses a
+#                              file that does not match. For an offline install.
 # BIRDNET_SKIP_MODEL=1 is not a failure: the operator asked for it, and it
 # still exits 0.
 # ---------------------------------------------------------------------------
@@ -170,38 +185,6 @@ LOCAL_MODEL="${BIRDNET_LOCAL_MODEL:-}"
 CLASSIFIER_MISSING=0
 CLASSIFIER_MISSING_WHY=""
 
-# ---------------------------------------------------------------------------
-# BirdNET+ V3.0 model files (opt-in: --classifier birdnet-v3). FP32 ONNX
-# (~541 MB), arch-independent and working on every platform. This is the
-# successor to BirdNET V2.4, the network BirdNET-Pi and birdnet-go run, not the
-# same model: its detections differ by design. See docs/book/guides/parity.md.
-#
-# Primary origin is a stable, arch-independent GitHub release shared by all app
-# releases (uploaded once, never re-pushed per patch), so a fresh install pulls
-# the binary AND the model from the same host (GitHub) and is offline-capable
-# after that single fetch. Zenodo is the upstream source and the fallback when
-# the GitHub asset is absent (older app releases) or unreachable.
-#
-# Both files are verified against the pinned sha256 below regardless of which
-# origin served them — these hashes are the integrity root of trust (they live
-# in version-controlled, provenance-attested source), so a corrupted or tampered
-# download from either host is rejected. The same hashes are published as the
-# `SHA256SUMS` asset of the models release; publish-model.yml cross-checks the
-# Zenodo bytes against these values before it uploads, so the two never drift.
-# ---------------------------------------------------------------------------
-V3_MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
-V3_LABELS_FILE="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
-V3_MODEL_SHA256="2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743"
-V3_LABELS_SHA256="8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"
-
-# Primary origin: the stable GitHub models release (one per model version).
-V3_MODEL_RELEASE_TAG="models-v3.0-preview3"
-
-# Fallback origin: Zenodo. The API /content endpoint handles the + in the
-# filenames correctly and needs no login.
-V3_ZENODO_RECORD="18247420"
-ZENODO_API="https://zenodo.org/api/records/${V3_ZENODO_RECORD}/files"
-
 # What the rest of the installer reads: the SELECTED classifier's files. Empty
 # until select_classifier runs (52-classifier.sh runs it with the default as
 # soon as it is loaded, and main re-runs it once it knows better).
@@ -209,54 +192,10 @@ CLASSIFIER=""
 CLASSIFIER_NAME=""
 MODEL_FILE=""
 LABELS_FILE=""
-MODEL_SHA256=""
-LABELS_SHA256=""
-MODEL_RELEASE_TAG=""
-MODEL_GH_BASE=""
+FILTER_ID=""
 MODEL_SIZE_HINT=""
 # One line the final summary prints under "Classifier:", set by resolve_classifier.
 CLASSIFIER_SUMMARY=""
-
-# ---------------------------------------------------------------------------
-# BirdNET Geomodel v3.0.2 — the species occurrence ("range") filter.
-#
-# Separate from the classifier above, and versioned separately: the classifier
-# says *what* it heard, the geomodel says which species plausibly occur at this
-# latitude/longitude in this week of the year. Without it the station keeps
-# every one of the classifier's ~11 560 species as a candidate wherever it is,
-# which is how a garden in Berlin reports birds that have never left Peru.
-#
-# The two do NOT score the same species list — the geomodel covers 12 012
-# species across birds, mammals, insects, amphibians and reptiles — so its own
-# label file ships beside it and is what maps one list onto the other. Both are
-# required; the station refuses a model it cannot align rather than reading one
-# list's index into the other.
-#
-# FP32 rather than FP16: both are genuine upstream artifacts and agree to
-# within one species in ~300 at the default threshold, but FP32 loads about
-# twice as fast (no FP16→FP32 cast nodes for the CPU execution provider) and
-# upstream marks it the recommended variant. 14 MB against the classifier's
-# 541 MB is not a size worth optimising.
-#
-# Origins mirror the classifier's: our own models release first (same host as
-# the binary), then the upstream birdnet-team release. Both are verified
-# against the sha256 pinned here before the bytes are accepted.
-#
-# Licence: the geomodel weights are CC BY-SA 4.0 (Stefan Kahl, K. Lisa Yang
-# Center for Conservation Bioacoustics) with prohibited uses covering poaching
-# and military applications — see MODEL_LICENSE.txt in the upstream release.
-# Redistribution is permitted with attribution; that is what the mirror does.
-GEOMODEL_VERSION="v3.0.2"
-GEOMODEL_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx"
-GEOMODEL_LABELS_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"
-GEOMODEL_SHA256="b151f680a47de5371f39b3df129aea5946ac6baa039582274f833b42eaf992ea"
-GEOMODEL_LABELS_SHA256="c15818db07e55978d909a9bcd916cd0615b0183f789227d9516059151787c784"
-
-# Primary origin: our models release (the same one the V3.0 classifier comes
-# from, so a fresh install still contacts a single host).
-GEOMODEL_GH_BASE="https://github.com/${REPO}/releases/download/${V3_MODEL_RELEASE_TAG}"
-# Fallback origin: the upstream release the mirror is taken from.
-GEOMODEL_UPSTREAM_BASE="https://github.com/birdnet-team/geomodel/releases/download/${GEOMODEL_VERSION}"
 
 # Colour codes (used only when stdout is a terminal)
 if [ -t 1 ]; then

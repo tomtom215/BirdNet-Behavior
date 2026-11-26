@@ -75,6 +75,10 @@ check_disk_space() {
     if [ -f "${MODEL_DIR}/${MODEL_FILE}" ]; then
         return 0
     fi
+    # An earlier installer's copy is adopted in place, which costs no space.
+    if [ "${CLASSIFIER:-}" = "${CLASSIFIER_V3}" ] && [ -f "${MODEL_DIR}/${V3_LEGACY_MODEL_FILE}" ]; then
+        return 0
+    fi
     local free_mb
     free_mb="$(free_mb_for_path "${DATA_DIR}")"
     if [ -z "${free_mb}" ]; then

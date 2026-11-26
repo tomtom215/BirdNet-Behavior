@@ -138,41 +138,46 @@ const BOUNDARIES: &[&str] = &[
 /// `(async fn, callee)` pairs allowed to block, each with the reason.
 ///
 /// Startup only: these run once, in order, before the listener binds, and
-/// nothing they could delay is serving a reader yet. A call added to `serve`
-/// that is not on this list still fails.
+/// nothing they could delay is serving a reader yet.
 const EXEMPT: &[(&str, &str, &str)] = &[
-    ("src/app.rs", "serve", "record_boot"),
-    ("src/app.rs", "serve", "bootstrap_admin_password"),
-    ("src/app.rs", "serve", "purge_legacy_credential_settings"),
-    ("src/app.rs", "serve", "seed_db_settings_from_config"),
-    ("src/app.rs", "serve", "overlay_db_settings"),
-    ("src/app.rs", "serve", "create_email_notifier"),
-    ("src/app.rs", "serve", "start_disk_manager"),
-    ("src/app.rs", "serve", "start_capture_manager"),
-    ("src/app.rs", "serve", "start_detection_daemon"),
-    ("src/app.rs", "serve", "admin_password_configured"),
-    // The same, for the filesystem and for the rest of the start. `serve` reads
-    // the configuration, opens, checks and recovers the database, writes the
-    // last-good copy and loads the certificate before the listener binds, and
+    // `serve` is the start-up in named steps (MDL-19). Each synchronous step
+    // below runs once, in order, from `serve`, before the listener binds:
+    // reading and choosing the configuration, opening, checking and recovering
+    // the database, the HTTPS plan and the session secret, the state over the
+    // database, the background threads, the last-good copy, the detector (which
+    // loads the classifiers), the admin-password warning and the certificate.
+    // The scan follows calls through a sync helper, so these name the step;
+    // the async steps beside them name the calls themselves. A call added to an
+    // async start-up step that is not on this list still fails, and so does a
+    // new step.
+    ("src/app.rs", "serve", "choose_configuration"),
+    ("src/app.rs", "serve", "prepare_database"),
+    ("src/app.rs", "serve", "plan_https"),
+    ("src/app.rs", "serve", "build_state"),
+    ("src/app.rs", "serve", "start_background"),
+    ("src/app.rs", "serve", "keep_last_good"),
+    ("src/app.rs", "serve", "start_detector"),
+    ("src/app.rs", "serve", "announce_access"),
+    ("src/app.rs", "serve", "prepare_certificate"),
+    ("src/app.rs", "settle_settings", "record_boot"),
+    ("src/app.rs", "settle_settings", "bootstrap_admin_password"),
+    (
+        "src/app.rs",
+        "settle_settings",
+        "purge_legacy_credential_settings",
+    ),
+    (
+        "src/app.rs",
+        "settle_settings",
+        "seed_db_settings_from_config",
+    ),
+    ("src/app.rs", "settle_settings", "overlay_db_settings"),
+    ("src/app.rs", "build_integrations", "create_apprise_client"),
+    ("src/app.rs", "build_integrations", "create_email_notifier"),
+    ("src/app.rs", "build_integrations", "station_url"),
     // `main` runs the one-shot command-line actions (`--doctor`,
-    // `--apply-config`, …) the same way: once, in order, with nothing yet waiting
-    // on a worker. A call added to either that is not on this list still fails.
-    ("src/app.rs", "serve", "choose"),
-    ("src/app.rs", "serve", "ensure_db_dir"),
-    ("src/app.rs", "serve", "exists"),
-    ("src/app.rs", "serve", "check_and_recover"),
-    ("src/app.rs", "serve", "quarantine_corrupt_database"),
-    ("src/app.rs", "serve", "ensure_incremental_vacuum"),
-    ("src/app.rs", "serve", "install_persisted_secret"),
-    ("src/app.rs", "serve", "build_state_with_analytics"),
-    ("src/app.rs", "serve", "hooks"),
-    ("src/app.rs", "serve", "create_apprise_client"),
-    ("src/app.rs", "serve", "station_url"),
-    ("src/app.rs", "serve", "spawn_watch"),
-    ("src/app.rs", "serve", "record_last_good"),
-    ("src/app.rs", "serve", "with_db"),
-    ("src/app.rs", "serve", "maybe_install_avahi_service"),
-    ("src/app.rs", "serve", "server_config"),
+    // `--apply-config`, …) the same way: once, in order, with nothing yet
+    // waiting on a worker.
     ("src/main.rs", "main", "load_from"),
     ("src/main.rs", "main", "reload_filter_spec"),
     ("src/main.rs", "main", "run_apply_config"),

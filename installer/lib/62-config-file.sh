@@ -87,6 +87,7 @@ enable_range_filter_in_kept_config() {
 write_config() {
     if [ -f "${CONFIG_FILE}" ]; then
         warn "Config file already exists at ${CONFIG_FILE} — skipping."
+        move_config_off_legacy_names
         enable_geomodel_in_kept_config
         enable_range_filter_in_kept_config
         # Upgrade from a version that left the config world-readable: tighten it
@@ -284,7 +285,11 @@ EOF
     chown "root:${SERVICE_USER}" "${CONFIG_FILE}"
     chmod 0640 "${CONFIG_FILE}"
     success "Default config written — edit ${CONFIG_FILE} to configure your station."
-    if [ "${GEOMODEL_INSTALLED:-0}" = "1" ]; then
+    # A station restored from a backup of its data may hold the V3.0 files under
+    # the names an earlier installer gave them; the binary adopted them, and
+    # nothing names the old ones now.
+    move_config_off_legacy_names
+    if [ "${GEOMODEL_INSTALLED:-0}" = "1" ] || [ "${RANGE_FILTER_INSTALLED:-0}" = "1" ]; then
         success "Species occurrence filtering is ON (threshold SF_THRESH, default 0.03)."
     fi
 }

@@ -388,7 +388,10 @@ mod tests {
     }
 
     /// Berlin-like zone rules: CEST (+2) up to 2026-10-24, CET (+1) after.
-    #[allow(clippy::unnecessary_wraps)] // the lookup's signature, as a fn pointer
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "the lookup's signature, passed as a fn pointer"
+    )]
     fn berlin_autumn(date: &str) -> Option<i64> {
         Some(if date <= "2026-10-24" { 7200 } else { 3600 })
     }

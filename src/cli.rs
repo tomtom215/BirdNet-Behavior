@@ -73,7 +73,10 @@ impl ExplicitArgs {
 // which `--help` then prints in place of the package description.
 #[derive(Parser, Clone)]
 #[command(name = "birdnet-behavior", version, about)]
-#[allow(clippy::struct_excessive_bools)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each bool is one command-line flag; clap derives the parser from the fields"
+)]
 pub struct Cli {
     /// Which arguments the operator actually supplied — see [`ExplicitArgs`].
     ///
@@ -1259,7 +1262,10 @@ fn in_config_range(key: &str, raw: &str) -> Result<f32, String> {
         .find(|(k, _, _)| *k == key)
         .ok_or_else(|| format!("{key} has no range"))?;
     if value.is_finite() && (*lo..=*hi).contains(&value) {
-        #[allow(clippy::cast_possible_truncation)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "the value is finite and inside the key's range, which f32 holds"
+        )]
         Ok(value as f32)
     } else {
         Err(format!(

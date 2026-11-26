@@ -72,31 +72,55 @@ impl From<InferenceError> for DaemonError {
     }
 }
 
-/// Observer for the species occurrence filter's state.
+/// Where the daemon reports what became of its models (MDL-01 to MDL-16).
 ///
-/// `(active, candidates)`: whether the filter is running at all, and how many
-/// species it admits once it has run (`None` before its first evaluation).
+/// Two callbacks: one with every declared classifier's state, once, after the
+/// registry has loaded (or refused) them; and one with the occurrence filter's
+/// state, at start-up and after every file it runs on, so a run-time failure
+/// and its recovery are both seen.
+///
+/// Callbacks rather than a handle on the published state because
+/// `birdnet-core` does not depend on the web crate, the same reason
+/// [`DaemonConfig::species_lists_provider`] is shaped this way. The binary
+/// wires them to the metrics registry, which holds the station's
+/// [`crate::inference::model_state::ModelsState`] and exports it.
 #[derive(Clone)]
-pub struct SpeciesFilterObserver(std::sync::Arc<dyn Fn(bool, Option<u64>) + Send + Sync>);
+pub struct ModelStateObserver {
+    classifiers: ClassifierStatesCallback,
+    filter: std::sync::Arc<dyn Fn(&crate::inference::model_state::FilterState) + Send + Sync>,
+}
 
-impl std::fmt::Debug for SpeciesFilterObserver {
+/// A shared callback taking every declared classifier's state.
+type ClassifierStatesCallback =
+    std::sync::Arc<dyn Fn(&[crate::inference::model_state::ClassifierState]) + Send + Sync>;
+
+impl std::fmt::Debug for ModelStateObserver {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("SpeciesFilterObserver(..)")
+        f.write_str("ModelStateObserver(..)")
     }
 }
 
-impl SpeciesFilterObserver {
-    /// Wrap a closure.
-    pub fn new<F>(f: F) -> Self
+impl ModelStateObserver {
+    /// Wrap the two callbacks.
+    pub fn new<C, F>(classifiers: C, filter: F) -> Self
     where
-        F: Fn(bool, Option<u64>) + Send + Sync + 'static,
+        C: Fn(&[crate::inference::model_state::ClassifierState]) + Send + Sync + 'static,
+        F: Fn(&crate::inference::model_state::FilterState) + Send + Sync + 'static,
     {
-        Self(std::sync::Arc::new(f))
+        Self {
+            classifiers: std::sync::Arc::new(classifiers),
+            filter: std::sync::Arc::new(filter),
+        }
     }
 
-    /// Report the current state.
-    pub fn report(&self, active: bool, candidates: Option<u64>) {
-        (self.0)(active, candidates);
+    /// Report what became of every declared classifier.
+    pub fn classifiers(&self, states: &[crate::inference::model_state::ClassifierState]) {
+        (self.classifiers)(states);
+    }
+
+    /// Report the occurrence filter's state.
+    pub fn filter(&self, state: &crate::inference::model_state::FilterState) {
+        (self.filter)(state);
     }
 }
 
@@ -126,12 +150,14 @@ impl SpeciesFilterObserver {
 ///
 /// # What is and is not gated
 ///
-/// The metric and this type's contract are covered by CI-runnable tests. The
-/// two **call sites** in `run.rs` are not, because reaching them needs a loaded
-/// `BirdNetModel` and therefore the 541 MB model file — the same limit
-/// `tests/species_filter_e2e.rs` documents for its own second layer. What
-/// keeps them honest instead is that both sit in the `Ok` arm of
-/// `process_and_infer_filtered`, so "analysed" cannot drift to mean "attempted".
+/// The metric and this type's contract are covered by CI-runnable tests, and so
+/// is the **call site**: `run.rs` counts a file in one place, the `Ok` arm of
+/// `process_and_infer_filtered` inside the loop's `analyse`, which the live
+/// loop and the start-up backlog both go through, so "analysed" cannot drift
+/// to mean "attempted". `run.rs`'s own tests drive it over the tiny fixture
+/// models, and `tests/a_station_runs_on_the_models_it_can_load.rs` reads the
+/// counter from the built binary after handing it a recording (MDL-18); the
+/// 541 MB model is not needed for either.
 #[derive(Clone)]
 pub struct ThroughputObserver {
     analysed: PathCallback,
@@ -771,16 +797,14 @@ pub struct DaemonConfig {
     /// `None`, the lists in [`Self::species_filter`] are used as given and never
     /// change for the life of the daemon.
     pub species_lists_provider: Option<crate::inference::species_filter::SpeciesListsProvider>,
-    /// Called when the species occurrence filter's state changes: whether it
-    /// is actually running, and how many species it currently admits.
+    /// Called with what became of each classifier and of the occurrence
+    /// filter: see [`ModelStateObserver`].
     ///
-    /// A callback rather than a metrics handle because `birdnet-core` does not
-    /// depend on the web crate — the same reason `species_lists_provider` is
-    /// shaped this way. The binary wires it to the Prometheus registry, where
+    /// The binary wires it to the metrics registry, where
     /// `birdnet_occurrence_filter_active` is the single number that would have
     /// made an inert filter visible from a dashboard instead of from reading
-    /// the code.
-    pub on_species_filter_state: Option<SpeciesFilterObserver>,
+    /// the code, and the state gauges say why it is off.
+    pub on_model_state: Option<ModelStateObserver>,
     /// Called once for every audio file the daemon finishes analysing.
     ///
     /// See [`ThroughputObserver`] for what this answers that nothing else did:
@@ -1147,7 +1171,7 @@ mod tests {
             metadata_model_path: None,
             metadata_labels_path: None,
             species_aliases_path: None,
-            on_species_filter_state: None,
+            on_model_state: None,
             on_file_analysed: None,
             in_flight: None,
             shed: None,

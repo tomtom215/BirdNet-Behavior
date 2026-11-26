@@ -19,43 +19,37 @@
 #   * everything that touches the machine — packages, systemd, the unit file,
 #     zram, the binary swap, ownership — is a no-op, so a mistake here cannot
 #     reach the host (has_systemd is false, systemctl is a function that fails);
-#   * the network is a function that serves a fixed body per file name and
-#     writes every URL it was asked for to ${sb}/requests.log (this is only the
-#     BirdNET+ V3.0 path: BirdNET V2.4 is installed by the binary, not fetched
-#     by the installer);
 #   * the binary is a stub that does what `birdnet-behavior --install-model`
-#     does — writes the files under the names the real one gives them — and
-#     writes each id it was asked to install to the same log. The real binary is
-#     exercised separately (it needs the network); what these tests hold is what
-#     the installer does with it;
+#     does — writes the files under the names the real one gives them, adopts a
+#     file under an earlier installer's name when it is the right one, refuses a
+#     local file that is not — and writes each id it was asked to install, with
+#     the retry schedule it was handed, to ${sb}/requests.log. Every model is
+#     installed by the binary (MDL-09); the real one is exercised separately
+#     (its own tests, and a real install); what these tests hold is what the
+#     installer does with it;
+#   * the network is a function that refuses and logs anything the installer
+#     tries to fetch itself (it should fetch no model);
 #   * every path points into the sandbox.
-# Everything else — argument parsing, classifier resolution, the download and
-# verification code, write_config, the kept-config rules, the summary — is the
-# code that ships.
-#
-# The V3.0 pins are changed in place: the real sha256s are of real 540 MB
-# files, so each is replaced with the digest of a short fixed body. That is a
-# change to data the code reads, not to the code; the real pins are held
-# against the Rust catalogue by model-pins-match-catalogue.sh. (BirdNET V2.4
-# has no pins in the installer to replace.)
-#
-# The old and new names are both set, so the same harness drives a tree from
-# before the classifier choice (where MODEL_SHA256 is a top-level pin) and one
-# after it (where select_classifier copies V3_* into it). That is what lets a
-# new test be shown failing against the old code for the reason it exists, not
-# because the harness could not start.
+# Everything else — argument parsing, classifier resolution, write_config, the
+# kept-config rules, the move off the old V3.0 names, the summary — is the code
+# that ships.
 
 FLOW_REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
 # The file names are the contract: stations in the field have them in their
-# configs, and `birdnet-behavior --install-model` writes the V2.4 ones.
+# configs, and `birdnet-behavior --install-model` writes them.
 FLOW_V24_MODEL="birdnet-v24.onnx"
 FLOW_V24_LABELS="birdnet-v24_labels.txt"
 FLOW_V24_RANGE="birdnet-v24-range-v2.onnx"
-FLOW_V3_MODEL="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
-FLOW_V3_LABELS="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
-FLOW_GEO_MODEL="BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx"
-FLOW_GEO_LABELS="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"
+FLOW_V3_MODEL="birdnet-v3.onnx"
+FLOW_V3_LABELS="birdnet-v3_labels.csv"
+FLOW_GEO_MODEL="birdnet-v3-geomodel.onnx"
+FLOW_GEO_LABELS="birdnet-v3-geomodel_labels.txt"
+# The names the installer gave the V3.0 files before the binary installed them.
+FLOW_V3_LEGACY_MODEL="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
+FLOW_V3_LEGACY_LABELS="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
+FLOW_GEO_LEGACY_MODEL="BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx"
+FLOW_GEO_LEGACY_LABELS="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"
 
 # Fixed bodies. Distinct, so a file in the wrong place is visible by content.
 FLOW_BODY_V24_MODEL="fake BirdNET V2.4 classifier"
@@ -106,7 +100,9 @@ flow_models_match() { [ "$(flow_models_count "$1" "$2")" -gt 0 ]; }
 flow_config()     { printf '%s/etc/birdnet/birdnet.conf' "$1"; }
 
 # Put a verified fake file in the models directory. $2 is one of
-# v24-model v24-labels v24-range v3-model v3-labels geo-model geo-labels.
+# v24-model v24-labels v24-range v3-model v3-labels geo-model geo-labels, or
+# legacy-v3-model legacy-v3-labels legacy-geo-model legacy-geo-labels (the
+# same bodies under the names an earlier installer gave them).
 flow_seed() {
     local sb="$1" what="$2" dir
     dir="$(flow_models_dir "${sb}")"
@@ -118,26 +114,30 @@ flow_seed() {
         v3-labels)  printf '%s' "${FLOW_BODY_V3_LABELS}"  >"${dir}/${FLOW_V3_LABELS}" ;;
         geo-model)  printf '%s' "${FLOW_BODY_GEO_MODEL}"  >"${dir}/${FLOW_GEO_MODEL}" ;;
         geo-labels) printf '%s' "${FLOW_BODY_GEO_LABELS}" >"${dir}/${FLOW_GEO_LABELS}" ;;
+        legacy-v3-model)   printf '%s' "${FLOW_BODY_V3_MODEL}"   >"${dir}/${FLOW_V3_LEGACY_MODEL}" ;;
+        legacy-v3-labels)  printf '%s' "${FLOW_BODY_V3_LABELS}"  >"${dir}/${FLOW_V3_LEGACY_LABELS}" ;;
+        legacy-geo-model)  printf '%s' "${FLOW_BODY_GEO_MODEL}"  >"${dir}/${FLOW_GEO_LEGACY_MODEL}" ;;
+        legacy-geo-labels) printf '%s' "${FLOW_BODY_GEO_LABELS}" >"${dir}/${FLOW_GEO_LEGACY_LABELS}" ;;
         *) echo "flow_seed: unknown file '${what}'" >&2; return 1 ;;
     esac
 }
 
-# A stand-in for the binary: `--version`, and `--install-model ID`, which writes
-# the files the real one writes (the same names; fixed bodies) into
-# $BIRDNET_MODEL_DIR and logs the id to $FLOW_REQUESTS. Environment switches, set
-# by the caller of flow_run:
-#   FLOW_FAIL_MODEL=1   birdnet-v24 fails as if the network were down
-#   FLOW_FAIL_RANGE=1   birdnet-v24-range-v2 fails likewise
-#   FLOW_OLD_BINARY=1   every id is "unknown", as in a binary from before V2.4
-#   FLOW_FAIL_MODEL_TIMES=N  birdnet-v24 fails its first N downloads, then works
-# (and, for the installer's own V3.0 downloads, FLOW_FAIL_V3_MODEL=1 makes every
-# origin of the V3.0 model fail; see flow_serve)
-# `--from-file PATH` stands in for the real binary's check of a local file
-# against its pins: a file whose content is the fixed V2.4 body is "the pinned
-# model"; anything else is refused as a sha256 mismatch.
+# A stand-in for the binary: `--version`, and `--install-model ID`, which does
+# what the real one does with the files — writes them under the names the real
+# one gives them (fixed bodies), adopts a file an earlier installer left under
+# its old name when it has the right body (a hard link: the same file), and
+# refuses a `--from-file PATH` whose body is not the pinned one — and logs to
+# $FLOW_REQUESTS each id with the directory, the local file and the retry
+# schedule it was handed, each file it had to write ("WROTE name": what the
+# real one would have downloaded) and each it adopted ("ADOPTED path"). Environment switches, set by the caller of flow_run:
+#   FLOW_FAIL_MODEL=1     birdnet-v24 fails as if every origin were down
+#   FLOW_FAIL_RANGE=1     birdnet-v24-range-v2 fails likewise
+#   FLOW_FAIL_V3_MODEL=1  birdnet-v3 fails likewise (when not adopted)
+#   FLOW_FAIL_GEO=1       birdnet-v3-geomodel fails likewise (when not adopted)
+#   FLOW_OLD_BINARY=1     every id is "unknown", as in a binary from before V2.4
 flow_write_stub_binary() { # $1 = path
     cat >"$1" <<'STUB'
-#!/bin/sh
+#!/bin/bash
 id=""
 from=""
 next=""
@@ -160,47 +160,63 @@ if [ -n "${FLOW_REQUESTS:-}" ]; then
     else
         echo "INSTALL-MODEL ${id} dir=${dir}" >>"${FLOW_REQUESTS}"
     fi
+    echo "RETRY-WAITS ${id} ${BIRDNET_MODEL_RETRY_WAITS-<unset>}" >>"${FLOW_REQUESTS}"
 fi
 # The real binary reports every BIRDNET_* variable it does not read; the
 # installer's own settings must not reach it.
-for v in BIRDNET_CLASSIFIER BIRDNET_SKIP_MODEL BIRDNET_NONINTERACTIVE BIRDNET_LOCAL_MODEL BIRDNET_MODEL_RETRY_WAITS; do
+for v in BIRDNET_CLASSIFIER BIRDNET_SKIP_MODEL BIRDNET_NONINTERACTIVE BIRDNET_LOCAL_MODEL; do
     eval "[ -n \"\${${v}+set}\" ]" && echo "CHILD-SAW ${v}" >>"${FLOW_REQUESTS}"
 done
 if [ "${FLOW_OLD_BINARY:-0}" = 1 ]; then
-    echo "Install failed: no classifier called ${id}" >&2
+    echo "Install failed: no model called ${id}" >&2
     exit 1
 fi
+legacy=""; legacy_labels=""; labels=""; lbody=""; fail=0
 case "${id}" in
     birdnet-v24)
-        if [ -n "${from}" ]; then
-            if [ "$(cat "${from}" 2>/dev/null)" != "fake BirdNET V2.4 classifier" ]; then
-                echo "Install failed: sha256 mismatch: ${from} is not the pinned model" >&2
-                exit 1
-            fi
-        elif [ "${FLOW_FAIL_MODEL:-0}" = 1 ]; then
-            echo "Install failed: network error" >&2; exit 1
-        elif [ -n "${FLOW_FAIL_MODEL_TIMES:-}" ]; then
-            tries="$(grep -c "^INSTALL-MODEL birdnet-v24 " "${FLOW_REQUESTS}")"
-            if [ "${tries}" -le "${FLOW_FAIL_MODEL_TIMES}" ]; then echo "Install failed: network error" >&2; exit 1; fi
-        fi
-        printf '%s' "fake BirdNET V2.4 classifier" >"${dir}/birdnet-v24.onnx"
-        printf '%s' "fake BirdNET V2.4 labels" >"${dir}/birdnet-v24_labels.txt"
-        ;;
-    birdnet-v3)
-        # In the real catalogue too, under these names (the Linux installer does
-        # not use it: it downloads the V3.0 files itself).
-        printf '%s' "fake BirdNET+ V3.0 classifier" >"${dir}/birdnet-v3.onnx"
-        printf '%s' "fake BirdNET+ V3.0 labels" >"${dir}/birdnet-v3_labels.csv"
-        ;;
+        model="birdnet-v24.onnx"; body="fake BirdNET V2.4 classifier"
+        labels="birdnet-v24_labels.txt"; lbody="fake BirdNET V2.4 labels"; fail="${FLOW_FAIL_MODEL:-0}" ;;
     birdnet-v24-range-v2)
-        if [ "${FLOW_FAIL_RANGE:-0}" = 1 ]; then echo "Install failed: network error" >&2; exit 1; fi
-        printf '%s' "fake BirdNET V2.4 range filter v2" >"${dir}/birdnet-v24-range-v2.onnx"
-        ;;
+        model="birdnet-v24-range-v2.onnx"; body="fake BirdNET V2.4 range filter v2"; fail="${FLOW_FAIL_RANGE:-0}" ;;
+    birdnet-v3)
+        model="birdnet-v3.onnx"; body="fake BirdNET+ V3.0 classifier"
+        labels="birdnet-v3_labels.csv"; lbody="fake BirdNET+ V3.0 labels"
+        legacy="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"; legacy_labels="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
+        fail="${FLOW_FAIL_V3_MODEL:-0}" ;;
+    birdnet-v3-geomodel)
+        model="birdnet-v3-geomodel.onnx"; body="fake BirdNET geomodel"
+        labels="birdnet-v3-geomodel_labels.txt"; lbody="fake BirdNET geomodel labels"
+        legacy="BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx"; legacy_labels="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"
+        fail="${FLOW_FAIL_GEO:-0}" ;;
     *)
-        echo "Install failed: no classifier called ${id}" >&2
-        exit 1
-        ;;
+        echo "Install failed: no model called ${id}" >&2
+        exit 1 ;;
 esac
+# place NAME BODY LEGACY: already right; adopted from the old name; or fetched.
+place() {
+    if [ "$(cat "${dir}/$1" 2>/dev/null)" = "$2" ]; then return 0; fi
+    if [ -n "$3" ] && [ "$(cat "${dir}/$3" 2>/dev/null)" = "$2" ]; then
+        rm -f "${dir}/$1"; ln "${dir}/$3" "${dir}/$1"
+        echo "ADOPTED ${dir}/$3" >>"${FLOW_REQUESTS}"
+        return 0
+    fi
+    [ "${fail}" = 1 ] && { echo "Install failed: no origin served the verified file" >&2; return 1; }
+    echo "WROTE $1" >>"${FLOW_REQUESTS}"
+    printf '%s' "$2" >"${dir}/$1"
+}
+if [ -n "${from}" ]; then
+    if [ "$(cat "${from}" 2>/dev/null)" != "${body}" ]; then
+        echo "Install failed: sha256 mismatch: ${from} is not the pinned model" >&2
+        exit 1
+    fi
+    echo "WROTE ${model} from=${from}" >>"${FLOW_REQUESTS}"
+    printf '%s' "${body}" >"${dir}/${model}"
+else
+    place "${model}" "${body}" "${legacy}" || exit 1
+fi
+if [ -n "${labels}" ]; then
+    place "${labels}" "${lbody}" "${legacy_labels}" || exit 1
+fi
 echo "Installed and verified."
 STUB
     chmod +x "$1"
@@ -251,18 +267,6 @@ flow_run() {
             SERVICE_USER="$(id -un)"
         }
 
-        # ── pins: the digest of each fixed body, under both generations of
-        #    names (see the header) ─────────────────────────────────────────
-        # shellcheck disable=SC2034
-        {
-            V3_MODEL_SHA256="$(flow_sha "${FLOW_BODY_V3_MODEL}")"
-            V3_LABELS_SHA256="$(flow_sha "${FLOW_BODY_V3_LABELS}")"
-            MODEL_SHA256="${V3_MODEL_SHA256}"
-            LABELS_SHA256="${V3_LABELS_SHA256}"
-            GEOMODEL_SHA256="$(flow_sha "${FLOW_BODY_GEO_MODEL}")"
-            GEOMODEL_LABELS_SHA256="$(flow_sha "${FLOW_BODY_GEO_LABELS}")"
-        }
-
         # ── the machine: nothing here may reach it ─────────────────────────
         has_systemd() { return 1; }
         systemctl()   { return 1; }
@@ -300,36 +304,11 @@ flow_run() {
             command install "${args[@]}"
         }
 
-        # ── the network ────────────────────────────────────────────────────
-        flow_serve() { # URL DEST
-            local url="$1" dest="$2" name
-            echo "GET ${url}" >>"${sb}/requests.log"
-            if [ "${FLOW_FAIL_V3_MODEL:-0}" = 1 ] && [[ "${url}" == *V3.0-preview3_Global_11K_FP32.onnx* ]]; then
-                return 1
-            fi
-            name="${url%%\?*}"
-            name="${name%/content}"
-            name="${name##*/}"
-            name="${name//%2B/+}"
-            case "${name}" in
-                "${FLOW_V3_MODEL}")    printf '%s' "${FLOW_BODY_V3_MODEL}" >"${dest}" ;;
-                "${FLOW_V3_LABELS}")   printf '%s' "${FLOW_BODY_V3_LABELS}" >"${dest}" ;;
-                "${FLOW_GEO_MODEL}")   printf '%s' "${FLOW_BODY_GEO_MODEL}" >"${dest}" ;;
-                "${FLOW_GEO_LABELS}")  printf '%s' "${FLOW_BODY_GEO_LABELS}" >"${dest}" ;;
-                *)
-                    echo "UNKNOWN-URL ${url}" >>"${sb}/requests.log"
-                    return 1
-                    ;;
-            esac
-        }
-        # Waits are recorded, not slept: the retry schedule is asserted from
-        # the log, and a test never waits two minutes for it.
+        # ── the network: the installer must fetch no model itself ──────────
+        flow_refuse() { echo "GET ${1}" >>"${sb}/requests.log"; return 1; }
         sleep() { echo "SLEEP $*" >>"${sb}/requests.log"; }
-        download_large() { flow_serve "$1" "$2"; }
-        download()       { flow_serve "$1" "$2"; }
-        # The plain downloader's contract: 4 means "the origin has no such file".
-        # Nothing here is ever absent; the V3.0 installer is unchanged.
-        download_or_absent() { flow_serve "$1" "$2"; }
+        download_large() { flow_refuse "$1"; }
+        download()       { flow_refuse "$1"; }
 
         main "$@"
     ) >"${sb}/out.log" 2>&1

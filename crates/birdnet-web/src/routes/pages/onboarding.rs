@@ -229,9 +229,7 @@ async fn onboarding_page(State(state): State<AppState>, req: Request) -> Respons
                 ),
                 mic_summary: escape_html(&mic_summary(&sources)),
                 model_panel: crate::routes::admin::classifier::render_panel(
-                    &state
-                        .classifier_setup()
-                        .snapshot(state.detection_daemon_running()),
+                    &crate::routes::admin::classifier::snapshot_of(state),
                 ),
                 lang_options: crate::routes::admin::settings::render::language_options(
                     &prefill.database_lang,
@@ -1366,9 +1364,7 @@ async fn onboarding_done(State(state): State<AppState>, req: Request) -> Respons
             {
                 return not_admin_page();
             }
-            let snapshot = state
-                .classifier_setup()
-                .snapshot(state.detection_daemon_running());
+            let snapshot = crate::routes::admin::classifier::snapshot_of(state);
             let sources = state.with_read_db(AudioSourceStore::list);
             let body = render_done_page(
                 &crate::routes::admin::classifier::render_panel(&snapshot),

@@ -261,8 +261,11 @@ Drop them on a dashboard or trigger automations from them — "flash the porch l
 | `birdnet_windows_masked_total` | counter | Analysis windows a filter masked whole, labeled by `reason` (`privacy` for a voice in or next to the window, `noise` for a watched noise class): audio the station recorded and did not judge. |
 | `birdnet_capture_restarts_total` | counter | Capture processes restarted by the supervisor, labeled by `source`. |
 | `birdnet_capture_stalls_total` | counter | Capture processes found alive but producing no segments, labeled by `source`. |
-| `birdnet_occurrence_filter_active` | gauge | `1` when species occurrence filtering is running, `0` when every species the classifier knows is admitted. |
-| `birdnet_occurrence_candidates` | gauge | Species the occurrence filter currently admits. |
+| `birdnet_occurrence_filter_active` | gauge | `1` when species occurrence filtering is running, `0` when every species the classifier knows is admitted. A filter that is configured and cannot filter — no `LATITUDE`/`LONGITUDE`, its model or labels file missing or unusable — is `0`; `birdnet_occurrence_filter_state` says which. |
+| `birdnet_occurrence_candidates` | gauge | Species the occurrence filter currently admits. Absent while the filter is off or has not run yet. |
+| `birdnet_occurrence_filter_state` | gauge | The occurrence filter's state, one series per `state`, the one it is in at `1`: `active`, or off as `off_not_configured`, `off_no_coordinates`, `off_model_missing`, `off_model_unusable`, `off_labels_missing`, `off_labels_unreadable` or `off_detector_not_running`. None of them stops detection. |
+| `birdnet_detector_state` | gauge | The detection daemon's state, one series per `state`, the one it is in at `1`: `starting`, `running`, `web_only`, `not_configured` (no classifier, labels or recordings folder set), `failed` (asked to start and could not: the primary classifier would not load, or a route names a classifier that is not configured) or `stopped` (it ran and its loop has ended). |
+| `birdnet_classifier_state` | gauge | Each configured classifier's state, labeled by `classifier` and `state`, the one it is in at `1`: `judging`, `unrouted` (loaded, and no `MODEL_ROUTES` entry sends it anything) or `left_out_<why>` — `file_missing`, `will_not_load`, `does_not_fit`, `memory_unknown`, `labels_not_set`, `labels_missing`, `labels_unreadable`, `labels_wrong_length` or `detector_not_running`. A second classifier that is left out does not stop the others; the primary is the one the detector cannot start without. |
 | `birdnet_orphaned_clips` | gauge | Detections whose clip the disk no longer had, found and stamped by the last daily reconciliation pass; absent until one has run. |
 | `birdnet_analytics_mirror_failures_total` | counter | Detections the database accepted and the DuckDB analytics copy refused since process start. |
 | `birdnet_purge_ineffective` | gauge | `1` when the last disk-full purge removed recordings without lowering usage: the card is full of something the purge cannot reach, and it has stopped deleting until usage falls. |
@@ -287,18 +290,34 @@ Drop them on a dashboard or trigger automations from them — "flash the porch l
 > dashboard or alert rule that referenced the old gauge names — the bundled
 > `docs/grafana-dashboard.json` already is.
 
-`GET /api/v2/health?strict=1` is the probe to point a **pager** at. The plain
-`/api/v2/health` answers `200` whenever the database is serving, which is right
-for the container health check — Docker restarts an unhealthy container, and a
-station whose detection daemon is down is exactly the one that must stay up to
-be diagnosed. The strict form additionally returns `503` when the detection
-daemon is not running, when the data disk is critically full or `df` cannot
-read it, or when the admin-password bootstrap failed at start, so a monitor
-that should wake a human can get a red out of the same endpoint. A data volume
-that is not taking writes at all — a read-only remount, a card full to the
-byte, a mount that has gone away — is `503` on both forms. Both report
-`detection_daemon`, `detection_silence_secs` and `data_volume` in the body
-either way.
+`GET /api/v2/health?strict=1` is the probe to point a **pager** at, and the
+one the container image's health check and the bundled `docker-compose.yml`
+use. The plain `/api/v2/health` is liveness: it answers `200` whenever the
+database is serving. The strict form additionally returns `503` when the
+station is not identifying birds — the detector failed to start, stopped, or
+has no classifier configured — when the data disk is critically full or `df`
+cannot read it, when the admin-password bootstrap failed at start, when the
+detection deadman has tripped, or when a classifier fails every window, so a
+monitor that should wake a human can get a red out of the same endpoint. A
+data volume that is not taking writes at all — a read-only remount, a card full
+to the byte, a mount that has gone away — is `503` on both forms. Docker does
+not restart a container for being unhealthy; the status is what `docker ps`
+and your monitor read.
+
+Both forms report what became of the station's models in the body: `models`
+holds one state for the detector, each classifier the configuration names and
+the occurrence filter (the `state` codes are the ones the
+`birdnet_detector_state`, `birdnet_classifier_state` and
+`birdnet_occurrence_filter_state` gauges export), and `model_conditions` lists
+each one that is not what the configuration asks for, with a `sentence` that
+says what to do and `stops_detection`. A second classifier that was left out
+(its file missing or damaged, its labels wrong, too big for the memory the
+station allows) or that no `MODEL_ROUTES` entry reaches, and an occurrence
+filter that is off (no coordinates, its model or labels missing or unusable),
+are listed there and are **not** `503` under `?strict=1`: the station is still
+identifying birds with its primary classifier, and the header badge, Station
+health and the Today page say the same thing. Both forms also report
+`detection_daemon`, `detection_silence_secs` and `data_volume` either way.
 
 The freshness and queue-depth gauges are the two you want alerts on for an
 unattended station:

@@ -185,6 +185,13 @@ pub(super) fn check_occurrence_filter(cli: &Cli, config: Option<&Config>) -> Che
         );
     };
 
+    if birdnet_core::inference::model_state::occurrence_filter_turned_off(&model) {
+        return Check::pass(
+            NAME,
+            "turned off on purpose (METADATA_MODEL_PATH is `off` or `none`): every species the classifier knows stays a candidate wherever the station is",
+        );
+    }
+
     if !model.exists() {
         return Check::fail(
             NAME,
@@ -204,7 +211,7 @@ pub(super) fn check_occurrence_filter(cli: &Cli, config: Option<&Config>) -> Che
         return Check::fail(
             NAME,
             format!("metadata label file {} does not exist", labels.display()),
-            "the station refuses to start on a label file it cannot read: fix METADATA_LABELS_PATH or remove it if the model is indexed like the classifier",
+            "the detector starts with the occurrence filter off until the label file is there (MDL-02): fix METADATA_LABELS_PATH, or remove it if the model is indexed like the classifier",
         );
     }
 
@@ -1831,6 +1838,22 @@ mod occurrence_filter_gates {
         );
     }
 
+    /// A filter turned off on purpose is not a missing file: the doctor says
+    /// it is off because the owner said so. The counterpart, a path that is
+    /// not there, is `a_configured_but_missing_model_fails`.
+    #[test]
+    fn a_filter_turned_off_on_purpose_is_not_a_missing_file() {
+        for value in ["off", "OFF", "none"] {
+            let cfg = Config::parse(&format!(
+                "LATITUDE=52.5200\nLONGITUDE=13.4050\nMETADATA_MODEL_PATH={value}"
+            ))
+            .unwrap();
+            let check = check_occurrence_filter(&cli_from(&[]), Some(&cfg));
+            assert_eq!(check.status, Status::Pass, "{value}: {}", check.message);
+            assert!(check.message.contains("on purpose"), "{}", check.message);
+        }
+    }
+
     /// A model without coordinates cannot run: the model takes latitude and
     /// longitude as two of its three inputs.
     #[test]
@@ -1851,7 +1874,10 @@ mod occurrence_filter_gates {
     }
 
     /// A metadata label file that is configured but absent is the same class
-    /// of error as an absent model: the daemon refuses to start on it.
+    /// of error as an absent model: the occurrence filter cannot run. (The
+    /// daemon used to refuse to start on it; it now starts with the filter
+    /// off, MDL-02, and this stays a failure because the filter the station
+    /// was set up with is not running.)
     #[test]
     fn a_configured_but_missing_label_file_fails() {
         let dir = tempfile::tempdir().unwrap();

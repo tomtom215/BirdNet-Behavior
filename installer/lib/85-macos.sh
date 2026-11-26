@@ -25,41 +25,106 @@ mac_brew_dep() { # $1=formula  $2=why
     esac
 }
 
-# Put the classifier's files in ${MAC_DATA_DIR}/models by asking the binary to
-# install them (`--install-model`), not by downloading them here.
-#
-# Linux's installer fetches and checks the files itself; macOS does not ship
-# `sha256sum`, and the binary already carries the same sha256 pins (the Rust
-# catalogue is the source of truth the Linux installer's are tested against),
-# fetches atomically through a .part file, and refuses a size or digest it
-# cannot verify. The files land under the names the Rust installer gives them
+# Put the classifier's files, and its occurrence filter's, in
+# ${MAC_DATA_DIR}/models by asking the binary to install them (`--install-model`)
+# — the one install mechanism every installer uses (55-model.sh says what it
+# does). The files land under the names the binary gives them
 # (birdnet-v24.onnx, birdnet-v24_labels.txt, birdnet-v24-range-v2.onnx; for the
-# V3.0 preview birdnet-v3.onnx and birdnet-v3_labels.csv), which is what the
-# config below names. The V3.0 geomodel is not in that catalogue, so a macOS
-# V3.0 station has no occurrence filter until one is added by hand.
+# V3.0 preview birdnet-v3.onnx, birdnet-v3_labels.csv, birdnet-v3-geomodel.onnx
+# and birdnet-v3-geomodel_labels.txt), which is what the config below names.
 #
-# Non-fatal: a failed fetch leaves the config naming the files and prints the
-# command that fetches them, so an install on a flaky link can be finished
-# later. Returns 1 when any file could not be installed.
+# Run on every install, also over a config that is kept, so a re-run retries
+# what failed and replaces what does not verify. A failed classifier is
+# recorded (CLASSIFIER_MISSING) and said loudly at the end, and the run exits
+# EXIT_NO_CLASSIFIER, as on Linux; a failed filter only warns.
+#
+# Sets MAC_FILTER_INSTALLED=1 when the occurrence filter is in place.
+MAC_FILTER_INSTALLED=0
 macos_install_models() { # $1=binary path  $2=classifier id
-    local bin="$1" id="$2" dir="${MAC_DATA_DIR}/models" item rc=0 items
-    mkdir -p "${dir}"
-    case "${id}" in
-        birdnet-v24) items="birdnet-v24 birdnet-v24-range-v2" ;;
-        *)           items="birdnet-v3" ;;
+    local classifier="$2" filter
+    MODEL_BINARY="$1"
+    MODEL_DIR="${MAC_DATA_DIR}/models"
+    mkdir -p "${MODEL_DIR}"
+    select_classifier "${classifier}"
+    filter="${FILTER_ID}"
+    info "Installing ${CLASSIFIER_NAME} into ${MODEL_DIR} (sha256-verified)…"
+    if [ -n "${LOCAL_MODEL}" ]; then
+        install_model_with_binary "${classifier}" --from-file "${LOCAL_MODEL}" \
+            || classifier_not_installed "${LOCAL_MODEL} was refused: it is not the ${CLASSIFIER_NAME} model this release pins (the reason is above)"
+    elif ! install_model_with_binary "${classifier}"; then
+        classifier_not_installed "${CLASSIFIER_NAME} could not be downloaded and verified ($(model_attempts) attempts)"
+    fi
+    info "Installing its species-occurrence filter (${filter})…"
+    if install_model_with_binary "${filter}"; then
+        MAC_FILTER_INSTALLED=1
+    else
+        warn "The occurrence filter could not be installed; the station runs without it."
+        warn "Run this installer again to retry."
+    fi
+}
+
+# The classifier a kept macOS config runs: one of the two whose files this
+# installer manages, by the MODEL_PATH it names, or nothing (a model of the
+# operator's own, which is theirs to install).
+macos_kept_classifier() { # $1=config file
+    local models="${MAC_DATA_DIR}/models" model
+    model="$(config_value MODEL_PATH "$1")"
+    case "${model}" in
+        "${models}/${V24_MODEL_FILE}") echo "${CLASSIFIER_V24}" ;;
+        "${models}/${V3_MODEL_FILE}") echo "${CLASSIFIER_V3}" ;;
+        *) ;;
     esac
-    for item in ${items}; do
-        info "Installing ${item} into ${dir} (sha256-verified)…"
-        # Without the installer's own BIRDNET_* settings (the binary reports every
-        # one it does not read) and with an empty config (there is none yet).
-        if ! env -u BIRDNET_CLASSIFIER -u BIRDNET_NONINTERACTIVE -u BIRDNET_BINARY_TARBALL \
-            BIRDNET_MODEL_DIR="${dir}" "${bin}" --config /dev/null --install-model "${item}"; then
-            warn "Could not install ${item}. Finish later with:"
-            warn "  BIRDNET_MODEL_DIR=\"${dir}\" \"${bin}\" --install-model ${item}"
-            rc=1
-        fi
-    done
-    return "${rc}"
+}
+
+# Fill in a kept macOS config's commented-out filter lines — the ones this
+# installer wrote when the filter was not there — now that it is (MDL-14).
+macos_enable_filter_in_kept_config() { # $1=config file  $2=classifier id
+    local conf="$1" models="${MAC_DATA_DIR}/models"
+    [ "${MAC_FILTER_INSTALLED}" = 1 ] || return 0
+    if [ "$2" = "${CLASSIFIER_V24}" ]; then
+        sed -i.bak -e "s|^# METADATA_MODEL_PATH=\(${models}/${V24_RANGE_FILE}\)\{0,1\}\$|METADATA_MODEL_PATH=${models}/${V24_RANGE_FILE}|" "${conf}"
+    else
+        # A config the previous macOS installer wrote for V3.0 has the model's
+        # placeholder and no labels line at all; the geomodel is unusable
+        # without its labels, so the line is added beside the model's.
+        awk -v m="METADATA_MODEL_PATH=${models}/${GEOMODEL_FILE}" \
+            -v l="METADATA_LABELS_PATH=${models}/${GEOMODEL_LABELS_FILE}" '
+            { lines[NR] = $0 }
+            /^#? ?METADATA_LABELS_PATH=/ { has_labels = 1 }
+            END {
+                for (i = 1; i <= NR; i++) {
+                    if (lines[i] == "# METADATA_MODEL_PATH=") {
+                        print m
+                        if (!has_labels) print l
+                    } else if (lines[i] == "# METADATA_LABELS_PATH=") {
+                        print l
+                    } else {
+                        print lines[i]
+                    }
+                }
+            }' "${conf}" >"${conf}.new" && mv "${conf}.new" "${conf}"
+    fi
+    rm -f "${conf}.bak"
+    if grep -qE '^METADATA_MODEL_PATH=' "${conf}"; then
+        success "Species-occurrence filtering is configured in ${conf}."
+    fi
+}
+
+# The last thing a macOS run says when the classifier is not installed: the
+# Linux summary's words, with the macOS commands.
+macos_print_classifier_missing() { # $1=binary path
+    [ "${CLASSIFIER_MISSING}" = 1 ] || return 0
+    echo
+    loud_warn "THIS STATION IS NOT DETECTING BIRDS: its classifier is not installed." \
+              "  Why: ${CLASSIFIER_MISSING_WHY}." \
+              "  Everything else is installed. To install the classifier, once this Mac" \
+              "  can reach the internet, run this installer again (it keeps your config):" \
+              "      bash install.sh" \
+              "  or, from a copy of the model file you already have (it must match the" \
+              "  same pinned sha256 as a download, or it is refused):" \
+              "      bash install.sh --local-model /path/to/that/file" \
+              "  Then check with:  \"$1\" --doctor --config \"${MAC_DATA_DIR}/birdnet.conf\"" \
+              "  This run exits with status ${EXIT_NO_CLASSIFIER}: installed, not detecting."
 }
 
 macos_setup_config_and_agent() { # $1=binary path
@@ -74,26 +139,25 @@ macos_setup_config_and_agent() { # $1=binary path
         fi
         local mac_classifier="${CLASSIFIER_REQUEST:-${DEFAULT_CLASSIFIER}}"
         local mac_models="${MAC_DATA_DIR}/models"
-        local mac_model_path mac_labels_path mac_filter_line mac_name
+        local mac_model_path mac_labels_path mac_filter_lines mac_name
+        macos_install_models "${bin}" "${mac_classifier}"
+        mac_name="${CLASSIFIER_NAME}"
+        mac_model_path="${mac_models}/${MODEL_FILE}"
+        mac_labels_path="${mac_models}/${LABELS_FILE}"
+        # Live only when the filter is really there, so a failed fetch cannot
+        # leave a config the doctor reports as FAIL.
         if [ "${mac_classifier}" = "${CLASSIFIER_V24}" ]; then
-            mac_name="BirdNET V2.4"
-            mac_model_path="${mac_models}/${V24_MODEL_FILE}"
-            mac_labels_path="${mac_models}/${V24_LABELS_FILE}"
-            mac_filter_line="# METADATA_MODEL_PATH=${mac_models}/${V24_RANGE_FILE}"
+            mac_filter_lines="# METADATA_MODEL_PATH=${mac_models}/${V24_RANGE_FILE}"
+            [ "${MAC_FILTER_INSTALLED}" = 1 ] && mac_filter_lines="METADATA_MODEL_PATH=${mac_models}/${V24_RANGE_FILE}"
+        elif [ "${MAC_FILTER_INSTALLED}" = 1 ]; then
+            mac_filter_lines="METADATA_MODEL_PATH=${mac_models}/${GEOMODEL_FILE}"$'\n'"METADATA_LABELS_PATH=${mac_models}/${GEOMODEL_LABELS_FILE}"
         else
-            mac_name="BirdNET+ V3.0 preview"
-            mac_model_path="${mac_models}/birdnet-v3.onnx"
-            mac_labels_path="${mac_models}/birdnet-v3_labels.csv"
-            mac_filter_line="# METADATA_MODEL_PATH="
-            info "BirdNET+ V3.0 on macOS runs without species-occurrence filtering: the binary does not install the geomodel (the Linux installer does)."
+            mac_filter_lines="# METADATA_MODEL_PATH="$'\n'"# METADATA_LABELS_PATH="
         fi
-        if macos_install_models "${bin}" "${mac_classifier}"; then
-            # Live only when the file is really there, so a failed fetch cannot
-            # leave a config the doctor reports as FAIL.
-            [ "${mac_classifier}" = "${CLASSIFIER_V24}" ] && mac_filter_line="${mac_filter_line#\# }"
-            success "Classifier: ${mac_name}."
-        else
+        if [ "${CLASSIFIER_MISSING}" = 1 ]; then
             warn "The config below names the ${mac_name} files; the station detects nothing until they are installed."
+        else
+            success "Classifier: ${mac_name}."
         fi
         cat > "${MAC_DATA_DIR}/birdnet.conf" <<CONF
 # BirdNet-Behavior config (macOS). Set your coordinates and a mic device.
@@ -103,7 +167,7 @@ macos_setup_config_and_agent() { # $1=binary path
 # and the metadata model would filter this station's species list for that
 # spot. An unset location skips occurrence filtering entirely, which is honest;
 # a wrong one produces a confident species list for the wrong continent, and
-# `config_has_location` would report the station as configured.
+# \`config_has_location\` would report the station as configured.
 SITENAME=My Backyard
 # LATITUDE=51.5074
 # LONGITUDE=-0.1278
@@ -115,11 +179,19 @@ IMAGE_CACHE_DIR=${MAC_DATA_DIR}/image_cache
 MODEL_PATH=${mac_model_path}
 LABELS_PATH=${mac_labels_path}
 # Species-occurrence filtering needs LATITUDE and LONGITUDE above as well.
-${mac_filter_line}
+${mac_filter_lines}
 CONF
         success "Wrote starter config: ${MAC_DATA_DIR}/birdnet.conf"
     else
         info "Keeping existing config: ${MAC_DATA_DIR}/birdnet.conf"
+        local kept
+        kept="$(macos_kept_classifier "${MAC_DATA_DIR}/birdnet.conf")"
+        if [ -n "${kept}" ]; then
+            macos_install_models "${bin}" "${kept}"
+            macos_enable_filter_in_kept_config "${MAC_DATA_DIR}/birdnet.conf" "${kept}"
+        else
+            info "Its MODEL_PATH names a model of your own, so no model is installed or changed."
+        fi
     fi
     cat > "${MAC_PLIST}" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>

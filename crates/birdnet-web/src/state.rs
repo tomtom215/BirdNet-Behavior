@@ -1864,6 +1864,19 @@ impl AppState {
         Arc::clone(&self.inner.metrics)
     }
 
+    /// What the station did with its model files after start-up: whether the
+    /// detector is running and why not, each configured classifier's state,
+    /// and the occurrence filter's (MDL-01 to MDL-16).
+    ///
+    /// The one description every surface that speaks about the models reads,
+    /// so a page, an API answer and the metrics cannot disagree. Held in the
+    /// metrics registry, which exports the same as state-set gauges; see
+    /// [`birdnet_core::inference::model_state`] for the states and their codes.
+    #[must_use]
+    pub fn models_state(&self) -> birdnet_core::inference::model_state::ModelsState {
+        self.inner.metrics.models_state()
+    }
+
     /// The capture supervisor's shared status handle, if a supervisor is
     /// running. `None` in web-only mode and most tooling, where the Station
     /// Health page falls back to detection-derived activity.
@@ -1927,6 +1940,16 @@ impl AppState {
             under_systemd: self.inner.supervised_by_systemd,
             self_exec: self.inner.self_restart,
         }
+    }
+
+    /// Restart the station the way the restart control does, and say whether
+    /// a restart is under way: `false` when nothing here can bring the process
+    /// back ([`Self::restart_support`]). For the application's own model
+    /// repair (MDL-10), which needs the restart the browser's control makes.
+    #[must_use]
+    pub fn request_restart(&self) -> bool {
+        crate::routes::admin::system_controls::service::request_restart(self.restart_support())
+            == crate::routes::admin::system_controls::service::RestartOutcome::Signalled
     }
 
     /// Shared handle to the ingest-halt latch, for the maintenance loop to set

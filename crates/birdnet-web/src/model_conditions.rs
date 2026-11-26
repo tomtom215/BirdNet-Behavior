@@ -1,0 +1,649 @@
+//! What the station's models are doing that its owner did not set it up for:
+//! the one decision every health surface reads (MDL-03, MDL-06).
+//!
+//! # Why this exists
+//!
+//! On 2026-11-25 a real station was broken one model file at a time. A
+//! detector that did not start left the header badge green, the Health page
+//! "All systems healthy", the Today page silent and `/api/v2/health` at 200; a
+//! second classifier that was skipped was one INFO line in the journal; an
+//! occurrence filter with no coordinates was "on". Since then the start-up
+//! publishes [`ModelsState`], one state each for the detector, every
+//! configured classifier and the occurrence filter. This turns that into the
+//! conditions a person must hear about, each with the words that say what to
+//! do, and nothing else decides it: the header badge and the Station Health
+//! banner (through `routes::pages::station_issues`), the Today page's notices,
+//! `/api/v2/health` and the station-health notifier all call [`conditions`].
+//!
+//! # What is a condition
+//!
+//! Every state that is not what the configuration asks for:
+//!
+//! * the detector **failed**, **stopped**, or is **not configured** — nothing
+//!   is being identified;
+//! * a configured classifier that is **left out** (its file missing or
+//!   damaged, its labels missing, unreadable or the wrong length, too big for
+//!   the memory the station allows), or loaded and **unrouted**, judging
+//!   nothing;
+//! * the occurrence filter **off** for a reason other than "none is
+//!   configured": no coordinates, its model or labels missing or unusable.
+//!
+//! * a model file the station found **missing or damaged** and is fetching
+//!   again, could not fetch, may not fetch, or has fetched and cannot load
+//!   without a restart nothing here can give it (MDL-10). The station repairs
+//!   its own files; this is where its owner reads that it is doing so, and
+//!   when it will try next.
+//!
+//! Three states are deliberately not conditions:
+//!
+//! * the detector **starting** (the first seconds of a start) and **web
+//!   only** (`--web-only`, chosen; the Capture panel says it);
+//! * a classifier left out, or a filter off, **because the detector is not
+//!   running**. That is the detector's condition, said once, with the cause to
+//!   act on; repeating it per classifier would bury that cause under its
+//!   consequences;
+//! * a filter that is **not configured**: a station may run without one.
+
+use birdnet_core::inference::model_state::{
+    ClassifierFault, ClassifierStatus, DetectorState, FilterOff, FilterState, ModelFile,
+    ModelsState, RepairRestart, RepairState,
+};
+use serde::Serialize;
+
+/// The episode key of the detector's condition.
+pub const DETECTOR_KEY: &str = "models:detector";
+
+/// The episode key of the occurrence filter's condition.
+pub const FILTER_KEY: &str = "models:occurrence-filter";
+
+/// The prefix every key [`conditions`] returns starts with, so a check that
+/// could not look can hold the whole family.
+pub const KEY_PREFIX: &str = "models:";
+
+/// The episode key of one classifier's condition.
+#[must_use]
+pub fn classifier_key(id: &str) -> String {
+    format!("{KEY_PREFIX}classifier:{id}")
+}
+
+/// One thing the station's models are doing that the owner did not ask for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ModelCondition {
+    /// Stable identity: [`DETECTOR_KEY`], [`classifier_key`] or
+    /// [`FILTER_KEY`].
+    pub key: String,
+    /// The state's own code ([`DetectorState::code`] and its siblings), for a
+    /// monitor to key on.
+    pub state: &'static str,
+    /// Two or three words, for the header badge.
+    pub label: &'static str,
+    /// A short title, for a notification.
+    pub title: String,
+    /// What is wrong and what to do about it, as a clause that starts in
+    /// lower case and reads after "Needs attention:".
+    pub sentence: String,
+    /// Whether nothing is being identified: the detector is not running.
+    pub stops_detection: bool,
+}
+
+impl ModelCondition {
+    /// The sentence as text that stands on its own: capitalised, with its
+    /// full stop. Not escaped.
+    #[must_use]
+    pub fn body(&self) -> String {
+        format!("{}.", capitalize_first(&self.sentence))
+    }
+}
+
+/// Upper-case the first character.
+#[must_use]
+pub fn capitalize_first(s: &str) -> String {
+    let mut chars = s.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().collect::<String>() + chars.as_str()
+    })
+}
+
+/// Every condition in `models`, the detector's first, then the classifiers in
+/// the order the configuration declares them, then the filter.
+#[must_use]
+pub fn conditions(models: &ModelsState) -> Vec<ModelCondition> {
+    let mut out: Vec<ModelCondition> = detector_condition(&models.detector).into_iter().collect();
+    out.extend(models.classifiers.iter().filter_map(|c| {
+        let (label, title) = match &c.status {
+            ClassifierStatus::Judging { .. }
+            | ClassifierStatus::LeftOut {
+                fault: ClassifierFault::DetectorNotRunning,
+                ..
+            } => return None,
+            // The primary never runs without the detector: its fault is the
+            // detector's condition, which names it.
+            ClassifierStatus::LeftOut { .. } if c.primary => return None,
+            ClassifierStatus::LeftOut { .. } => (
+                "Classifier left out",
+                format!("Classifier \"{}\" is not running", c.id),
+            ),
+            ClassifierStatus::Unrouted { .. } => (
+                "Classifier unused",
+                format!("Classifier \"{}\" judges nothing", c.id),
+            ),
+        };
+        let effect = if matches!(c.status, ClassifierStatus::LeftOut { .. }) {
+            "; the other classifiers go on detecting without it"
+        } else {
+            ""
+        };
+        Some(ModelCondition {
+            key: classifier_key(&c.id),
+            state: c.status.code(),
+            label,
+            title,
+            sentence: format!("{}{effect}", c.message()),
+            stops_detection: false,
+        })
+    }));
+    out.extend(filter_condition(&models.occurrence_filter));
+    out
+}
+
+/// The episode key of one model file's condition.
+#[must_use]
+pub fn file_key(file: &ModelFile) -> String {
+    format!(
+        "{KEY_PREFIX}file:{}",
+        file.path.file_name().map_or_else(
+            || file.catalogue_id.clone(),
+            |n| n.to_string_lossy().into_owned()
+        )
+    )
+}
+
+/// Every condition of the station's models; what every surface calls.
+///
+/// [`conditions`], then one for each model file the station is repairing or
+/// could not repair ([`file_conditions`]).
+#[must_use]
+pub fn of_station(models: &ModelsState, files: &[ModelFile], now_unix: u64) -> Vec<ModelCondition> {
+    let mut out = conditions(models);
+    out.extend(file_conditions(files, now_unix));
+    out
+}
+
+/// One condition per model file the station has not finished putting right.
+///
+/// MDL-10: the file was found missing or damaged. A file that is being
+/// checked, that verifies, that was repaired and is in use, or that the
+/// station is restarting to load right now, is not one.
+#[must_use]
+pub fn file_conditions(files: &[ModelFile], now_unix: u64) -> Vec<ModelCondition> {
+    files
+        .iter()
+        .filter_map(|file| {
+            let name = file.path.file_name().map_or_else(
+                || file.path.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+            let (label, title, sentence) = match &file.repair {
+                RepairState::Checking
+                | RepairState::Verified
+                | RepairState::Repaired {
+                    restart: RepairRestart::NotNeeded | RepairRestart::Restarting,
+                    ..
+                } => return None,
+                RepairState::Fetching { done, total, .. } => (
+                    "Fetching a model",
+                    "A model file is being fetched again",
+                    format!(
+                        "the model file {name} was missing or damaged: the station is \
+                         fetching it again ({} % so far), and nothing needs doing",
+                        done.saturating_mul(100)
+                            .checked_div(*total)
+                            .unwrap_or(0)
+                            .min(100)
+                    ),
+                ),
+                RepairState::WillRetry {
+                    at_unix,
+                    attempts,
+                    why,
+                } => (
+                    "Model not fetched",
+                    "A model file could not be fetched again",
+                    format!(
+                        "the model file {name} is missing or damaged: {attempts} \
+                         {} to fetch it again failed ({why}), and the station tries again {}",
+                        if *attempts == 1 {
+                            "attempt"
+                        } else {
+                            "attempts"
+                        },
+                        in_about(at_unix.saturating_sub(now_unix))
+                    ),
+                ),
+                RepairState::NotFetched { why, .. } => (
+                    "Model not fetched",
+                    "A model file is missing or damaged and is not being fetched",
+                    format!(
+                        "the model file {name} is missing or damaged: the station is not \
+                         fetching it; {why}"
+                    ),
+                ),
+                RepairState::Repaired {
+                    restart: RepairRestart::NeededByHand,
+                    ..
+                } => (
+                    "Restart needed",
+                    "A repaired model file needs a restart",
+                    format!(
+                        "the model file {name} was fetched again and verifies: restart the \
+                         station to use it"
+                    ),
+                ),
+            };
+            Some(ModelCondition {
+                key: file_key(file),
+                state: file.repair.code(),
+                label,
+                title: title.to_owned(),
+                sentence,
+                stops_detection: false,
+            })
+        })
+        .collect()
+}
+
+/// "in about 40 minutes", for a wait in seconds.
+fn in_about(secs: u64) -> String {
+    match secs.div_ceil(60) {
+        0 | 1 => "within a minute".to_owned(),
+        m if m < 90 => format!("in about {m} minutes"),
+        m => format!("in about {} hours", (m + 30) / 60),
+    }
+}
+
+/// The detector's condition, when it has one.
+fn detector_condition(detector: &DetectorState) -> Option<ModelCondition> {
+    let (label, title) = match detector {
+        DetectorState::Starting | DetectorState::Running | DetectorState::WebOnly { .. } => {
+            return None;
+        }
+        DetectorState::NotConfigured { .. } | DetectorState::Failed { .. } => {
+            ("Not detecting", "The detector is not running")
+        }
+        DetectorState::Stopped => ("Detector stopped", "The detector has stopped"),
+    };
+    Some(ModelCondition {
+        key: DETECTOR_KEY.to_owned(),
+        state: detector.code(),
+        label,
+        title: title.to_owned(),
+        sentence: format!(
+            "nothing is being identified, because {}",
+            detector.message()
+        ),
+        stops_detection: true,
+    })
+}
+
+/// The occurrence filter's condition, when it has one.
+fn filter_condition(filter: &FilterState) -> Option<ModelCondition> {
+    match filter {
+        FilterState::Active { .. }
+        | FilterState::Off {
+            reason: FilterOff::NotConfigured | FilterOff::DetectorNotRunning,
+            ..
+        } => None,
+        FilterState::Off { .. } => Some(ModelCondition {
+            key: FILTER_KEY.to_owned(),
+            state: filter.code(),
+            label: "Species filter off",
+            title: "The species occurrence filter is off".to_owned(),
+            sentence: filter.message(),
+            stops_detection: false,
+        }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use birdnet_core::inference::model_state::ClassifierState;
+
+    use super::*;
+
+    fn classifier(id: &str, primary: bool, status: ClassifierStatus) -> ClassifierState {
+        ClassifierState {
+            id: id.to_owned(),
+            primary,
+            model_path: PathBuf::from(format!("/m/{id}.onnx")),
+            labels_path: Some(PathBuf::from(format!("/m/{id}.csv"))),
+            status,
+        }
+    }
+
+    fn judging() -> ClassifierStatus {
+        ClassifierStatus::Judging {
+            sources: Vec::new(),
+            unrouted_sources: true,
+        }
+    }
+
+    /// The station its owner set up: the detector running, every classifier
+    /// judging, the filter filtering.
+    fn healthy() -> ModelsState {
+        ModelsState {
+            detector: DetectorState::Running,
+            classifiers: vec![
+                classifier("birdnet", true, judging()),
+                classifier(
+                    "perch",
+                    false,
+                    ClassifierStatus::Judging {
+                        sources: vec!["RTSP_1".to_owned()],
+                        unrouted_sources: false,
+                    },
+                ),
+            ],
+            occurrence_filter: FilterState::Active {
+                candidates: Some(140),
+            },
+        }
+    }
+
+    /// The counterpart of every test below: a station doing what it was set
+    /// up for has no condition, and nor do the states that are not faults.
+    #[test]
+    fn a_station_doing_what_it_was_set_up_for_has_no_condition() {
+        assert_eq!(conditions(&healthy()), []);
+        for detector in [
+            DetectorState::Starting,
+            DetectorState::WebOnly {
+                why: "--web-only".to_owned(),
+            },
+        ] {
+            let state = ModelsState {
+                detector,
+                ..healthy()
+            };
+            assert_eq!(conditions(&state), [], "{:?}", state.detector);
+        }
+        let unfiltered = ModelsState {
+            occurrence_filter: FilterState::off(FilterOff::NotConfigured, "none configured"),
+            ..healthy()
+        };
+        assert_eq!(conditions(&unfiltered), []);
+    }
+
+    /// Each way the detector can be not running is one condition, which says
+    /// nothing is identified and carries the reason.
+    #[test]
+    fn a_detector_that_is_not_running_is_one_condition_with_its_reason() {
+        for (detector, label, reason) in [
+            (
+                DetectorState::Failed {
+                    why: "its labels file names 12".to_owned(),
+                },
+                "Not detecting",
+                "its labels file names 12",
+            ),
+            (
+                DetectorState::NotConfigured {
+                    why: "no MODEL_PATH".to_owned(),
+                },
+                "Not detecting",
+                "no MODEL_PATH",
+            ),
+            (
+                DetectorState::Stopped,
+                "Detector stopped",
+                "restart the station",
+            ),
+        ] {
+            let code = detector.code();
+            let mut state = healthy();
+            state.set_detector(detector);
+            let found = conditions(&state);
+            assert_eq!(found.len(), 1, "{found:?}");
+            let c = &found[0];
+            assert_eq!(
+                (c.key.as_str(), c.state, c.label, c.stops_detection),
+                (DETECTOR_KEY, code, label, true)
+            );
+            assert!(
+                c.sentence.starts_with("nothing is being identified")
+                    && c.sentence.contains(reason),
+                "{}",
+                c.sentence
+            );
+        }
+    }
+
+    /// A second classifier left out is its own condition, naming it, its
+    /// reason and that the others go on; a primary left out is the
+    /// detector's.
+    #[test]
+    fn a_left_out_second_classifier_is_named_with_its_reason() {
+        let mut state = healthy();
+        state.classifiers[1].status = ClassifierStatus::left_out(
+            ClassifierFault::WillNotLoad,
+            "its model file /m/perch.onnx will not load; install it again",
+        );
+        let found = conditions(&state);
+        assert_eq!(found.len(), 1, "{found:?}");
+        let c = &found[0];
+        assert_eq!(
+            (c.key.as_str(), c.state, c.label),
+            (
+                "models:classifier:perch",
+                "left_out_will_not_load",
+                "Classifier left out"
+            )
+        );
+        assert!(
+            c.sentence.contains("`perch` is not running")
+                && c.sentence.contains("install it again")
+                && c.sentence.contains("other classifiers go on detecting"),
+            "{}",
+            c.sentence
+        );
+        assert!(!c.stops_detection);
+    }
+
+    /// Every fault a classifier can be left out for is a condition, except
+    /// the detector's own.
+    #[test]
+    fn every_left_out_fault_but_the_detectors_is_a_condition() {
+        for code in ClassifierStatus::CODES {
+            let Some(fault) = code.strip_prefix("left_out_") else {
+                continue;
+            };
+            let fault = [
+                ClassifierFault::FileMissing,
+                ClassifierFault::WillNotLoad,
+                ClassifierFault::DoesNotFit,
+                ClassifierFault::MemoryUnknown,
+                ClassifierFault::LabelsNotSet,
+                ClassifierFault::LabelsMissing,
+                ClassifierFault::LabelsUnreadable,
+                ClassifierFault::LabelsWrongLength,
+                ClassifierFault::DetectorNotRunning,
+            ]
+            .into_iter()
+            .find(|f| f.code() == fault)
+            .expect("every code has its fault");
+            let mut state = healthy();
+            state.classifiers[1].status = ClassifierStatus::left_out(fault, "why");
+            let found = conditions(&state);
+            assert_eq!(
+                found.len(),
+                usize::from(fault != ClassifierFault::DetectorNotRunning),
+                "{code}: {found:?}"
+            );
+        }
+    }
+
+    /// A loaded classifier no route reaches is a condition, with the route
+    /// that would reach it (MDL-06, MDL-07).
+    #[test]
+    fn an_unrouted_classifier_is_a_condition_with_the_route_to_add() {
+        let mut state = healthy();
+        state.classifiers[1].status = ClassifierStatus::Unrouted {
+            primary: "birdnet".to_owned(),
+        };
+        let found = conditions(&state);
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert_eq!(
+            (found[0].state, found[0].label),
+            ("unrouted", "Classifier unused")
+        );
+        assert!(
+            found[0].sentence.contains("local:birdnet+perch"),
+            "{}",
+            found[0].sentence
+        );
+    }
+
+    /// Each reason a configured filter is off is a condition carrying it.
+    #[test]
+    fn a_configured_filter_that_is_off_is_a_condition_with_its_reason() {
+        for reason in [
+            FilterOff::NoCoordinates,
+            FilterOff::ModelMissing,
+            FilterOff::ModelUnusable,
+            FilterOff::LabelsMissing,
+            FilterOff::LabelsUnreadable,
+        ] {
+            let state = ModelsState {
+                occurrence_filter: FilterState::off(reason, "set LATITUDE and LONGITUDE"),
+                ..healthy()
+            };
+            let found = conditions(&state);
+            assert_eq!(found.len(), 1, "{reason:?}: {found:?}");
+            assert_eq!(found[0].key, FILTER_KEY);
+            assert_eq!(found[0].state, state.occurrence_filter.code());
+            assert!(
+                found[0].sentence.contains("set LATITUDE and LONGITUDE"),
+                "{}",
+                found[0].sentence
+            );
+        }
+    }
+
+    /// A detector that is not running takes its classifiers and filter with
+    /// it; the owner hears the cause once, and a second classifier's own,
+    /// different fault as well.
+    #[test]
+    fn a_stopped_detector_is_said_once_and_a_second_fault_beside_it() {
+        let mut state = healthy();
+        state.classifiers[1].status =
+            ClassifierStatus::left_out(ClassifierFault::LabelsMissing, "no labels");
+        state.set_detector(DetectorState::Failed {
+            why: "the primary will not load".to_owned(),
+        });
+        let keys: Vec<String> = conditions(&state).into_iter().map(|c| c.key).collect();
+        assert_eq!(keys, [DETECTOR_KEY, "models:classifier:perch"]);
+    }
+
+    /// Every key belongs to the family a check that could not look holds.
+    #[test]
+    fn every_key_is_in_the_models_family() {
+        let mut state = healthy();
+        state.classifiers[1].status = ClassifierStatus::Unrouted {
+            primary: "birdnet".to_owned(),
+        };
+        state.occurrence_filter = FilterState::off(FilterOff::NoCoordinates, "x");
+        state.set_detector(DetectorState::Stopped);
+        state.classifiers[1].status = ClassifierStatus::Unrouted {
+            primary: "birdnet".to_owned(),
+        };
+        state.occurrence_filter = FilterState::off(FilterOff::NoCoordinates, "x");
+        let found = conditions(&state);
+        assert_eq!(found.len(), 3, "{found:?}");
+        assert!(found.iter().all(|c| c.key.starts_with(KEY_PREFIX)));
+    }
+
+    /// MDL-10 on the pages: a file the station is repairing, could not fetch,
+    /// may not fetch, or cannot load without a restart by hand is a condition
+    /// that says what the station is doing and when it tries next; a file that
+    /// is fine, or repaired and in use, is none.
+    #[test]
+    fn a_file_under_repair_is_a_condition_and_a_good_file_is_not() {
+        let file = |repair| ModelFile {
+            catalogue_id: "birdnet-v24".to_owned(),
+            path: PathBuf::from("/var/lib/birdnet/models/birdnet-v24.onnx"),
+            repair,
+        };
+        let quiet = [
+            file(RepairState::Checking),
+            file(RepairState::Verified),
+            file(RepairState::Repaired {
+                at_unix: 5,
+                restart: RepairRestart::NotNeeded,
+            }),
+            file(RepairState::Repaired {
+                at_unix: 5,
+                restart: RepairRestart::Restarting,
+            }),
+        ];
+        assert_eq!(file_conditions(&quiet, 1_000), []);
+        assert_eq!(of_station(&healthy(), &quiet, 1_000), []);
+
+        let loud = [
+            file(RepairState::Fetching {
+                since_unix: 990,
+                done: 25,
+                total: 100,
+            }),
+            file(RepairState::WillRetry {
+                at_unix: 1_000 + 40 * 60,
+                attempts: 3,
+                why: "no route to host".to_owned(),
+            }),
+            file(RepairState::NotFetched {
+                why: "the station is offline".to_owned(),
+                looks_again_unix: 2_000,
+            }),
+            file(RepairState::Repaired {
+                at_unix: 5,
+                restart: RepairRestart::NeededByHand,
+            }),
+        ];
+        let found = of_station(&healthy(), &loud, 1_000);
+        let read: Vec<(&str, &str)> = found
+            .iter()
+            .map(|c| (c.state, c.sentence.as_str()))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (
+                    "fetching",
+                    "the model file birdnet-v24.onnx was missing or damaged: the station is \
+                     fetching it again (25 % so far), and nothing needs doing"
+                ),
+                (
+                    "will_retry",
+                    "the model file birdnet-v24.onnx is missing or damaged: 3 attempts to \
+                     fetch it again failed (no route to host), and the station tries again in \
+                     about 40 minutes"
+                ),
+                (
+                    "not_fetched",
+                    "the model file birdnet-v24.onnx is missing or damaged: the station is \
+                     not fetching it; the station is offline"
+                ),
+                (
+                    "repaired",
+                    "the model file birdnet-v24.onnx was fetched again and verifies: restart the \
+                     station to use it"
+                ),
+            ]
+        );
+        assert!(
+            found
+                .iter()
+                .all(|c| !c.stops_detection && c.key == "models:file:birdnet-v24.onnx")
+        );
+    }
+}

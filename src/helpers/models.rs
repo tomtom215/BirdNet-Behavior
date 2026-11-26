@@ -39,6 +39,7 @@ use std::path::PathBuf;
 
 use birdnet_core::config::Config;
 use birdnet_core::inference::model::OutputScale;
+use birdnet_core::inference::model_state::{ClassifierFault, ClassifierState, ClassifierStatus};
 use birdnet_core::inference::registry::{MAX_MODELS, ModelSpec, model_size_mib, parse_routes};
 
 /// The settings that declare one extra classifier.
@@ -140,12 +141,22 @@ pub struct ModelPlan {
     pub specs: Vec<ModelSpec>,
     /// Per-source routing, already parsed.
     pub routes: HashMap<String, Vec<String>>,
-    /// Human-readable notes: refusals, malformed routes, what was admitted.
+    /// Human-readable notes: malformed routes and settings, what was
+    /// admitted.
     ///
     /// Reported rather than returned as errors because none of them should
     /// stop a station recording birds — but every one of them must be visible
     /// to somebody reading a journal months later.
     pub notes: Vec<String>,
+    /// The extra classifiers the configuration declares and this machine will
+    /// not load, each with why (MDL-01): its file cannot be read, it has no
+    /// labels setting, or it does not fit in memory. Published with the
+    /// classifiers the registry loads, so a station says why it runs on fewer
+    /// than it was given.
+    pub left_out: Vec<ClassifierState>,
+    /// Every classifier id the configuration declares, the primary first, in
+    /// declaration order — the order the published states are listed in.
+    pub declared: Vec<String>,
 }
 
 /// Read the classifier configuration and decide what this machine can run.
@@ -167,6 +178,38 @@ pub fn plan(
         primary_labels,
         ceiling_mib,
     )
+}
+
+/// The extra classifiers' files the configuration names, as [`plan`] reads
+/// them: each model file, with its labels file when one is set. For the
+/// station's own repair of its model files (MDL-10), which must look after the
+/// files the plan would load and no others.
+#[must_use]
+pub fn configured_extra_files(config: Option<&Config>) -> Vec<(PathBuf, Option<PathBuf>)> {
+    EXTRA_MODEL_KEYS
+        .iter()
+        .filter_map(|keys| {
+            let model = setting(config, keys.path_key)?;
+            Some((
+                PathBuf::from(model),
+                setting(config, keys.labels_key).map(PathBuf::from),
+            ))
+        })
+        .collect()
+}
+
+/// The command that installs the model file at `path`: the catalogue id
+/// when the file has the name `--install-model` gives one of its models,
+/// else how to list them.
+fn install_hint(path: &std::path::Path) -> String {
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    birdnet_integrations::model_catalog::CATALOG
+        .iter()
+        .find(|e| birdnet_integrations::model_catalog::part_at(e, dir, path).is_some())
+        .map_or_else(
+            || "`birdnet-behavior --install-model list` names what can be installed".to_owned(),
+            |e| format!("`birdnet-behavior --install-model {}`", e.id),
+        )
 }
 
 /// One classifier setting as [`plan`] reads it: `BIRDNET_<key>` from the
@@ -235,48 +278,97 @@ pub fn plan_with(
     let mut used = model_size_mib(&specs[0].model_path)
         .map_or(PER_MODEL_WORKING_SET_MIB, |m| m + PER_MODEL_WORKING_SET_MIB);
 
+    let mut left_out = Vec::new();
+    let mut declared = vec![specs[0].id.clone()];
+    // Once one classifier has not fitted, none after it is tried: the set is
+    // a prefix, so an operator sees one boundary rather than a scatter.
+    let mut refused_for_memory: Option<(ClassifierFault, String)> = None;
     for keys in EXTRA_MODEL_KEYS {
         let Some(path) = get(keys.path_key) else {
             continue;
         };
-        let Some(labels) = get(keys.labels_key) else {
-            notes.push(format!(
-                "{} is set but {} is not; skipping that classifier. Labels are positional \
-                 against a model's output, so running one without its own labels would \
-                 report species under other species' names",
-                keys.path_key, keys.labels_key
-            ));
-            continue;
-        };
         let path = PathBuf::from(path);
         let id = get(keys.id_key).unwrap_or_else(|| keys.default_id.to_owned());
-
+        declared.push(id.clone());
+        let labels = get(keys.labels_key).map(PathBuf::from);
+        let mut leave_out = |fault: ClassifierFault, why: String| {
+            left_out.push(ClassifierState {
+                id: id.clone(),
+                primary: false,
+                model_path: path.clone(),
+                labels_path: labels.clone(),
+                status: ClassifierStatus::left_out(fault, why),
+            });
+        };
+        if let Some((fault, why)) = refused_for_memory.as_ref() {
+            leave_out(*fault, why.clone());
+            continue;
+        }
+        let Some(labels_path) = labels.clone() else {
+            leave_out(
+                ClassifierFault::LabelsNotSet,
+                format!(
+                    "{} is set but {} is not. Labels are positional against a model's output, \
+                     so running one without its own labels would report species under other \
+                     species' names; set {} to its labels file",
+                    keys.path_key, keys.labels_key, keys.labels_key
+                ),
+            );
+            continue;
+        };
         let Some(size) = model_size_mib(&path) else {
-            notes.push(format!(
-                "classifier `{id}` at {} cannot be read; skipping it. A model whose size is \
-                 unknown is treated as unaffordable rather than free",
-                path.display()
-            ));
+            if path.exists() {
+                leave_out(
+                    ClassifierFault::WillNotLoad,
+                    format!(
+                        "its model file {} cannot be read; install it again ({}) or correct \
+                         {}. A model whose size is unknown is treated as unaffordable rather \
+                         than free",
+                        path.display(),
+                        install_hint(&path),
+                        keys.path_key
+                    ),
+                );
+            } else {
+                leave_out(
+                    ClassifierFault::FileMissing,
+                    format!(
+                        "its model file {} is not there; install it ({}) or correct {}",
+                        path.display(),
+                        install_hint(&path),
+                        keys.path_key
+                    ),
+                );
+            }
             continue;
         };
         let want = size + PER_MODEL_WORKING_SET_MIB;
 
         match budget {
             None => {
-                notes.push(format!(
-                    "classifier `{id}` skipped: this machine does not report how much memory \
-                     it has, so a second classifier cannot be shown to fit. Running one that \
-                     does not fit is an out-of-memory kill on an unattended station"
-                ));
-                break;
+                let why = format!(
+                    "this machine does not report how much memory it has, so a classifier \
+                     beside the primary cannot be shown to fit. Running one that does not fit \
+                     is an out-of-memory kill on an unattended station (`{id}` needs about \
+                     {want} MiB)"
+                );
+                leave_out(ClassifierFault::MemoryUnknown, why.clone());
+                refused_for_memory = Some((ClassifierFault::MemoryUnknown, why));
             }
             Some(budget) if used + want > budget => {
-                notes.push(format!(
-                    "classifier `{id}` skipped: it needs about {want} MiB and {used} MiB of the \
-                     {budget} MiB classifier budget is already committed. The station runs on \
-                     the classifiers it can afford rather than being OOM-killed later"
+                let why = format!(
+                    "it needs about {want} MiB and {used} MiB of the {budget} MiB classifier \
+                     budget (half of this machine's memory) is already committed. The station \
+                     runs on the classifiers it can afford rather than being OOM-killed later"
+                );
+                leave_out(ClassifierFault::DoesNotFit, why);
+                refused_for_memory = Some((
+                    ClassifierFault::DoesNotFit,
+                    format!(
+                        "an earlier classifier did not fit in the {budget} MiB classifier \
+                         budget, so none after it is loaded"
+                    ),
                 ));
-                break;
             }
             Some(_) => {
                 used += want;
@@ -286,7 +378,7 @@ pub fn plan_with(
                 specs.push(ModelSpec {
                     id,
                     model_path: path,
-                    labels_path: PathBuf::from(labels),
+                    labels_path,
                     threshold: model_threshold(get, keys.threshold_key, &mut notes),
                     sample_rate: model_sample_rate(get, keys.sample_rate_key, &mut notes),
                     output_scale: model_output_scale(get, keys.output_scale_key, &mut notes),
@@ -309,12 +401,7 @@ pub fn plan_with(
     // route target and with it the whole station (MMP-22). Its sources keep
     // the classifiers that did load, or fall back to the primary. A name that
     // was never declared stays, so the registry still refuses the typo.
-    let declined: Vec<String> = EXTRA_MODEL_KEYS
-        .iter()
-        .filter(|keys| get(keys.path_key).is_some())
-        .map(|keys| get(keys.id_key).unwrap_or_else(|| keys.default_id.to_owned()))
-        .filter(|id| specs.iter().all(|s| s.id != *id))
-        .collect();
+    let declined: Vec<String> = left_out.iter().map(|s| s.id.clone()).collect();
     let mut sources: Vec<&String> = routes.keys().collect();
     sources.sort();
     let mut dropped = Vec::new();
@@ -340,6 +427,8 @@ pub fn plan_with(
         specs,
         routes,
         notes,
+        left_out,
+        declared,
     }
 }
 
@@ -462,12 +551,18 @@ pub fn model_dir(config: Option<&Config>) -> PathBuf {
     crate::helpers::station_defaults::model_dir(config)
 }
 
-/// `--install-model <id>`: fetch and verify a classifier, or list what is
-/// available. Returns a process exit code.
+/// `--install-model <id>`: fetch and verify a model, or list what is
+/// available. Returns a process exit code: 0 when the files are in place and
+/// verify, 1 when they are not.
 ///
 /// Foreground and synchronous. A 400 MB download over a field station's uplink
 /// is measured in hours, and an operator should be able to watch it, stop it,
 /// and see it fail — none of which a background task or an API call offers.
+/// `install.sh`, the macOS installer and the container's entrypoint all install
+/// every model through this (MDL-09), so the retries, the resume and the
+/// timeouts (`BIRDNET_MODEL_RETRY_WAITS`, `BIRDNET_MODEL_STALL_TIMEOUT`,
+/// `BIRDNET_MODEL_CONNECT_TIMEOUT`, `BIRDNET_MODEL_MIRROR`) are the same
+/// wherever a model comes from.
 ///
 /// **Blocking.** It builds a `reqwest::blocking` client, which panics if
 /// constructed inside a tokio runtime — and `main` is `#[tokio::main]`, so the
@@ -483,7 +578,7 @@ pub fn install_from_catalogue(
     dest: &std::path::Path,
     from_file: Option<&std::path::Path>,
 ) -> i32 {
-    use birdnet_integrations::model_catalog::{Use, install, install_from_file};
+    use birdnet_integrations::model_catalog::{install_from_file, install_with_progress};
 
     if id.trim().is_empty() || id.trim().eq_ignore_ascii_case("list") {
         print!("{}", catalogue_listing());
@@ -493,7 +588,7 @@ pub fn install_from_catalogue(
     let result = from_file.map_or_else(
         || {
             println!("Installing `{id}` into {}", dest.display());
-            install(id, dest)
+            install_with_progress(id, dest, &mut progress_printer())
         },
         |file| {
             println!(
@@ -508,14 +603,8 @@ pub fn install_from_catalogue(
         Ok(installed) => {
             println!("\nInstalled and verified.");
             println!("  model:  {}", installed.model_path.display());
-            if installed.usage != Use::RangeFilter {
-                match &installed.labels_path {
-                    Some(p) => println!("  labels: {}", p.display()),
-                    None => println!(
-                        "  labels: not shipped with this model — supply your own, with one row \
-                         per class, or species are reported under other species' names"
-                    ),
-                }
+            if let Some(p) = &installed.labels_path {
+                println!("  labels: {}", p.display());
             }
             print_next_steps(&installed);
             0
@@ -527,11 +616,34 @@ pub fn install_from_catalogue(
     }
 }
 
+/// A progress report for a terminal or a container log: one line when a file
+/// starts, one every ten seconds while it downloads, and one when it is all
+/// there. A 541 MB download is minutes of silence otherwise, and `docker
+/// compose logs` cannot show a carriage-return progress bar.
+fn progress_printer() -> impl FnMut(&birdnet_integrations::model_catalog::Progress) {
+    const EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+    let mut last: Option<(String, std::time::Instant)> = None;
+    move |p| {
+        let new_file = last.as_ref().is_none_or(|(f, _)| *f != p.file);
+        let due = last.as_ref().is_some_and(|(_, at)| at.elapsed() >= EVERY);
+        if new_file || due || p.done == p.total {
+            let percent = p.done.saturating_mul(100).checked_div(p.total).unwrap_or(0);
+            println!(
+                "  {}: {percent}% ({} of {} KiB)",
+                p.file,
+                p.done / 1024,
+                p.total / 1024
+            );
+            last = Some((p.file.clone(), std::time::Instant::now()));
+        }
+    }
+}
+
 /// What `--install-model list` prints: every entry, what it is for, and
 /// where it comes from.
 #[must_use]
 pub fn catalogue_listing() -> String {
-    use birdnet_integrations::model_catalog::{CATALOG, Use, model_origins, taxonomy_edition};
+    use birdnet_integrations::model_catalog::{CATALOG, labels_origins, model_origins};
     use std::fmt::Write as _;
 
     let mut out = String::from("Models this build can install:\n\n");
@@ -544,42 +656,8 @@ pub fn catalogue_listing() -> String {
             entry.model_bytes / (1024 * 1024),
             entry.model_sha256
         );
-        let _ = match entry.usage {
-            Use::Classifier => writeln!(
-                out,
-                "    a second classifier; needs MODEL_n_SAMPLE_RATE={}",
-                entry.sample_rate
-            ),
-            Use::PrimaryReplacement => writeln!(
-                out,
-                "    replaces the primary classifier ({} Hz)",
-                entry.sample_rate
-            ),
-            Use::RangeFilter => {
-                writeln!(out, "    a species-occurrence filter (METADATA_MODEL_PATH)")
-            }
-        };
-        if entry.usage != Use::RangeFilter {
-            let _ = writeln!(
-                out,
-                "    labels: {}",
-                if entry.ships_labels() {
-                    "installed alongside, verified"
-                } else {
-                    "not shipped — supply your own"
-                }
-            );
-            // RES-32: the checklist the labels' names come from, only where
-            // it can be cited.
-            let _ = match entry.labels_sha256.and_then(taxonomy_edition) {
-                Some(t) => writeln!(
-                    out,
-                    "    taxonomy: {} (read from {})",
-                    t.edition, t.cited_from
-                ),
-                None => writeln!(out, "    taxonomy: not recorded"),
-            };
-        }
+        let _ = writeln!(out, "    {}", what_it_is_for(entry));
+        listing_labels(&mut out, entry);
         // MMP-20: who made it, under what licence, and where that was read.
         let _ = writeln!(out, "    source: {}", entry.source);
         let _ = writeln!(
@@ -593,6 +671,14 @@ pub fn catalogue_listing() -> String {
             "    downloaded from, in order: {}",
             model_origins(entry).join(", then ")
         );
+        let labels = labels_origins(entry);
+        if !labels.is_empty() {
+            let _ = writeln!(
+                out,
+                "    labels downloaded from, in order: {}",
+                labels.join(", then ")
+            );
+        }
         let _ = writeln!(out, "    {}\n", entry.notes);
     }
     out.push_str("Install one with:  birdnet-behavior --install-model <id>\n");
@@ -602,27 +688,84 @@ pub fn catalogue_listing() -> String {
     out
 }
 
+/// One line on what an entry is for.
+fn what_it_is_for(entry: &birdnet_integrations::model_catalog::CatalogEntry) -> String {
+    use birdnet_integrations::model_catalog::Use;
+    match entry.usage {
+        Use::Classifier => format!(
+            "a classifier: the station's own, or a second one (MODEL_n_SAMPLE_RATE={})",
+            entry.sample_rate
+        ),
+        Use::PrimaryReplacement => {
+            format!("replaces the primary classifier ({} Hz)", entry.sample_rate)
+        }
+        Use::RangeFilter => entry.pairs_with.map_or_else(
+            || "a species-occurrence filter (METADATA_MODEL_PATH)".to_owned(),
+            |classifier| {
+                format!("a species-occurrence filter (METADATA_MODEL_PATH) for {classifier} only")
+            },
+        ),
+    }
+}
+
+/// The labels lines of the listing: whether labels come with it, and (for a
+/// classifier) the taxonomy their names follow, where it can be cited.
+fn listing_labels(out: &mut String, entry: &birdnet_integrations::model_catalog::CatalogEntry) {
+    use birdnet_integrations::model_catalog::{Use, taxonomy_edition};
+    use std::fmt::Write as _;
+    if entry.usage == Use::RangeFilter && !entry.ships_labels() {
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "    labels: {}",
+        if entry.ships_labels() {
+            "installed alongside, verified"
+        } else {
+            "not shipped — supply your own"
+        }
+    );
+    if entry.usage == Use::RangeFilter {
+        return;
+    }
+    // RES-32: the checklist the labels' names come from, only where it can be
+    // cited.
+    let _ = match entry.labels_sha256.and_then(taxonomy_edition) {
+        Some(t) => writeln!(
+            out,
+            "    taxonomy: {} (read from {})",
+            t.edition, t.cited_from
+        ),
+        None => writeln!(out, "    taxonomy: not recorded"),
+    };
+}
+
 /// What to configure after an install, by what the file is for.
 fn print_next_steps(installed: &birdnet_integrations::model_catalog::Installed) {
     use birdnet_integrations::model_catalog::Use;
     let model = installed.model_path.display();
+    let labels = installed.labels_path.as_ref().map_or_else(
+        || "<your labels file>".to_owned(),
+        |p| p.display().to_string(),
+    );
     match installed.usage {
         Use::Classifier => {
-            let labels = installed.labels_path.as_ref().map_or_else(
-                || "<your labels file>".to_owned(),
-                |p| p.display().to_string(),
-            );
-            println!("\nTo run it as a second classifier, set:");
+            println!("\nTo make it the station's classifier, set (then restart):");
+            println!("  MODEL_PATH={model}      (BIRDNET_MODEL)");
+            println!("  LABELS_PATH={labels}      (BIRDNET_LABELS)");
+            println!("\nOr to run it as a second classifier, set:");
             println!("  BIRDNET_MODEL_2_PATH={model}");
             println!("  BIRDNET_MODEL_2_LABELS={labels}");
             println!("  BIRDNET_MODEL_2_ID={}", installed.id);
             println!("  BIRDNET_MODEL_2_SAMPLE_RATE={}", installed.sample_rate);
+            if let Some(filter) =
+                birdnet_integrations::model_catalog::occurrence_filter_for(installed.id)
+            {
+                println!("\nFor its species-occurrence filter:");
+                println!("  birdnet-behavior --install-model {}", filter.id);
+            }
         }
         Use::PrimaryReplacement => {
-            let labels = installed.labels_path.as_ref().map_or_else(
-                || "<your labels file>".to_owned(),
-                |p| p.display().to_string(),
-            );
             println!(
                 "\nTo make it the station's classifier, set (birdnet.conf, or the BIRDNET_* variables), then restart:"
             );
@@ -634,14 +777,31 @@ fn print_next_steps(installed: &birdnet_integrations::model_catalog::Installed) 
             println!("\nFor the species-occurrence filter:");
             println!("  birdnet-behavior --install-model birdnet-v24-range-v2");
         }
-        Use::RangeFilter => {
-            println!("\nTo use it, set your LATITUDE and LONGITUDE and:");
-            println!("  METADATA_MODEL_PATH={model}      (BIRDNET_METADATA_MODEL)");
-            println!(
-                "No METADATA_LABELS_PATH is needed: it is indexed like the V2.4 labels. Use it \
-                 only with the BirdNET V2.4 classifier."
-            );
-        }
+        Use::RangeFilter => print_filter_steps(installed),
+    }
+}
+
+/// The next steps for an occurrence filter: its model, its labels when it has
+/// any, and the one classifier it belongs to.
+fn print_filter_steps(installed: &birdnet_integrations::model_catalog::Installed) {
+    let pairs_with =
+        birdnet_integrations::model_catalog::find(installed.id).and_then(|e| e.pairs_with);
+    println!("\nTo use it, set your LATITUDE and LONGITUDE and:");
+    println!(
+        "  METADATA_MODEL_PATH={}      (BIRDNET_METADATA_MODEL)",
+        installed.model_path.display()
+    );
+    match &installed.labels_path {
+        Some(labels) => println!(
+            "  METADATA_LABELS_PATH={}      (BIRDNET_METADATA_LABELS)",
+            labels.display()
+        ),
+        None => println!(
+            "No METADATA_LABELS_PATH is needed: it is indexed like its classifier's labels."
+        ),
+    }
+    if let Some(classifier) = pairs_with {
+        println!("Use it only with the {classifier} classifier.");
     }
 }
 
@@ -650,6 +810,22 @@ mod tests {
     use super::{CLASSIFIER_SHARE_DENOMINATOR, OutputScale, PER_MODEL_WORKING_SET_MIB, plan_with};
     use std::collections::HashMap;
     use std::path::PathBuf;
+
+    /// Everything the plan says, as a person reads it: its notes and why each
+    /// classifier it left out is not running.
+    fn said(p: &super::ModelPlan) -> Vec<String> {
+        p.notes
+            .iter()
+            .cloned()
+            .chain(p.left_out.iter().map(super::ClassifierState::message))
+            .collect()
+    }
+
+    /// The state code of the one classifier the plan left out.
+    fn left_out_code(p: &super::ModelPlan) -> &'static str {
+        assert_eq!(p.left_out.len(), 1, "{:?}", p.left_out);
+        p.left_out[0].status.code()
+    }
 
     /// Write a file of `mib` megabytes and return its path.
     fn model_of(dir: &std::path::Path, name: &str, mib: u64) -> PathBuf {
@@ -904,12 +1080,13 @@ mod tests {
             None,
         );
         assert_eq!(p.specs.len(), 1, "no ceiling → no extra classifier");
+        assert_eq!(left_out_code(&p), "left_out_memory_unknown");
         assert!(
-            p.notes
+            said(&p)
                 .iter()
                 .any(|n| n.contains("does not report how much memory")),
             "{:?}",
-            p.notes
+            said(&p)
         );
     }
 
@@ -971,9 +1148,10 @@ mod tests {
             "the second must be refused: {:?}",
             p.notes
         );
-        let note = p.notes.join(" | ");
+        assert_eq!(left_out_code(&p), "left_out_does_not_fit");
+        let note = said(&p).join(" | ");
         assert!(note.contains("perch"), "{note}");
-        assert!(note.contains("skipped"), "{note}");
+        assert!(note.contains("not running"), "{note}");
         assert!(note.contains("512"), "the budget must appear: {note}");
         assert!(
             note.contains("OOM-killed"),
@@ -997,10 +1175,11 @@ mod tests {
             Some(8192),
         );
         assert_eq!(p.specs.len(), 1);
+        assert_eq!(left_out_code(&p), "left_out_labels_not_set");
         assert!(
-            p.notes.iter().any(|n| n.contains("other species' names")),
+            said(&p).iter().any(|n| n.contains("other species' names")),
             "{:?}",
-            p.notes
+            said(&p)
         );
     }
 
@@ -1021,12 +1200,39 @@ mod tests {
             Some(8192),
         );
         assert_eq!(p.specs.len(), 1);
+        assert_eq!(left_out_code(&p), "left_out_file_missing");
+        // A file that is not there is told so, with what installs it, not
+        // the sentence about an unknown size.
+        let message = p.left_out[0].message();
         assert!(
-            p.notes
-                .iter()
-                .any(|n| n.contains("unaffordable rather than free")),
-            "{:?}",
-            p.notes
+            message.contains("/nonexistent/perch.onnx is not there"),
+            "{message}"
+        );
+        assert!(message.contains("--install-model"), "{message}");
+        assert!(!message.contains("unaffordable"), "{message}");
+    }
+
+    /// A missing file under a catalogue model's installed name is told the
+    /// id that installs it.
+    #[test]
+    fn a_missing_catalogue_model_is_told_the_id_that_installs_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let primary = model_of(dir.path(), "p.onnx", 1);
+        let perch = dir.path().join("perch-v2.onnx");
+        let s = settings(&[
+            ("MODEL_2_PATH", perch.display().to_string()),
+            ("MODEL_2_LABELS", "s.txt".to_owned()),
+        ]);
+        let p = plan_with(
+            &|k| s.get(k).cloned(),
+            primary,
+            PathBuf::from("p.txt"),
+            Some(8192),
+        );
+        let message = p.left_out[0].message();
+        assert!(
+            message.contains("`birdnet-behavior --install-model perch-v2`"),
+            "{message}"
         );
     }
 
@@ -1135,6 +1341,7 @@ mod tests {
             ("birdnet-v24", "CC BY-NC-SA 4.0"),
             ("birdnet-v24-range-v2", "CC BY-NC-SA 4.0"),
             ("birdnet-v3", "CC BY-SA 4.0"),
+            ("birdnet-v3-geomodel", "CC BY-SA 4.0, with prohibited uses"),
             ("perch-v2", "Apache-2.0"),
         ] {
             let block = listed(id);
@@ -1167,5 +1374,31 @@ mod tests {
             );
         }
         assert!(!listed("birdnet-v24-range-v2").contains("taxonomy:"));
+        assert!(!listed("birdnet-v3-geomodel").contains("taxonomy:"));
+    }
+
+    /// MDL-12: the listing shows every origin in the order it is tried, the
+    /// labels' too, and which classifier a filter belongs to.
+    #[test]
+    fn the_listing_shows_every_origin_in_order() {
+        let v3 = listed("birdnet-v3");
+        let release = v3
+            .find("releases/download/models-v3.0-preview3/BirdNET%2B_V3.0-preview3_Global_11K_FP32")
+            .unwrap_or_else(|| panic!("no release origin:\n{v3}"));
+        let zenodo = v3
+            .find("zenodo.org/api/records/18247420/files/BirdNET+_V3.0-preview3_Global_11K_FP32")
+            .unwrap_or_else(|| panic!("no Zenodo origin:\n{v3}"));
+        assert!(release < zenodo, "{v3}");
+        assert!(
+            v3.contains("    labels downloaded from, in order: "),
+            "{v3}"
+        );
+        let geo = listed("birdnet-v3-geomodel");
+        assert!(geo.contains("for birdnet-v3 only"), "{geo}");
+        assert!(
+            geo.contains("    labels: installed alongside, verified"),
+            "{geo}"
+        );
+        assert!(listed("birdnet-v24-range-v2").contains("for birdnet-v24 only"));
     }
 }
