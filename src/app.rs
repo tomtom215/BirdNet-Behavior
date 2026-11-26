@@ -481,7 +481,7 @@ fn build_state(
                 "DuckDB analytics requested but not compiled in. Rebuild with --features analytics"
             );
         }
-        birdnet_web::state::AppState::new(server_config.db_path.clone())
+        birdnet_web::state::AppState::new(server_config.db_path)
             .map_err(|e| format!("database error: {e}"))?
     };
 
