@@ -474,7 +474,7 @@ mod tests {
                 .and_then(|f| f.set_len(e.model_bytes))
                 .expect("model");
             if let Some(l) = labels {
-                std::fs::write(l, "x\n").expect("labels");
+                std::fs::write(l, e.labels_embedded.unwrap_or_default()).expect("labels");
             }
         }
     }
@@ -657,7 +657,8 @@ mod tests {
                 .and_then(|f| f.set_len(e.model_bytes))
                 .map_err(|e| e.to_string())?;
             if let Some(l) = labels {
-                std::fs::write(l, "x\n").map_err(|e| e.to_string())?;
+                std::fs::write(l, e.labels_embedded.unwrap_or_default())
+                    .map_err(|e| e.to_string())?;
             }
             Ok(())
         }
