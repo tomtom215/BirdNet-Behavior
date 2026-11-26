@@ -150,12 +150,14 @@ impl ModelStateObserver {
 ///
 /// # What is and is not gated
 ///
-/// The metric and this type's contract are covered by CI-runnable tests. The
-/// two **call sites** in `run.rs` are not, because reaching them needs a loaded
-/// `BirdNetModel` and therefore the 541 MB model file — the same limit
-/// `tests/species_filter_e2e.rs` documents for its own second layer. What
-/// keeps them honest instead is that both sit in the `Ok` arm of
-/// `process_and_infer_filtered`, so "analysed" cannot drift to mean "attempted".
+/// The metric and this type's contract are covered by CI-runnable tests, and so
+/// is the **call site**: `run.rs` counts a file in one place, the `Ok` arm of
+/// `process_and_infer_filtered` inside the loop's `analyse`, which the live
+/// loop and the start-up backlog both go through, so "analysed" cannot drift
+/// to mean "attempted". `run.rs`'s own tests drive it over the tiny fixture
+/// models, and `tests/a_station_runs_on_the_models_it_can_load.rs` reads the
+/// counter from the built binary after handing it a recording (MDL-18); the
+/// 541 MB model is not needed for either.
 #[derive(Clone)]
 pub struct ThroughputObserver {
     analysed: PathCallback,
