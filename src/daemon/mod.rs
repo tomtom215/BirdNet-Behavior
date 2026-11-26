@@ -57,6 +57,7 @@ mod occurrence;
 mod processor;
 pub mod repair;
 mod run;
+mod spool;
 
 #[cfg(test)]
 mod test_support;

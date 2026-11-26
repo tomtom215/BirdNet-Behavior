@@ -64,11 +64,11 @@ pub fn recording() -> PathBuf {
 /// 3 s windows.
 ///
 /// Not the whole 30 s. With the tiny models every class clears a low
-/// confidence in every window, so the whole file is about 300 detections on
-/// a two-classifier station, each one a clip the processor cuts after the
-/// daemon has stopped — about 50 s on this machine, measured with the
-/// released binary as well, which a stop then waits out. Six seconds keeps a
-/// station's whole life inside a test's budget.
+/// confidence in every window, so the whole file is about 200 detections on
+/// a two-classifier station, each a clip to cut: about 30 s of work, which a
+/// test reading the database waits out. Six seconds keeps a station's whole
+/// life inside a test's budget. ([`Station::hand_whole_recording`] hands the
+/// whole file, for the test of a stop with that backlog.)
 const HANDED_SECS: u32 = 6;
 
 /// The first [`HANDED_SECS`] of [`recording`], written to `to`.
@@ -231,15 +231,46 @@ impl StationDir {
     pub fn start(self) -> Station {
         let config = self.dir.path().join("birdnet.conf");
         std::fs::write(&config, self.settings.join("\n") + "\n").expect("write config");
-        let port = free_port();
         let log_path = self.dir.path().join("station.log");
-        let log = std::fs::File::create(&log_path).expect("log file");
+        std::fs::File::create(&log_path).expect("log file");
+        let mut station = Station {
+            child: None,
+            port: free_port(),
+            dir: self.dir,
+            log_path,
+            handed: 0,
+            env: self.env,
+        };
+        station.spawn();
+        station
+    }
+}
+
+/// A running station.
+pub struct Station {
+    child: Option<Child>,
+    port: u16,
+    dir: tempfile::TempDir,
+    log_path: PathBuf,
+    handed: u32,
+    env: Vec<(String, String)>,
+}
+
+impl Station {
+    /// Start the binary on the station's configuration and port, its output
+    /// appended to the log; return once it answers.
+    fn spawn(&mut self) {
+        let config = self.dir.path().join("birdnet.conf");
+        let log = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&self.log_path)
+            .expect("log file");
         let child = Command::new(BIN)
             .args([
                 "--config",
                 &config.display().to_string(),
                 "--listen",
-                &format!("127.0.0.1:{port}"),
+                &format!("127.0.0.1:{}", self.port),
                 "--offline",
             ])
             .env_clear()
@@ -253,28 +284,73 @@ impl StationDir {
             .stderr(log)
             .spawn()
             .unwrap_or_else(|e| panic!("spawn {BIN}: {e}"));
-        let mut station = Station {
-            child: Some(child),
-            port,
-            dir: self.dir,
-            log_path,
-            handed: 0,
-        };
-        station.wait_until_up();
-        station
+        self.child = Some(child);
+        self.wait_until_up();
     }
-}
 
-/// A running station.
-pub struct Station {
-    child: Option<Child>,
-    port: u16,
-    dir: tempfile::TempDir,
-    log_path: PathBuf,
-    handed: u32,
-}
+    /// Start a stopped station again, on the same directory, configuration
+    /// and port.
+    ///
+    /// # Panics
+    ///
+    /// If it is still running.
+    pub fn restart(&mut self) {
+        assert!(self.child.is_none(), "restart a station that has stopped");
+        self.spawn();
+    }
 
-impl Station {
+    /// The directory the station lives in.
+    pub fn path(&self) -> &Path {
+        self.dir.path()
+    }
+
+    /// Send SIGTERM, as systemd does, and return how long the process took
+    /// to exit, or `None` when it had not within `limit` (it is then killed).
+    pub fn stop_within(&mut self, limit: Duration) -> Option<Duration> {
+        let mut child = self.child.take()?;
+        let sent = Instant::now();
+        let _ = Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status();
+        while sent.elapsed() < limit {
+            if child.try_wait().ok().flatten().is_some() {
+                return Some(sent.elapsed());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        None
+    }
+
+    /// Drop the whole magpie recording (30 s, not the excerpt
+    /// [`Self::hand_recording`] hands) into the watch folder.
+    pub fn hand_whole_recording(&mut self) {
+        self.handed += 1;
+        let name = format!("2026-05-19-birdnet-09:{:02}:00.wav", self.handed);
+        let watch = self.dir.path().join("watch");
+        let part = watch.join(format!(".{name}.part"));
+        std::fs::copy(recording(), &part).expect("copy the recording");
+        std::fs::rename(&part, watch.join(&name)).expect("hand the recording over");
+    }
+
+    /// Every detection's clip file name (`File_Name`), in row order.
+    pub fn clip_names(&self) -> Vec<String> {
+        let path = self.dir.path().join("data/birds.db");
+        let Ok(conn) = rusqlite::Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        ) else {
+            return Vec::new();
+        };
+        let Ok(mut stmt) =
+            conn.prepare("SELECT COALESCE(File_Name, '') FROM detections ORDER BY rowid")
+        else {
+            return Vec::new();
+        };
+        stmt.query_map([], |r| r.get(0))
+            .map_or_else(|_| Vec::new(), |rows| rows.filter_map(Result::ok).collect())
+    }
     fn wait_until_up(&mut self) {
         let deadline = Instant::now() + UP_WITHIN;
         loop {
