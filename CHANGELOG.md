@@ -216,6 +216,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Perch v2 has a second origin (MDL-12).** `--install-model perch-v2`, the install panel and the station's
+  own repair fetch `perch-v2.onnx` from this project's `models-perch-v2` release first and from Hugging Face
+  after it, each held to the same sha256 and size. The release carries the Apache License 2.0 text and a notice
+  saying the file is an ONNX conversion of Google's Perch 2.0, copied unchanged.
 - **A station starts on the models that load (MDL-02, MDL-04, MDL-05).** A second classifier whose file is
   missing, damaged or the wrong shape is left out and named, and the primary keeps detecting; it used to stop
   all detection. An occurrence filter that cannot be used (file unusable, labels missing, no coordinates) is

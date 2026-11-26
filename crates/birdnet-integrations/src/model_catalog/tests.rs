@@ -394,8 +394,8 @@ fn the_catalogue_is_what_this_build_was_verified_against() {
 /// MDL-12: every downloaded file has its origins in order — this project's
 /// release first, then the publisher's — and V3.0 and its labels fall back to
 /// the Zenodo record the shell installers used, and the geomodel to the
-/// upstream birdnet-team release. Perch's only origin is Hugging Face until a
-/// release of this project's exists.
+/// upstream birdnet-team release. Perch comes from this project's
+/// `models-perch-v2` release first (published 2026-11-26), then Hugging Face.
 ///
 /// Observed failing on the catalogue before this change: the V3.0 model had
 /// one origin, `["https://github.com/tomtom215/BirdNet-Behavior/releases/
@@ -440,7 +440,13 @@ fn every_download_has_its_origins_in_order() {
         );
     }
     let perch = find("perch-v2").expect("entry");
-    assert_eq!(model_origins(perch), vec![perch.model_url]);
+    assert_eq!(
+        model_origins(perch),
+        vec![
+            format!("{RELEASE}models-perch-v2/perch-v2.onnx").as_str(),
+            perch.model_url
+        ]
+    );
     assert!(
         perch
             .model_url

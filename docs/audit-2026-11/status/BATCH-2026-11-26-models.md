@@ -25,7 +25,7 @@ not repeat it; "session run" means this session ran it on the integrated tree.
 | MDL-21 | `3100422` | done: a stop writes its backlog to `clip-queue/` and exits; the next start replays it |
 | MDL-19 | `f91f96a`, `0b3e753`, `ab0b1d0` | done: `serve` 1,051 lines to 96, `run_daemon` 568 to 46, `start_detection_daemon` split; the allow gate |
 | MDL-18 | `f91f96a`, `0f9c5a9` | in_progress: the station harness and the systemd real-install check exist; the container half is not written |
-| MDL-12 | `ece8963`, `6e13605` | in_progress: ordered origins everywhere; Perch's project mirror is written and not published |
+| MDL-12 | `ece8963`, `6e13605`, and the commit after the batch that adds the mirror | done: ordered origins everywhere; Perch's `models-perch-v2` release was published on 2026-11-26 after the batch merged and is its first origin |
 | MDL-22, MDL-23 | | open |
 | MDL-24 to MDL-28 | | new, open |
 
@@ -136,12 +136,11 @@ unit-tested (it would stop the test process).
 - macOS, and a real Raspberry Pi.
 - The repair against a slow or unreachable internet. The "down" origin in the tests is a closed local port.
 - The loss of queued detections on the old code. Only the stop time was reproduced (29 s against the unit's 30).
-- `model-e2e.yml` and the `perch-v2` publish job as GitHub runs them, before this pull request's own run.
+- `model-e2e.yml` as GitHub runs it, before this pull request's own run (it passed there). The `perch-v2` publish job ran once, after the merge (run 45827786454, success).
 - The integration suite whole on the final commit, on this machine: see above.
 
 ## Open, from this batch
 
-- MDL-12: publish the Perch mirror (needs the maintainer's go), then add its URL to the catalogue.
 - MDL-18: the container half of `installer/test/model-e2e.sh`.
 - MDL-22: a mirror URL's credentials are printed in errors and logs.
 - MDL-23: the async-runtime scan exempts the start-up steps by name.
