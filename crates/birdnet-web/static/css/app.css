@@ -5464,6 +5464,9 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 .st-uptime-cap { margin: var(--space-4) 0 0; font-size: var(--fs-xs); color: var(--fg-3); }
 .st-source-retry { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--dawn-ink); margin-top: var(--space-8); }
 .st-source.stalled .st-source-retry { color: var(--rare); }
+/* A link inside the line (the Models board's "Repair it on the Capture tab")
+   is told apart from the text around it by more than its colour (WCAG 1.4.1). */
+.st-source-retry a { text-decoration: underline; text-underline-offset: 2px; }
 
 /* Models: the board on Station Health and the "Who heard it" card on a detection.
    Tokens only. A mark's shape and the words beside it say the state; colour only echoes it. */
