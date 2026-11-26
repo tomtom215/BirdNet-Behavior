@@ -1027,7 +1027,10 @@ of Stage 1); the installer suite from eight tests to eleven
 to **twelve** in `run-ci.sh`'s `CI_TESTS` at `8e6806f` (`container-model-cache.sh`
 from `8334255`, `geomodel-resume.sh` from `c31da32`; `pkg-manager.sh` is the
 thirteenth file and is excluded by name at `run-ci.sh:46` because it needs
-Docker). Every
+Docker; `container-model-cache.sh`, `geomodel-resume.sh`, `model-resume.sh` and
+`geomodel-fallback-quiet.sh` were deleted on 2026-11-26 with the shell
+downloaders they tested, and their cases are in
+`crates/birdnet-integrations/src/model_catalog/tests/network.rs`). Every
 figure here is from a run, not a running total — this sentence said "eight to
 ten" until the count was taken again, and said "3 567 with seven Stage 2 items"
 until both were taken again at the merge commit.

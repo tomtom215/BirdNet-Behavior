@@ -1008,20 +1008,30 @@ fn classifier_conditions(
 }
 
 fn check_models(state: &AppState, out: &mut Findings) {
-    out.extend(model_conditions(&state.models_state()));
+    out.extend(model_conditions(
+        &state.models_state(),
+        &state.metrics().model_files(),
+    ));
 }
 
 /// One condition per part of the station's models that is not what its
 /// configuration asks for, keyed `models:…`, in the words every page uses.
-fn model_conditions(models: &birdnet_core::inference::model_state::ModelsState) -> Vec<Condition> {
-    birdnet_web::model_conditions::conditions(models)
-        .into_iter()
-        .map(|c| Condition {
-            body: c.body(),
-            key: c.key,
-            title: c.title,
-        })
-        .collect()
+fn model_conditions(
+    models: &birdnet_core::inference::model_state::ModelsState,
+    files: &[birdnet_core::inference::model_state::ModelFile],
+) -> Vec<Condition> {
+    birdnet_web::model_conditions::of_station(
+        models,
+        files,
+        birdnet_core::inference::health::unix_now(),
+    )
+    .into_iter()
+    .map(|c| Condition {
+        body: c.body(),
+        key: c.key,
+        title: c.title,
+    })
+    .collect()
 }
 
 /// The Pi's own account of its power (NP-5).
@@ -1774,7 +1784,7 @@ mod tests {
                 candidates: Some(140),
             },
         };
-        assert_eq!(model_conditions(&running), [], "the counterpart");
+        assert_eq!(model_conditions(&running, &[]), [], "the counterpart");
 
         let mut broken = running;
         broken.classifiers[1].status = ClassifierStatus::left_out(
@@ -1783,7 +1793,7 @@ mod tests {
         );
         broken.occurrence_filter =
             FilterState::off(FilterOff::NoCoordinates, "set LATITUDE and LONGITUDE");
-        let found = model_conditions(&broken);
+        let found = model_conditions(&broken, &[]);
         let keys: Vec<&str> = found.iter().map(|c| c.key.as_str()).collect();
         assert_eq!(
             keys,
@@ -1803,7 +1813,7 @@ mod tests {
         broken.set_detector(DetectorState::Failed {
             why: "its model file will not load".to_owned(),
         });
-        let found = model_conditions(&broken);
+        let found = model_conditions(&broken, &[]);
         assert_eq!(found[0].key, "models:detector", "{found:?}");
         assert!(
             found[0].body.starts_with("Nothing is being identified"),

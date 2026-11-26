@@ -273,7 +273,9 @@ fn broken_models() -> Vec<(&'static str, ModelsState, &'static str)> {
         "`perch` is not running",
     ));
     let mut unrouted = running_models();
-    unrouted.classifiers[1].status = ClassifierStatus::Unrouted;
+    unrouted.classifiers[1].status = ClassifierStatus::Unrouted {
+        primary: "birdnet".to_owned(),
+    };
     out.push((
         "a second classifier is unrouted",
         unrouted,

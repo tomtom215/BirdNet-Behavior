@@ -233,7 +233,11 @@ async fn gather(state: &AppState) -> Snapshot {
                 })
             },
         );
-        let model_conditions = crate::model_conditions::conditions(&published);
+        let model_conditions = crate::model_conditions::of_station(
+            &published,
+            &state.metrics().model_files(),
+            birdnet_core::inference::health::unix_now(),
+        );
         let install_offer = install_offer(&setup, &model_conditions);
 
         let vitals = build_vitals(&sys, disk.as_ref(), scratch.as_ref());

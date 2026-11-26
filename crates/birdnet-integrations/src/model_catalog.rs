@@ -341,7 +341,10 @@ pub const CATALOG: &[CatalogEntry] = &[
         licence_cited_from: "the model card of huggingface.co/justinchuby/Perch-onnx at the \
                              pinned revision (license: apache-2.0), read 2026-11-25; the \
                              labels' source, cgeorgiaw/Perch, declares the same \
-                             (crates/birdnet-core/data/labels/README.md)",
+                             (crates/birdnet-core/data/labels/README.md); Google's own page \
+                             for the model, kaggle.com/models/google/bird-vocalization-classifier, \
+                             read 2026-11-26, says \"Licensed under the Apache License, Version \
+                             2.0\" and names this ONNX conversion",
         model_sha256: "bf0c8467a924cb074663970ca4a0ab1e143602121930209657d0dff5d5cefa1f",
         model_bytes: 409_148_616,
         legacy_model_name: None,

@@ -558,7 +558,11 @@ pub(super) fn gather_for_badge(state: &AppState) -> (Vec<Issue>, Option<bool>) {
         .map(|(id, _)| id)
         .collect();
     let admits_nothing = state.metrics().occurrence_filter().admits_nothing();
-    let models = crate::model_conditions::conditions(&state.models_state());
+    let models = crate::model_conditions::of_station(
+        &state.models_state(),
+        &state.metrics().model_files(),
+        birdnet_core::inference::health::unix_now(),
+    );
     let capture_down = matches!(live_capture_state(state), CaptureState::Down);
     // A bounded read of one folder's names; cheap enough for every poll.
     let recordings_folder = state

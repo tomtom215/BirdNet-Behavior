@@ -431,6 +431,24 @@ mod tests {
             cli.metadata_labels.is_none(),
             "the named labels are the config's"
         );
+        // A filter turned off on purpose stays off, with the filter's file
+        // right there.
+        let cfg = config_with(&[
+            ("MODEL_PATH", v3.to_str().unwrap()),
+            ("METADATA_MODEL_PATH", "off"),
+        ]);
+        let mut cli = bare();
+        assert!(!apply_here(&mut cli, Some(&cfg), dir.path()).range_filter);
+        assert!(cli.metadata_model.is_none());
+        let mut cli = Cli::parse_from([
+            "birdnet-behavior",
+            "--model",
+            v3.to_str().unwrap(),
+            "--metadata-model",
+            "off",
+        ]);
+        assert!(!apply_here(&mut cli, None, dir.path()).range_filter);
+        assert_eq!(cli.metadata_model.as_deref(), Some(Path::new("off")));
         let own = dir.path().join("own.onnx");
         let cfg = config_with(&[("MODEL_PATH", own.to_str().unwrap())]);
         let mut cli = bare();

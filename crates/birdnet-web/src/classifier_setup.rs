@@ -720,7 +720,7 @@ fn classifier_file(
                 fault: ClassifierFault::FileMissing | ClassifierFault::WillNotLoad,
                 ..
             } if !verified => (PartState::Damaged, Some(c.message())),
-            ClassifierStatus::Unrouted | ClassifierStatus::LeftOut { .. } => {
+            ClassifierStatus::Unrouted { .. } | ClassifierStatus::LeftOut { .. } => {
                 (PartState::NotUsed, Some(c.message()))
             }
         },
@@ -1148,7 +1148,12 @@ mod tests {
         assert!(!snap.installs_fix("models:classifier:perch"));
 
         // Loaded and unrouted: not used, with the route that reaches it.
-        let snap = setup(started).snapshot(true, &with_perch(ClassifierStatus::Unrouted));
+        let snap = setup(started).snapshot(
+            true,
+            &with_perch(ClassifierStatus::Unrouted {
+                primary: "birdnet".to_owned(),
+            }),
+        );
         assert_eq!(snap.files[1].state, PartState::NotUsed);
         assert!(
             snap.files[1]

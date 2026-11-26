@@ -139,7 +139,9 @@ async fn an_optional_model_not_running_is_named_and_is_not_a_strict_fault() {
         }),
         ("models:classifier:perch", |s| {
             let mut c = s.models_state().classifiers;
-            c[1].status = ClassifierStatus::Unrouted;
+            c[1].status = ClassifierStatus::Unrouted {
+                primary: "birdnet".to_owned(),
+            };
             s.metrics().set_classifier_states(c);
         }),
         ("models:occurrence-filter", |s| {

@@ -1010,7 +1010,11 @@ async fn today_nudge_partial(State(state): State<AppState>) -> impl IntoResponse
     let html = tokio::task::spawn_blocking(move || {
         let clock_synced = state.metrics().clock_synced();
         state.with_read_db(|conn| {
-            let models = crate::model_conditions::conditions(&state.models_state());
+            let models = crate::model_conditions::of_station(
+                &state.models_state(),
+                &state.metrics().model_files(),
+                birdnet_core::inference::health::unix_now(),
+            );
             let setup = crate::routes::admin::classifier::snapshot_of(&state);
             let notices = standing_notices(&models, &setup, location_is_set(conn), clock_synced);
             // Not defaulted: this strip is "absent entirely when nothing waits",

@@ -311,7 +311,11 @@ async fn health(
     // for an optional file is a pager taught to be ignored. Each is in the
     // body either way, with what to do.
     let models = state.models_state();
-    let model_conditions = crate::model_conditions::conditions(&models);
+    let model_conditions = crate::model_conditions::of_station(
+        &models,
+        &state.metrics().model_files(),
+        birdnet_core::inference::health::unix_now(),
+    );
     let not_identifying = model_conditions.iter().any(|c| c.stops_detection);
     let degraded = !db_ok
         || ingest_halted
@@ -370,6 +374,9 @@ async fn health(
             // them), and the conditions the dashboard shows for them.
             "models": models,
             "model_conditions": model_conditions,
+            // Each catalogue model file the configuration names, and what the
+            // station is doing about it when it is missing or damaged.
+            "model_files": state.metrics().model_files(),
             "data_volume": volume.map_or_else(|| json!("unchecked"), |v| json!(v)),
             "admin_bootstrap": if bootstrap_failed { "failed" } else { "ok" },
             "boot_anomalies": boot_anomalies

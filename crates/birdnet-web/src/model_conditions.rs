@@ -28,6 +28,12 @@
 //! * the occurrence filter **off** for a reason other than "none is
 //!   configured": no coordinates, its model or labels missing or unusable.
 //!
+//! * a model file the station found **missing or damaged** and is fetching
+//!   again, could not fetch, may not fetch, or has fetched and cannot load
+//!   without a restart nothing here can give it (MDL-10). The station repairs
+//!   its own files; this is where its owner reads that it is doing so, and
+//!   when it will try next.
+//!
 //! Three states are deliberately not conditions:
 //!
 //! * the detector **starting** (the first seconds of a start) and **web
@@ -39,7 +45,8 @@
 //! * a filter that is **not configured**: a station may run without one.
 
 use birdnet_core::inference::model_state::{
-    ClassifierFault, ClassifierStatus, DetectorState, FilterOff, FilterState, ModelsState,
+    ClassifierFault, ClassifierStatus, DetectorState, FilterOff, FilterState, ModelFile,
+    ModelsState, RepairRestart, RepairState,
 };
 use serde::Serialize;
 
@@ -116,7 +123,7 @@ pub fn conditions(models: &ModelsState) -> Vec<ModelCondition> {
                 "Classifier left out",
                 format!("Classifier \"{}\" is not running", c.id),
             ),
-            ClassifierStatus::Unrouted => (
+            ClassifierStatus::Unrouted { .. } => (
                 "Classifier unused",
                 format!("Classifier \"{}\" judges nothing", c.id),
             ),
@@ -137,6 +144,119 @@ pub fn conditions(models: &ModelsState) -> Vec<ModelCondition> {
     }));
     out.extend(filter_condition(&models.occurrence_filter));
     out
+}
+
+/// The episode key of one model file's condition.
+#[must_use]
+pub fn file_key(file: &ModelFile) -> String {
+    format!(
+        "{KEY_PREFIX}file:{}",
+        file.path.file_name().map_or_else(
+            || file.catalogue_id.clone(),
+            |n| n.to_string_lossy().into_owned()
+        )
+    )
+}
+
+/// Every condition of the station's models: [`conditions`], then one for each
+/// model file the station is repairing or could not repair ([`file_conditions`]).
+/// This is what every surface calls.
+#[must_use]
+pub fn of_station(models: &ModelsState, files: &[ModelFile], now_unix: u64) -> Vec<ModelCondition> {
+    let mut out = conditions(models);
+    out.extend(file_conditions(files, now_unix));
+    out
+}
+
+/// One condition per model file the station found missing or damaged and has
+/// not finished putting right (MDL-10). A file that is being checked, that
+/// verifies, that was repaired and is in use, or that the station is
+/// restarting to load right now, is not one.
+#[must_use]
+pub fn file_conditions(files: &[ModelFile], now_unix: u64) -> Vec<ModelCondition> {
+    files
+        .iter()
+        .filter_map(|file| {
+            let name = file.path.file_name().map_or_else(
+                || file.path.display().to_string(),
+                |n| n.to_string_lossy().into_owned(),
+            );
+            let (label, title, sentence) = match &file.repair {
+                RepairState::Checking
+                | RepairState::Verified
+                | RepairState::Repaired {
+                    restart: RepairRestart::NotNeeded | RepairRestart::Restarting,
+                    ..
+                } => return None,
+                RepairState::Fetching { done, total, .. } => (
+                    "Fetching a model",
+                    "A model file is being fetched again",
+                    format!(
+                        "the model file {name} was missing or damaged, and the station is \
+                         fetching it again ({} % so far); nothing needs doing",
+                        done.saturating_mul(100)
+                            .checked_div(*total)
+                            .unwrap_or(0)
+                            .min(100)
+                    ),
+                ),
+                RepairState::WillRetry {
+                    at_unix,
+                    attempts,
+                    why,
+                } => (
+                    "Model not fetched",
+                    "A model file could not be fetched again",
+                    format!(
+                        "the model file {name} is missing or damaged, and {attempts} \
+                         {} to fetch it again failed ({why}); the station tries again {}",
+                        if *attempts == 1 {
+                            "attempt"
+                        } else {
+                            "attempts"
+                        },
+                        in_about(at_unix.saturating_sub(now_unix))
+                    ),
+                ),
+                RepairState::NotFetched { why, .. } => (
+                    "Model not fetched",
+                    "A model file is missing or damaged and is not being fetched",
+                    format!(
+                        "the model file {name} is missing or damaged, and the station is not \
+                         fetching it: {why}"
+                    ),
+                ),
+                RepairState::Repaired {
+                    restart: RepairRestart::NeededByHand,
+                    ..
+                } => (
+                    "Restart needed",
+                    "A repaired model file needs a restart",
+                    format!(
+                        "the model file {name} was fetched again and verifies; restart the \
+                         station to use it"
+                    ),
+                ),
+            };
+            Some(ModelCondition {
+                key: file_key(file),
+                state: file.repair.code(),
+                label,
+                title: title.to_owned(),
+                sentence,
+                stops_detection: false,
+            })
+        })
+        .collect()
+}
+
+/// "in about 40 minutes", for a wait in seconds.
+fn in_about(secs: u64) -> String {
+    match secs.div_ceil(60) {
+        0 | 1 => "within a minute".to_owned(),
+        m if m < 90 => format!("in about {m} minutes"),
+        m => format!("in about {} hours", (m + 30) / 60),
+    }
 }
 
 /// The detector's condition, when it has one.
@@ -366,7 +486,9 @@ mod tests {
     #[test]
     fn an_unrouted_classifier_is_a_condition_with_the_route_to_add() {
         let mut state = healthy();
-        state.classifiers[1].status = ClassifierStatus::Unrouted;
+        state.classifiers[1].status = ClassifierStatus::Unrouted {
+            primary: "birdnet".to_owned(),
+        };
         let found = conditions(&state);
         assert_eq!(found.len(), 1, "{found:?}");
         assert_eq!(
@@ -374,7 +496,7 @@ mod tests {
             ("unrouted", "Classifier unused")
         );
         assert!(
-            found[0].sentence.contains("local:<primary>+perch"),
+            found[0].sentence.contains("local:birdnet+perch"),
             "{}",
             found[0].sentence
         );
@@ -425,13 +547,101 @@ mod tests {
     #[test]
     fn every_key_is_in_the_models_family() {
         let mut state = healthy();
-        state.classifiers[1].status = ClassifierStatus::Unrouted;
+        state.classifiers[1].status = ClassifierStatus::Unrouted {
+            primary: "birdnet".to_owned(),
+        };
         state.occurrence_filter = FilterState::off(FilterOff::NoCoordinates, "x");
         state.set_detector(DetectorState::Stopped);
-        state.classifiers[1].status = ClassifierStatus::Unrouted;
+        state.classifiers[1].status = ClassifierStatus::Unrouted {
+            primary: "birdnet".to_owned(),
+        };
         state.occurrence_filter = FilterState::off(FilterOff::NoCoordinates, "x");
         let found = conditions(&state);
         assert_eq!(found.len(), 3, "{found:?}");
         assert!(found.iter().all(|c| c.key.starts_with(KEY_PREFIX)));
+    }
+
+    /// MDL-10 on the pages: a file the station is repairing, could not fetch,
+    /// may not fetch, or cannot load without a restart by hand is a condition
+    /// that says what the station is doing and when it tries next; a file that
+    /// is fine, or repaired and in use, is none.
+    #[test]
+    fn a_file_under_repair_is_a_condition_and_a_good_file_is_not() {
+        let file = |repair| ModelFile {
+            catalogue_id: "birdnet-v24".to_owned(),
+            path: PathBuf::from("/var/lib/birdnet/models/birdnet-v24.onnx"),
+            repair,
+        };
+        let quiet = [
+            file(RepairState::Checking),
+            file(RepairState::Verified),
+            file(RepairState::Repaired {
+                at_unix: 5,
+                restart: RepairRestart::NotNeeded,
+            }),
+            file(RepairState::Repaired {
+                at_unix: 5,
+                restart: RepairRestart::Restarting,
+            }),
+        ];
+        assert_eq!(file_conditions(&quiet, 1_000), []);
+        assert_eq!(of_station(&healthy(), &quiet, 1_000), []);
+
+        let loud = [
+            file(RepairState::Fetching {
+                since_unix: 990,
+                done: 25,
+                total: 100,
+            }),
+            file(RepairState::WillRetry {
+                at_unix: 1_000 + 40 * 60,
+                attempts: 3,
+                why: "no route to host".to_owned(),
+            }),
+            file(RepairState::NotFetched {
+                why: "the station is offline".to_owned(),
+                looks_again_unix: 2_000,
+            }),
+            file(RepairState::Repaired {
+                at_unix: 5,
+                restart: RepairRestart::NeededByHand,
+            }),
+        ];
+        let found = of_station(&healthy(), &loud, 1_000);
+        let read: Vec<(&str, &str)> = found
+            .iter()
+            .map(|c| (c.state, c.sentence.as_str()))
+            .collect();
+        assert_eq!(
+            read,
+            [
+                (
+                    "fetching",
+                    "the model file birdnet-v24.onnx was missing or damaged, and the station is \
+                     fetching it again (25 % so far); nothing needs doing"
+                ),
+                (
+                    "will_retry",
+                    "the model file birdnet-v24.onnx is missing or damaged, and 3 attempts to \
+                     fetch it again failed (no route to host); the station tries again in about \
+                     40 minutes"
+                ),
+                (
+                    "not_fetched",
+                    "the model file birdnet-v24.onnx is missing or damaged, and the station is \
+                     not fetching it: the station is offline"
+                ),
+                (
+                    "repaired",
+                    "the model file birdnet-v24.onnx was fetched again and verifies; restart the \
+                     station to use it"
+                ),
+            ]
+        );
+        assert!(
+            found
+                .iter()
+                .all(|c| !c.stops_detection && c.key == "models:file:birdnet-v24.onnx")
+        );
     }
 }

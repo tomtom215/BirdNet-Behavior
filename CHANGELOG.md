@@ -26,6 +26,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The station repairs its own model files (MDL-10).** A model file the configuration names that is missing or
+  damaged is fetched again in the background, with the catalogue's retries and then once an hour
+  (`BIRDNET_MODEL_REPAIR_INTERVAL`, seconds), and the station restarts once to load a file it started without.
+  A file that verifies and still will not load causes no second restart. `--offline` fetches from
+  `BIRDNET_MODEL_MIRROR` only. The state is in `model_files` on `/api/v2/health`, in
+  `birdnet_model_file_state{file,state}`, and on Today, Station Health and the header badge while it lasts.
+  A station installed with `BIRDNET_SKIP_MODEL` and configured for a catalogue file now fetches it too.
+- **`METADATA_MODEL_PATH=off`** (or `none`; `--metadata-model`, `BIRDNET_METADATA_MODEL` the same) runs without
+  an occurrence filter on purpose: none is loaded or adopted, and nothing warns.
+- **A real-install check (MDL-18, systemd half).** `installer/test/model-e2e.sh` and the `model-e2e` workflow
+  install this tree's binary on a real systemd host, download the real models, require a stored *Pica pica*,
+  then damage each model file and require it fetched again. The container half is not written.
+- **Every new clippy allow must say why.** `tests/every_clippy_allow_says_why.rs` holds the number of allows
+  without a `reason` per file, and of `too_many_lines` allows in the tree (26), to counts that only go down.
 - **The station says what its models are doing (MDL-01, MDL-03, MDL-06 of the 2026-11 audit).** The detector, each
   classifier and the occurrence filter publish a state with a reason: `birdnet_detector_state{state}`,
   `birdnet_classifier_state{classifier,state}`, `birdnet_occurrence_filter_state{state}` and
@@ -336,6 +350,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Stopping with a backlog took 30 to 50 seconds and lost what systemd's kill cut off (MDL-21).** The unit
+  allows 30. Detections not yet processed are now written to `clip-queue/` beside the database with their
+  recordings and replayed at the next start; a stop with 200 queued took 0.5 s here, against 29 s before.
+- **Three model messages**: "no the classifier", a missing second classifier described as "treated as
+  unaffordable", and a route hint that printed a literal `<primary>`.
+- **`--doctor` reported a filter turned off on purpose as a missing file.**
 - **A V2.4 station was offered "Repair" for a labels file that belonged to another model**, which no install
   could fix. Repair is offered only where an install changes the file at fault.
 - **A failed filter step after a successful classifier step was reported as success** by the install panel.

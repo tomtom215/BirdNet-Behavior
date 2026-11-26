@@ -176,7 +176,7 @@ pub fn with_configured(
                     note: None,
                     ..blank(c, ModelState::Waiting)
                 }),
-                ClassifierStatus::Unrouted => ModelCard {
+                ClassifierStatus::Unrouted { .. } => ModelCard {
                     lead: windows.and_then(|w| w.lead),
                     ..blank(c, ModelState::Unrouted)
                 },
@@ -485,7 +485,13 @@ mod tests {
                     "its model file /m/perch.onnx will not load; install it again",
                 ),
             ),
-            configured("bats", false, ClassifierStatus::Unrouted),
+            configured(
+                "bats",
+                false,
+                ClassifierStatus::Unrouted {
+                    primary: "birdnet".to_owned(),
+                },
+            ),
         ];
         let health = vec![
             ("birdnet".to_owned(), ok(10, 990)),

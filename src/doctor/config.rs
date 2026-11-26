@@ -185,6 +185,13 @@ pub(super) fn check_occurrence_filter(cli: &Cli, config: Option<&Config>) -> Che
         );
     };
 
+    if birdnet_core::inference::model_state::occurrence_filter_turned_off(&model) {
+        return Check::pass(
+            NAME,
+            "turned off on purpose (METADATA_MODEL_PATH is `off` or `none`): every species the classifier knows stays a candidate wherever the station is",
+        );
+    }
+
     if !model.exists() {
         return Check::fail(
             NAME,
@@ -1829,6 +1836,22 @@ mod occurrence_filter_gates {
             check_occurrence_filter(&cli_from(&[]), Some(&cfg)).status,
             Status::Fail
         );
+    }
+
+    /// A filter turned off on purpose is not a missing file: the doctor says
+    /// it is off because the owner said so. The counterpart, a path that is
+    /// not there, is `a_configured_but_missing_model_fails`.
+    #[test]
+    fn a_filter_turned_off_on_purpose_is_not_a_missing_file() {
+        for value in ["off", "OFF", "none"] {
+            let cfg = Config::parse(&format!(
+                "LATITUDE=52.5200\nLONGITUDE=13.4050\nMETADATA_MODEL_PATH={value}"
+            ))
+            .unwrap();
+            let check = check_occurrence_filter(&cli_from(&[]), Some(&cfg));
+            assert_eq!(check.status, Status::Pass, "{value}: {}", check.message);
+            assert!(check.message.contains("on purpose"), "{}", check.message);
+        }
     }
 
     /// A model without coordinates cannot run: the model takes latitude and

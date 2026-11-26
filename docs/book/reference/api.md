@@ -53,6 +53,9 @@ curl http://localhost:8502/api/v2/health
     "occurrence_filter": { "state": "active", "candidates": 137 }
   },
   "model_conditions": [],
+  "model_files": [
+    { "catalogue_id": "birdnet-v24", "path": "/data/model/birdnet-v24.onnx", "repair": { "state": "verified" } }
+  ],
   "data_volume": {
     "writable": true,
     "mount": "intact",
@@ -118,7 +121,7 @@ reaches it) or `left_out` with a `fault` (`file_missing`, `will_not_load`,
 `labels_missing`, `labels_unreadable`, `detector_not_running`) and a `why`.
 `model_conditions` lists each part that is not what the configuration asks
 for, as the header badge, Station health and the Today page show it: a `key`
-(`models:detector`, `models:classifier:<id>`, `models:occurrence-filter`), the
+(`models:detector`, `models:classifier:<id>`, `models:occurrence-filter`, `models:file:<file name>`), the
 `state` code, a `label`, a `title`, a `sentence` that says what to do, and
 `stops_detection`. A detector that is not running is said once, not again for
 each classifier and the filter it took with it; a filter that is
@@ -128,6 +131,13 @@ classifier left out or unrouted and a filter that is off leave the station
 identifying birds with its primary, and are reported here and on every page
 instead. The same conditions are raised as station-health conditions under
 those keys.
+
+`model_files` lists each catalogue model file the configuration names and what
+the station is doing about it: `checking`, `verified`, `fetching` (`done` and
+`total` bytes), `will_retry` (`at_unix`, `attempts`, `why`), `not_fetched`
+(`why`) or `repaired` (`restart`: `not_needed`, `restarting`,
+`needed_by_hand`). A file that is being fetched, could not be, may not be, or
+needs a restart by hand is also a `model_conditions` entry.
 
 `boot_anomalies` is what the boot journal found this start changed since the
 last one: `db_lost` (the database held detections at the last start and holds
