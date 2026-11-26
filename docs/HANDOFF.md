@@ -12,6 +12,57 @@ findings in 18 work packages, with a checklist in `docs/audit-2026-11/checklist.
 this document against the tree and GitHub; work package WP-00 corrected the header, sections 1, 2, 5 and 6 from it,
 re-running each command named below on 2026-11-22.
 
+**2026-11-26: the newest entry; start here.** Since 2026-11-24 the audit has been worked in batches, one pull request
+each, and each batch has a status file in `docs/audit-2026-11/status/` that says what changed, what the session ran
+and what it did not: `BATCH-2026-11-24.md`, `BATCH-2026-11-25.md`, `BATCH-2026-11-26.md` (merged as #310) and
+`BATCH-2026-11-26-models.md` (the fourth, this entry). `checklist.json` is the state of every finding; count it, do
+not trust a count written here (`python3 -c "import json,collections; print(collections.Counter(r['status'] for r in
+json.load(open('docs/audit-2026-11/checklist.json'))['items']))"`).
+
+*The fourth batch* made the station's models hold to one promise: it identifies birds with the models its
+configuration names, keeps identifying with the rest when one cannot be used, says so on every health surface, and
+fetches a missing or damaged file again itself. HANDOFF_VERIFIED_PLACEHOLDER
+
+*How the batches are run, and what to keep.* One promise at a time, in this order of method: write down what the
+station promises its owner; break each promise on a real install (the built binary, real model files, a real
+systemd where the question is about the unit); fix by an invariant in one place that every surface reads; prove it
+with a test that injects the failure and was seen red. Delegated lanes work in their own git worktrees on files no
+other lane touches, with a written brief, and the session integrates, reruns and looks. **Two lanes at a time, not
+six:** this container has 4 cores and a fixed disk allowance that every lane's `target/` draws on, and the seams
+between lanes (a type one lane changed under another, a state one lane published that the other did not
+render) are found only at integration. That is the session's judgement from batches 3 and 4, not a measurement. Each lane sets `CARGO_INCREMENTAL=0` and `CARGO_PROFILE_DEV_DEBUG=0`, uses
+one feature set, and deletes its `target/` when it finishes.
+
+*What the next session does first.*
+1. Read `BATCH-2026-11-26-models.md`, section "Open, from this batch". If the maintainer has said go, run the
+   `perch-v2` choice of the "Publish model release" workflow, download the asset and check its sha256 against the
+   catalogue's pin, then add the release URL as Perch's first `mirror_urls` entry (MDL-12). The licence was read at
+   Google's own page on 2026-11-26 and is Apache-2.0; nothing has been published.
+2. Write the container half of `installer/test/model-e2e.sh` (MDL-18) and look at the first runs of
+   `model-e2e.yml` on GitHub; it had never run there before this batch's pull request.
+3. Then the remaining promises, one batch each, in this order. For each, start by breaking it on a real install
+   and writing the findings file before any fix, as `10-model-delivery.md` did for the models.
+   1. **It notifies and uploads**: BirdWeather, Apprise, MQTT, email, the weekly report. What happens to each when
+      the network is down for a day, the credentials are wrong, or the receiver answers 500; what the owner sees.
+   2. **It backs up and restores**: N26-01 (the configuration file is in no backup on a standard install), A-24
+      (`apprise.txt`), a restore onto a new card, a restore interrupted half way.
+   3. **It updates and rolls back**: `installer/test/upgrade-e2e.sh` on a real systemd; an update interrupted, a
+      new binary that will not start, the last-good configuration.
+   4. **It keeps its records**: a database that is corrupt, locked, on a full disk or on a card that goes
+      read-only; N26-02 (OGG clips are invisible to the disk manager); N25-11 (watch directory equal to the
+      recordings directory).
+   5. **It hears**: a microphone unplugged and replugged, an RTSP camera that stops answering, a sample rate the
+      card refuses; capture loss must be told to the owner like a model fault now is.
+   6. **A BirdNET-Pi owner can move in**: the migration on a real BirdNET-Pi database and recordings folder.
+4. Owed from earlier batches and not started: a per-file coverage floor for the start-up code (MDL-26); the 26
+   `too_many_lines` allows, `event_processor` and `start_disk_manager` among them, and 395 clippy allows with no
+   reason (MDL-24; `tests/every_clippy_allow_says_why.rs` only stops both numbers rising); N26-09 (chart axis
+   labels at 360 and 320 px); OOB-20's location half; RES-32's stamp on a run; the README half of N25-15, which
+   waits for pull request #308 (a draft the maintainer owns: do not merge it and do not edit `README.md`).
+5. Decisions that are the maintainer's, new in this batch: MDL-27 (a `BIRDNET_SKIP_MODEL` station now fetches its
+   models itself; `--offline` is the opt-out), and whether a left-out second classifier should fail strict health
+   (it does not: the station is still identifying birds).
+
 **2026-11-23: WP-03 is done, on branch `claude/serene-newton-p4ay8h`** (code `54859c7`; docs, checklist and this
 entry in the commit after it). All three findings closed and one added. ACC-02: each analysed file's filters return a
 `FilterTally` (windows masked for a voice or a noise; species detections removed by privacy, noise, corroboration, the
@@ -910,7 +961,8 @@ it says otherwise.
 **Start at `docs/audit-2026-11/README.md`**: one work package per pull request, in its order. WP-00 (the Clippy fix,
 the mutation budgets, this file's corrections) is done; its "Item zero" line has the commit. WP-01 is done but for MMP-21's
 later items (see the 2026-11-23 paragraph at the top); WP-02 is done but for MMP-25 (its paragraph at the top); WP-03 is
-done (its paragraph at the top); the next package is WP-04.
+done (its paragraph at the top); the next package is WP-04. **Superseded on 2026-11-26:** the work has since gone by
+batches; the entry dated 2026-11-26 at the top of this file says where to start.
 
 **0.19.0 is released** (read 2026-11-22): the pull request that fixed `sel` merged (#277, `ec6f71e`); `v0.19.0` was
 moved to that commit (`git ls-remote --tags origin 'v0.19.0*'`); its Release run (41311659073) and Docs run

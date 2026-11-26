@@ -194,8 +194,8 @@ pub fn file_conditions(files: &[ModelFile], now_unix: u64) -> Vec<ModelCondition
                     "Fetching a model",
                     "A model file is being fetched again",
                     format!(
-                        "the model file {name} was missing or damaged, and the station is \
-                         fetching it again ({} % so far); nothing needs doing",
+                        "the model file {name} was missing or damaged: the station is \
+                         fetching it again ({} % so far), and nothing needs doing",
                         done.saturating_mul(100)
                             .checked_div(*total)
                             .unwrap_or(0)
@@ -210,8 +210,8 @@ pub fn file_conditions(files: &[ModelFile], now_unix: u64) -> Vec<ModelCondition
                     "Model not fetched",
                     "A model file could not be fetched again",
                     format!(
-                        "the model file {name} is missing or damaged, and {attempts} \
-                         {} to fetch it again failed ({why}); the station tries again {}",
+                        "the model file {name} is missing or damaged: {attempts} \
+                         {} to fetch it again failed ({why}), and the station tries again {}",
                         if *attempts == 1 {
                             "attempt"
                         } else {
@@ -224,8 +224,8 @@ pub fn file_conditions(files: &[ModelFile], now_unix: u64) -> Vec<ModelCondition
                     "Model not fetched",
                     "A model file is missing or damaged and is not being fetched",
                     format!(
-                        "the model file {name} is missing or damaged, and the station is not \
-                         fetching it: {why}"
+                        "the model file {name} is missing or damaged: the station is not \
+                         fetching it; {why}"
                     ),
                 ),
                 RepairState::Repaired {
@@ -235,7 +235,7 @@ pub fn file_conditions(files: &[ModelFile], now_unix: u64) -> Vec<ModelCondition
                     "Restart needed",
                     "A repaired model file needs a restart",
                     format!(
-                        "the model file {name} was fetched again and verifies; restart the \
+                        "the model file {name} was fetched again and verifies: restart the \
                          station to use it"
                     ),
                 ),
@@ -619,23 +619,23 @@ mod tests {
             [
                 (
                     "fetching",
-                    "the model file birdnet-v24.onnx was missing or damaged, and the station is \
-                     fetching it again (25 % so far); nothing needs doing"
+                    "the model file birdnet-v24.onnx was missing or damaged: the station is \
+                     fetching it again (25 % so far), and nothing needs doing"
                 ),
                 (
                     "will_retry",
-                    "the model file birdnet-v24.onnx is missing or damaged, and 3 attempts to \
-                     fetch it again failed (no route to host); the station tries again in about \
-                     40 minutes"
+                    "the model file birdnet-v24.onnx is missing or damaged: 3 attempts to \
+                     fetch it again failed (no route to host), and the station tries again in \
+                     about 40 minutes"
                 ),
                 (
                     "not_fetched",
-                    "the model file birdnet-v24.onnx is missing or damaged, and the station is \
-                     not fetching it: the station is offline"
+                    "the model file birdnet-v24.onnx is missing or damaged: the station is \
+                     not fetching it; the station is offline"
                 ),
                 (
                     "repaired",
-                    "the model file birdnet-v24.onnx was fetched again and verifies; restart the \
+                    "the model file birdnet-v24.onnx was fetched again and verifies: restart the \
                      station to use it"
                 ),
             ]

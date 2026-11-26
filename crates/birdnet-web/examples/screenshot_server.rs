@@ -1362,6 +1362,20 @@ fn seed_model_state(state: &AppState, models: &std::path::Path) {
                 ),
             );
             seed_model_files(models);
+            // What the repair thread publishes while it cannot reach an
+            // origin (MDL-10): the pages say the station is at it, and when
+            // it tries next.
+            state
+                .metrics()
+                .set_model_file(birdnet_core::inference::model_state::ModelFile {
+                    catalogue_id: "perch-v2".to_owned(),
+                    path: classifiers[1].model_path.clone(),
+                    repair: birdnet_core::inference::model_state::RepairState::WillRetry {
+                        at_unix: birdnet_core::inference::health::unix_now() + 40 * 60,
+                        attempts: 3,
+                        why: "no origin answered".to_owned(),
+                    },
+                });
             state
                 .classifier_setup()
                 .configure(birdnet_web::classifier_setup::Layout {
