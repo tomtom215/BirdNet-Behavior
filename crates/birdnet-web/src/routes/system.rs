@@ -251,15 +251,18 @@ async fn health(
     // The status code was `db_ok` and nothing else, so this endpoint answered
     // `200 "healthy"` on a station whose own response body said
     // `"detection_daemon": "stopped"` — verified against the running binary.
-    // That is the endpoint the container `HEALTHCHECK` polls and the one every
-    // off-the-shelf monitor gets pointed at, so a station that has recorded
+    // That was the endpoint the container `HEALTHCHECK` polled and is the one
+    // every off-the-shelf monitor gets pointed at, so a station that has recorded
     // nothing since March looked green to all of them.
     //
-    // The default stays 200 deliberately. Docker restarts an unhealthy
-    // container, and a station whose daemon is down is exactly the station that
-    // must stay up to be diagnosed — restarting it in a loop destroys the
-    // journal that says why. `?strict=1` is for the monitor that should page a
-    // human, which is a different consumer with a different correct answer.
+    // The default stays 200 deliberately: it is liveness, for whatever
+    // restarts a process that has stopped answering, and a station whose
+    // detector is down is exactly the station that must stay up to be
+    // diagnosed. `?strict=1` is for the monitor that should page a human, and
+    // since MDL-03 for the container `HEALTHCHECK` too: Docker does not restart
+    // a container for being unhealthy, and "healthy" in `docker ps` over a
+    // station that has identified nothing since it started was the same lie
+    // this endpoint used to tell.
     let strict = flag_is_set(q.strict.as_ref());
     // PS-5. A station whose detection writes have been halted is degraded on
     // every reading of the word, `?strict` or not: it is running, it is
@@ -298,11 +301,24 @@ async fn health(
     // or never fire for, when another classifier is still answering.
     let classifiers = state.metrics().model_health();
     let classifier_failing = classifiers.iter().any(|(_, h)| h.is_failing());
+    // What became of the station's models (MDL-03), decided where every page
+    // decides it. A detector that is not running is a strict fault on the same
+    // terms as the daemon flag, which it agrees with on a station whose start
+    // published both; reading the published state as well means a flag left
+    // set cannot hide a detector that says it failed. A second classifier left
+    // out or unrouted, and an occurrence filter that is off, are not: the
+    // station is still identifying birds with its primary, and a pager woken
+    // for an optional file is a pager taught to be ignored. Each is in the
+    // body either way, with what to do.
+    let models = state.models_state();
+    let model_conditions = crate::model_conditions::conditions(&models);
+    let not_identifying = model_conditions.iter().any(|c| c.stops_detection);
     let degraded = !db_ok
         || ingest_halted
         || loses_writes
         || (strict
             && (!daemon_running
+                || not_identifying
                 || volume_fault
                 || bootstrap_failed
                 || !boot_anomalies.is_empty()
@@ -349,6 +365,11 @@ async fn health(
                     "error_class": h.error_class.map(birdnet_core::inference::health::ErrorClass::as_str),
                 }))
                 .collect::<Vec<_>>(),
+            // The detector, each configured classifier and the occurrence
+            // filter, one state each (`state` codes as the metrics export
+            // them), and the conditions the dashboard shows for them.
+            "models": models,
+            "model_conditions": model_conditions,
             "data_volume": volume.map_or_else(|| json!("unchecked"), |v| json!(v)),
             "admin_bootstrap": if bootstrap_failed { "failed" } else { "ok" },
             "boot_anomalies": boot_anomalies

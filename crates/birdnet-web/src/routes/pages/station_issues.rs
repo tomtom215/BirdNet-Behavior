@@ -88,6 +88,9 @@ pub(super) struct Facts<'a> {
     pub(super) source_names: &'a HashMap<String, String>,
     pub(super) filter_admits_nothing: bool,
     pub(super) failing_classifiers: &'a [String],
+    /// What the station's models are doing that its configuration did not
+    /// ask for ([`crate::model_conditions::conditions`]).
+    pub(super) models: &'a [crate::model_conditions::ModelCondition],
     /// What a scan of the folder the daemon watches found; `None` when the
     /// folder is not known or cannot be read.
     pub(super) recordings_folder: Option<&'a crate::watch_folder::FolderScan>,
@@ -115,7 +118,8 @@ fn name_sources(names: &HashMap<String, String>, faulty: &[&SourceStatus]) -> St
 }
 
 /// The issue list, worst-class first within the order the Health page has
-/// always printed them (storage, scratch, database, sources, uploads, faults).
+/// always printed them (storage, scratch, database, sources, uploads, faults),
+/// with what the models are doing first among the faults.
 pub(super) fn issues(f: &Facts<'_>) -> Vec<Issue> {
     let mut out: Vec<Issue> = Vec::new();
     let mut push = |severity, label, sentence: String| {
@@ -246,6 +250,16 @@ pub(super) fn issues(f: &Facts<'_>) -> Vec<Issue> {
             ),
         );
     }
+    // The detector, a classifier left out or unrouted, a filter that is off:
+    // the decision and the words are `model_conditions`', said here as they
+    // are on every other surface (MDL-03, MDL-06).
+    for condition in f.models {
+        push(
+            Severity::Attention,
+            condition.label,
+            condition.sentence.clone(),
+        );
+    }
     if f.filter_admits_nothing {
         push(
             Severity::Attention,
@@ -291,18 +305,10 @@ fn unnamed_recordings_sentence(scan: &crate::watch_folder::FolderScan) -> String
     )
 }
 
-/// Upper-case the first character.
-fn capitalize_first(s: &str) -> String {
-    let mut chars = s.chars();
-    chars.next().map_or_else(String::new, |first| {
-        first.to_uppercase().collect::<String>() + chars.as_str()
-    })
-}
-
 /// The sentences of an issue list, joined the way the Health banner prints
 /// them. Not escaped.
 pub(super) fn sentences(issues: &[Issue]) -> String {
-    capitalize_first(
+    crate::model_conditions::capitalize_first(
         &issues
             .iter()
             .map(|i| i.sentence.as_str())
@@ -552,6 +558,7 @@ pub(super) fn gather_for_badge(state: &AppState) -> (Vec<Issue>, Option<bool>) {
         .map(|(id, _)| id)
         .collect();
     let admits_nothing = state.metrics().occurrence_filter().admits_nothing();
+    let models = crate::model_conditions::conditions(&state.models_state());
     let capture_down = matches!(live_capture_state(state), CaptureState::Down);
     // A bounded read of one folder's names; cheap enough for every poll.
     let recordings_folder = state
@@ -580,6 +587,7 @@ pub(super) fn gather_for_badge(state: &AppState) -> (Vec<Issue>, Option<bool>) {
         source_names: &names,
         filter_admits_nothing: admits_nothing,
         failing_classifiers: &failing,
+        models: &models,
         recordings_folder: recordings_folder.as_ref(),
     };
     (issues(&facts), integrity)
@@ -621,6 +629,7 @@ mod tests {
             source_names: names,
             filter_admits_nothing: false,
             failing_classifiers: none,
+            models: &[],
             recordings_folder: None,
         }
     }

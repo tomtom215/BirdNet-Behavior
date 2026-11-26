@@ -588,13 +588,88 @@ fn station_has_location(state: &AppState) -> bool {
     state.with_read_db(location_is_set)
 }
 
+/// `text` with every absolute path cut to its file name. Today is read by
+/// whoever looks at the birds; the folder a model lives in is Station
+/// health's to print (and the Capture tab's, for an administrator), and a
+/// path as long as a data directory's ran a notice off a phone.
+fn file_names_only(text: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            let path = word.trim_start_matches('(');
+            if path.starts_with('/') && path[1..].contains('/') {
+                let lead = &word[..word.len() - path.len()];
+                let name = path.rsplit('/').next().unwrap_or(path);
+                format!("{lead}{name}")
+            } else {
+                word.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Where a model notice sends its reader, and what its button says: the
+/// Capture tab's install button when it fixes the condition, the location
+/// form for a filter that has no position, and otherwise Station health,
+/// which lists every condition beside the models' own cards.
+fn model_notice_action(
+    condition: &crate::model_conditions::ModelCondition,
+    setup: &crate::classifier_setup::Snapshot,
+) -> (&'static str, &'static str) {
+    setup.fix_for(&condition.key).map_or_else(
+        || {
+            if condition.state == "off_no_coordinates" {
+                ("/station/capture#set-location", "Set your location")
+            } else {
+                ("/station", "Open Station health")
+            }
+        },
+        |file| {
+            (
+                "/station/capture#classifier",
+                if file.state == crate::classifier_setup::PartState::Damaged {
+                    "Repair it"
+                } else {
+                    "Install it"
+                },
+            )
+        },
+    )
+}
+
 /// Warnings that stand on Today for as long as their cause does, whatever
 /// else the strip under the hero is showing.
 ///
 /// `clock_synced` is the system's own answer, as station health last read it:
 /// `None` (a container, or not asked yet) says nothing rather than guess.
-fn standing_notices(has_location: bool, clock_synced: Option<bool>) -> String {
+///
+/// `models` come first: a station that is not identifying birds, or is
+/// identifying them without a classifier or filter its configuration names,
+/// is the one thing on this page that makes every other line on it wrong
+/// (MDL-03, MDL-05, MDL-06).
+fn standing_notices(
+    models: &[crate::model_conditions::ModelCondition],
+    setup: &crate::classifier_setup::Snapshot,
+    has_location: bool,
+    clock_synced: Option<bool>,
+) -> String {
     let mut out = String::new();
+    for condition in models {
+        let (href, action) = model_notice_action(condition, setup);
+        let body = file_names_only(&condition.body());
+        // The clause before the first colon is what is wrong; after it, why.
+        let (what, why) = body
+            .split_once(": ")
+            .map_or((body.as_str(), ""), |(w, y)| (w, y));
+        let _ = write!(
+            out,
+            r#"<div class="x-nudge" data-screen-label="Models banner" data-announce="{title}."><span class="ico">⚠</span><div class="txt"><b>{what}{colon}</b> {why}</div><a class="bnb-btn primary" href="{href}">{action} →</a></div>"#,
+            title = super::escape_html(&condition.title),
+            what = super::escape_html(what),
+            colon = if why.is_empty() { "" } else { ":" },
+            why = super::escape_html(why),
+        );
+    }
     if !has_location {
         out.push_str(
             r#"<div class="x-nudge" data-screen-label="Location banner" data-announce="This station does not know where it is."><span class="ico">⚠</span><div class="txt"><b>Your station does not know where it is,</b> so it may name birds that don't live near you.</div><a class="bnb-btn primary" href="/station/capture#set-location">Set your location →</a></div>"#,
@@ -935,7 +1010,9 @@ async fn today_nudge_partial(State(state): State<AppState>) -> impl IntoResponse
     let html = tokio::task::spawn_blocking(move || {
         let clock_synced = state.metrics().clock_synced();
         state.with_read_db(|conn| {
-            let notices = standing_notices(location_is_set(conn), clock_synced);
+            let models = crate::model_conditions::conditions(&state.models_state());
+            let setup = crate::routes::admin::classifier::snapshot_of(&state);
+            let notices = standing_notices(&models, &setup, location_is_set(conn), clock_synced);
             // Not defaulted: this strip is "absent entirely when nothing waits",
             // so a count that fell to zero on a failed read hid the one prompt
             // that asks the operator to act.
@@ -1882,6 +1959,111 @@ mod tests {
                 "the counterpart, {synced:?}: {html}"
             );
         }
+    }
+
+    /// MDL-03, MDL-05, MDL-06: a station whose models are not doing what its
+    /// configuration asks — a detector that did not start, a second classifier
+    /// left out, a filter off — said so nowhere on Today, the page an owner
+    /// opens. Each is a notice now, in the words the Health page uses, with
+    /// the way to fix it.
+    #[tokio::test]
+    async fn models_not_doing_what_they_were_set_up_for_are_said_on_today() {
+        use birdnet_core::inference::model_state::{
+            ClassifierFault, ClassifierState, ClassifierStatus, DetectorState, FilterOff,
+            FilterState,
+        };
+        let state = fresh_state();
+        set_location(&state, "40.0", "-83.0");
+        let classifier = |id: &str, primary: bool, status| ClassifierState {
+            id: id.to_owned(),
+            primary,
+            model_path: std::path::PathBuf::from(format!("/m/{id}.onnx")),
+            labels_path: None,
+            status,
+        };
+        let judging = || ClassifierStatus::Judging {
+            sources: Vec::new(),
+            unrouted_sources: true,
+        };
+        let healthy = || {
+            let m = state.metrics();
+            m.set_classifier_states(vec![
+                classifier("birdnet", true, judging()),
+                classifier("perch", false, judging()),
+            ]);
+            m.set_occurrence_filter(FilterState::Active {
+                candidates: Some(12),
+            });
+            m.set_detector_state(DetectorState::Running);
+        };
+        let nudge = || async {
+            let html = body_of(
+                today_nudge_partial(State(state.clone()))
+                    .await
+                    .into_response(),
+            )
+            .await;
+            html.split("<div class=\"x-nudge\"")
+                .filter(|n| n.contains("Models banner"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+
+        healthy();
+        assert_eq!(nudge().await, "", "the counterpart: a healthy station");
+
+        state.metrics().set_detector_state(DetectorState::Failed {
+            why: "its labels file names 12".to_owned(),
+        });
+        let html = nudge().await;
+        assert!(
+            html.contains("Nothing is being identified")
+                && html.contains("its labels file names 12"),
+            "a detector that did not start: {html}"
+        );
+
+        healthy();
+        state.metrics().set_classifier_states(vec![
+            classifier("birdnet", true, judging()),
+            classifier(
+                "perch",
+                false,
+                ClassifierStatus::left_out(
+                    ClassifierFault::FileMissing,
+                    "its model file is not there",
+                ),
+            ),
+        ]);
+        let html = nudge().await;
+        assert!(
+            html.contains("perch") && html.contains("its model file is not there"),
+            "a second classifier left out: {html}"
+        );
+
+        healthy();
+        state.metrics().set_occurrence_filter(FilterState::off(
+            FilterOff::ModelUnusable,
+            "its model file will not load; install it again",
+        ));
+        let html = nudge().await;
+        assert!(
+            html.contains("species occurrence filter is off") && html.contains("install it again"),
+            "a damaged filter: {html}"
+        );
+    }
+
+    /// Today names a model's file, not the folder it is in: a data
+    /// directory's path ran the notice off a phone at 390 px.
+    #[test]
+    fn a_notice_names_files_not_folders() {
+        assert_eq!(
+            file_names_only(
+                "its model file /data/model/perch-v2.onnx will not load (/x/y/z.onnx failed: bad); \
+                 see /etc/birdnet/birdnet.conf, while a/b/c and /root stay"
+            ),
+            "its model file perch-v2.onnx will not load (z.onnx failed: bad); see birdnet.conf, \
+             while a/b/c and /root stay"
+        );
     }
 
     /// UIR-11: one source of three up drew a green "recording" pill and a

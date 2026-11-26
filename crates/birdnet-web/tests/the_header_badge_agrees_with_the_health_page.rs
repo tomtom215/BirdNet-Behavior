@@ -24,6 +24,10 @@ use birdnet_core::audio::capture::{
     CaptureStatus, SourceState, SourceStatus, UPTIME_SEGMENTS, UptimeSegment, new_capture_status,
     publish_capture_status,
 };
+use birdnet_core::inference::model_state::{
+    ClassifierFault, ClassifierState, ClassifierStatus, DetectorState, FilterOff, FilterState,
+    ModelsState,
+};
 use birdnet_db::audio_sources::{AudioSourceStore, NewAudioSource, SourceKind};
 use birdnet_web::state::AppState;
 use tower::ServiceExt as _;
@@ -86,7 +90,42 @@ fn station(sources: &[(&str, SourceState, bool)]) -> AppState {
     state
         .detection_status_flag()
         .store(true, std::sync::atomic::Ordering::Relaxed);
+    // The detector the configuration asks for, running with its one
+    // classifier; each test breaks the part it is about.
+    publish_models(&state, &running_models());
     state
+}
+
+/// A station's models doing what they were set up for: the detector running,
+/// a primary and a second classifier judging, the occurrence filter on.
+fn running_models() -> ModelsState {
+    let classifier = |id: &str, primary: bool| ClassifierState {
+        id: id.to_owned(),
+        primary,
+        model_path: std::path::PathBuf::from(format!("/m/{id}.onnx")),
+        labels_path: Some(std::path::PathBuf::from(format!("/m/{id}_labels.txt"))),
+        status: ClassifierStatus::Judging {
+            sources: Vec::new(),
+            unrouted_sources: primary,
+        },
+    };
+    ModelsState {
+        detector: DetectorState::Running,
+        classifiers: vec![classifier("birdnet", true), classifier("perch", false)],
+        occurrence_filter: FilterState::Active {
+            candidates: Some(140),
+        },
+    }
+}
+
+/// Publish `models` the way the start-up does: the classifiers and the filter
+/// as they were loaded, then the detector, which takes them with it when it
+/// is not running.
+fn publish_models(state: &AppState, models: &ModelsState) {
+    let metrics = state.metrics();
+    metrics.set_classifier_states(models.classifiers.clone());
+    metrics.set_occurrence_filter(models.occurrence_filter.clone());
+    metrics.set_detector_state(models.detector.clone());
 }
 
 async fn get(state: &AppState, uri: &str) -> String {
@@ -191,6 +230,108 @@ async fn uploads_waiting_for_the_network_are_not_healthy_in_the_header() {
     let (page_ok, badge_ok, _, badge) = verdicts(&state).await;
     assert!(!page_ok);
     assert!(!badge_ok, "{badge}");
+}
+
+/// The model states that are not what the configuration asks for (MDL-03,
+/// MDL-06): each breaks one part of [`running_models`], and both surfaces must
+/// say so, in the words that say what to do.
+fn broken_models() -> Vec<(&'static str, ModelsState, &'static str)> {
+    let mut out = Vec::new();
+    for (name, detector, words) in [
+        (
+            "the detector failed",
+            DetectorState::Failed {
+                why: "its model scores 6522 classes and its labels file names 12".to_owned(),
+            },
+            "its labels file names 12",
+        ),
+        (
+            "the detector stopped",
+            DetectorState::Stopped,
+            "restart the station to resume detection",
+        ),
+        (
+            "the detector is not configured",
+            DetectorState::NotConfigured {
+                why: "no classifier (MODEL_PATH) is configured".to_owned(),
+            },
+            "no classifier (MODEL_PATH) is configured",
+        ),
+    ] {
+        let mut models = running_models();
+        models.set_detector(detector);
+        out.push((name, models, words));
+    }
+    let mut left_out = running_models();
+    left_out.classifiers[1].status = ClassifierStatus::left_out(
+        ClassifierFault::WillNotLoad,
+        "its model file /m/perch.onnx will not load; install it again",
+    );
+    out.push((
+        "a second classifier is left out",
+        left_out,
+        "`perch` is not running",
+    ));
+    let mut unrouted = running_models();
+    unrouted.classifiers[1].status = ClassifierStatus::Unrouted;
+    out.push((
+        "a second classifier is unrouted",
+        unrouted,
+        "local:&lt;primary&gt;+perch",
+    ));
+    let mut no_position = running_models();
+    no_position.occurrence_filter = FilterState::off(
+        FilterOff::NoCoordinates,
+        "the station has no LATITUDE and LONGITUDE; set its location",
+    );
+    out.push((
+        "the filter has no coordinates",
+        no_position,
+        "set its location",
+    ));
+    let mut no_labels = running_models();
+    no_labels.occurrence_filter = FilterState::off(
+        FilterOff::LabelsMissing,
+        "its labels file /m/geo_labels.txt is not there; install it again",
+    );
+    out.push((
+        "the filter's labels are missing",
+        no_labels,
+        "geo_labels.txt is not there",
+    ));
+    out
+}
+
+#[tokio::test]
+async fn models_not_doing_what_they_were_set_up_for_are_not_healthy_in_the_header() {
+    for (name, models, words) in broken_models() {
+        let state = station(&[("local", SourceState::Connected, false)]);
+        publish_models(&state, &models);
+        let (page_ok, badge_ok, page, badge) = verdicts(&state).await;
+        let banner = region(&page, "st-status");
+        assert!(!page_ok, "{name}: the Health page says healthy: {banner}");
+        assert!(!badge_ok, "{name}: the header says healthy: {badge}");
+        assert!(
+            banner.contains(words),
+            "{name}: the Health page's banner must say {words:?}: {banner}"
+        );
+        assert!(
+            badge.contains(words),
+            "{name}: the header must carry what the page says, {words:?}: {badge}"
+        );
+    }
+}
+
+/// The element of `page` whose class list starts with `class`, up to its
+/// closing tag's line: the banner, not the template's comments.
+fn region<'a>(page: &'a str, class: &str) -> &'a str {
+    let start = page
+        .find(&format!("class=\"{class}"))
+        .unwrap_or_else(|| panic!("no {class} on the page"));
+    let rest = &page[start..];
+    &rest[..rest
+        .find("</div></div></div>")
+        .map_or(rest.len(), |e| e + 18)]
 }
 
 /// The counterpart: a station with nothing wrong must read healthy on both, so

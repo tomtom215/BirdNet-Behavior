@@ -18,6 +18,7 @@ pub mod embed;
 pub mod live_sockets;
 pub mod login_throttle;
 pub mod metrics;
+pub mod model_conditions;
 pub mod notification_probes;
 pub mod notifier;
 pub mod occurrence;

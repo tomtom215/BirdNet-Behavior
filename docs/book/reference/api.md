@@ -39,6 +39,20 @@ curl http://localhost:8502/api/v2/health
       "error_class": null
     }
   ],
+  "models": {
+    "detector": { "state": "running" },
+    "classifiers": [
+      {
+        "id": "birdnet",
+        "primary": true,
+        "model_path": "/data/model/birdnet-v24.onnx",
+        "labels_path": "/data/model/birdnet-v24_labels.txt",
+        "status": { "state": "judging", "sources": [], "unrouted_sources": true }
+      }
+    ],
+    "occurrence_filter": { "state": "active", "candidates": 137 }
+  },
+  "model_conditions": [],
   "data_volume": {
     "writable": true,
     "mount": "intact",
@@ -91,6 +105,29 @@ degraded under `?strict=1` and raises the `classifier:<id>` station-health
 condition. On a station with several classifiers the others keep recording
 while one fails, which is why the detection deadman cannot be relied on to
 notice.
+
+`models` is what became of the station's models at start-up: the `detector`
+(`starting`, `running`, `web_only`, `not_configured`, `failed`, `stopped`, with
+`why` for the three that have one), every classifier the configuration names,
+primary first, each `judging`, `unrouted` (loaded, and no `MODEL_ROUTES` entry
+reaches it) or `left_out` with a `fault` (`file_missing`, `will_not_load`,
+`does_not_fit`, `memory_unknown`, `labels_not_set`, `labels_missing`,
+`labels_unreadable`, `labels_wrong_length`, `detector_not_running`) and a
+`why`, and the `occurrence_filter`, `active` or `off` with a `reason`
+(`not_configured`, `no_coordinates`, `model_missing`, `model_unusable`,
+`labels_missing`, `labels_unreadable`, `detector_not_running`) and a `why`.
+`model_conditions` lists each part that is not what the configuration asks
+for, as the header badge, Station health and the Today page show it: a `key`
+(`models:detector`, `models:classifier:<id>`, `models:occurrence-filter`), the
+`state` code, a `label`, a `title`, a `sentence` that says what to do, and
+`stops_detection`. A detector that is not running is said once, not again for
+each classifier and the filter it took with it; a filter that is
+`not_configured` and a detector that is `starting` or `web_only` are not
+conditions. Only `stops_detection: true` is degraded under `?strict=1`: a second
+classifier left out or unrouted and a filter that is off leave the station
+identifying birds with its primary, and are reported here and on every page
+instead. The same conditions are raised as station-health conditions under
+those keys.
 
 `boot_anomalies` is what the boot journal found this start changed since the
 last one: `db_lost` (the database held detections at the last start and holds

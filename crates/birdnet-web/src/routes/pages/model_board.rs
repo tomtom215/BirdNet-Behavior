@@ -30,6 +30,7 @@
 //! and withheld.
 
 use birdnet_core::inference::health::{ErrorClass, ModelHealth};
+use birdnet_core::inference::model_state::{ClassifierState, ClassifierStatus};
 use birdnet_core::inference::registry::ModelInfo;
 use birdnet_db::sqlite::ModelLead;
 
@@ -44,6 +45,11 @@ pub enum ModelState {
     Failing,
     /// Loaded, and has not been given a window yet.
     Waiting,
+    /// Loaded, and no `MODEL_ROUTES` entry sends it anything, so it never
+    /// will be (MDL-06, MDL-07).
+    Unrouted,
+    /// Named by the configuration and not running (MDL-06).
+    LeftOut,
 }
 
 /// One classifier's card.
@@ -70,6 +76,12 @@ pub struct ModelCard {
     /// Mean microseconds per answered window since it loaded; `None` before it
     /// has answered one.
     pub mean_window_micros: Option<u64>,
+    /// What the station says about a classifier that is left out or
+    /// unrouted, in words that say what to do.
+    pub note: Option<String>,
+    /// The words of a link to the Capture tab's install button, when that
+    /// button fixes it.
+    pub fix: Option<&'static str>,
 }
 
 /// Build the cards from the daemon's health record and today's per-model counts.
@@ -115,9 +127,65 @@ pub fn cards(
                 lead,
                 info: infos.iter().find(|i| &i.id == id).cloned(),
                 mean_window_micros: h.mean_inference_micros(),
+                note: None,
+                fix: None,
             }
         })
         .collect()
+}
+
+/// The cards for every classifier the configuration names, in its order, as
+/// the start-up published them (MDL-06): one the daemon is running keeps its
+/// window record's card (a waiting one when it has none yet); one left out or
+/// unrouted gets a card that says so and why, which the window record cannot,
+/// because a classifier that never loaded has no windows and one no route
+/// reaches would read "Waiting for audio" for ever. A window record for a
+/// classifier the published list does not name is kept, after them.
+///
+/// `fix` gives the words of a link to the install button, for a classifier
+/// that button fixes.
+pub fn with_configured(
+    from_windows: Vec<ModelCard>,
+    configured: &[ClassifierState],
+    fix: &dyn Fn(&ClassifierState) -> Option<&'static str>,
+) -> Vec<ModelCard> {
+    let blank = |c: &ClassifierState, state| ModelCard {
+        id: c.id.clone(),
+        state,
+        windows: 0,
+        last_window_age: None,
+        last_success_age: None,
+        error: None,
+        consecutive_failures: 0,
+        lead: None,
+        info: None,
+        mean_window_micros: None,
+        note: Some(c.message()),
+        fix: fix(c),
+    };
+    let mut rest = from_windows;
+    let mut out: Vec<ModelCard> = configured
+        .iter()
+        .map(|c| {
+            let windows = rest
+                .iter()
+                .position(|card| card.id == c.id)
+                .map(|i| rest.remove(i));
+            match &c.status {
+                ClassifierStatus::Judging { .. } => windows.unwrap_or_else(|| ModelCard {
+                    note: None,
+                    ..blank(c, ModelState::Waiting)
+                }),
+                ClassifierStatus::Unrouted => ModelCard {
+                    lead: windows.and_then(|w| w.lead),
+                    ..blank(c, ModelState::Unrouted)
+                },
+                ClassifierStatus::LeftOut { .. } => blank(c, ModelState::LeftOut),
+            }
+        })
+        .collect();
+    out.append(&mut rest);
+    out
 }
 
 /// The section body: a lede, then one card per classifier. Empty before the
@@ -128,10 +196,10 @@ pub fn section(cards: &[ModelCard]) -> String {
     }
     let several = cards.len() >= 2;
     let lede = if several {
-        "Your station is running several classifiers over the same audio. Each is judged \
+        "Your station is set up with several classifiers over the same audio. Each is judged \
          against its own bar and each keeps its own score; the scores are never averaged."
     } else {
-        "The classifier your station is running."
+        "The classifier your station is set up with."
     };
     let mut out = format!(
         "<h2 class=\"st-h3\">Models</h2><p class=\"bnb-meta ws-lede\">{lede}</p><div class=\"st-sources ws-models\">"
@@ -154,6 +222,12 @@ const fn chip(state: ModelState) -> &'static str {
         ModelState::Waiting => {
             "<span class=\"bnb-pill\"><span class=\"bnb-dot\"></span> Waiting for audio</span>"
         }
+        ModelState::Unrouted => {
+            "<span class=\"bnb-pill dawn\"><span class=\"bnb-dot dawn\"></span> Judging nothing</span>"
+        }
+        ModelState::LeftOut => {
+            "<span class=\"bnb-pill rare\"><span class=\"bnb-dot rare\"></span> Not running</span>"
+        }
     }
 }
 
@@ -166,12 +240,27 @@ fn ago(secs: Option<u64>) -> String {
 }
 
 fn card(c: &ModelCard, several: bool) -> String {
+    if c.state == ModelState::LeftOut {
+        return format!(
+            "<div class=\"bnb-card st-source stalled ws-model\"><div class=\"st-source-head\">\
+             <div><div class=\"st-source-name mono\">{id}</div>\
+             <div class=\"st-source-type\">classifier</div></div>{chip}</div>{note}</div>",
+            id = escape_html(&c.id),
+            chip = chip(c.state),
+            note = note_line(c),
+        );
+    }
     let failing = if c.state == ModelState::Failing {
         " stalled"
     } else {
         ""
     };
-    let day = day_line(c, several);
+    // One no route reaches has no share of the day to report.
+    let day = if c.state == ModelState::Unrouted {
+        String::new()
+    } else {
+        day_line(c, several)
+    };
     let fault = fault_line(c);
     let facts = c.info.as_ref().map_or_else(String::new, facts_line);
     let mean = c.mean_window_micros.map_or_else(String::new, |us| {
@@ -183,11 +272,27 @@ fn card(c: &ModelCard, several: bool) -> String {
          <div class=\"st-source-type\">classifier</div></div>{chip}</div>\
          {facts}{day}\
          <div class=\"st-source-foot ws-foot\"><span><b>{last}</b> · last window</span>\
-         {mean}<span><b>{windows}</b> · windows run</span></div>{fault}</div>",
+         {mean}<span><b>{windows}</b> · windows run</span></div>{fault}{note}</div>",
         id = escape_html(&c.id),
         chip = chip(c.state),
         last = ago(c.last_window_age),
         windows = super::group_thousands(i64::try_from(c.windows).unwrap_or(i64::MAX)),
+        note = note_line(c),
+    )
+}
+
+/// What the station says about a classifier left out or unrouted, and the
+/// way to the button that fixes it when an install does.
+fn note_line(c: &ModelCard) -> String {
+    let Some(note) = &c.note else {
+        return String::new();
+    };
+    let fix = c.fix.map_or_else(String::new, |words| {
+        format!(" <a href=\"/station/capture#classifier\">{words}</a>")
+    });
+    format!(
+        "<div class=\"st-source-retry\">{}.{fix}</div>",
+        escape_html(&crate::model_conditions::capitalize_first(note)),
     )
 }
 
@@ -347,6 +452,89 @@ mod tests {
         assert_eq!(got[1].lead, Some(lead("b", 0, 0)));
     }
 
+    /// MDL-06: a classifier the configuration names that is left out, or
+    /// loaded with no route to it, has a card on the board that says so and
+    /// why — it used to be one INFO line in the journal, and an unrouted one
+    /// read "Waiting for audio" for ever. A running one keeps its window
+    /// record's card, and the button's link is offered only when an install
+    /// fixes it.
+    #[test]
+    fn a_classifier_left_out_or_unrouted_has_a_card_that_says_so() {
+        use birdnet_core::inference::model_state::ClassifierFault;
+        let configured = |id: &str, primary: bool, status| ClassifierState {
+            id: id.to_owned(),
+            primary,
+            model_path: std::path::PathBuf::from(format!("/m/{id}.onnx")),
+            labels_path: None,
+            status,
+        };
+        let published = vec![
+            configured(
+                "birdnet",
+                true,
+                ClassifierStatus::Judging {
+                    sources: Vec::new(),
+                    unrouted_sources: true,
+                },
+            ),
+            configured(
+                "perch",
+                false,
+                ClassifierStatus::left_out(
+                    ClassifierFault::WillNotLoad,
+                    "its model file /m/perch.onnx will not load; install it again",
+                ),
+            ),
+            configured("bats", false, ClassifierStatus::Unrouted),
+        ];
+        let health = vec![
+            ("birdnet".to_owned(), ok(10, 990)),
+            ("bats".to_owned(), ModelHealth::default()),
+        ];
+        let got = with_configured(cards(&health, Some(&[]), &[], 1_000), &published, &|c| {
+            (c.id == "perch").then_some("Repair it on the Capture tab")
+        });
+        let states: Vec<_> = got.iter().map(|c| (c.id.as_str(), c.state)).collect();
+        assert_eq!(
+            states,
+            [
+                ("birdnet", ModelState::Running),
+                ("perch", ModelState::LeftOut),
+                ("bats", ModelState::Unrouted)
+            ]
+        );
+        let html = section(&got);
+        let perch = html
+            .split("ws-model")
+            .find(|c| c.contains(">perch<"))
+            .expect("perch's card");
+        assert!(
+            perch.contains("Not running")
+                && perch.contains("will not load; install it again")
+                && perch.contains("/station/capture#classifier"),
+            "{perch}"
+        );
+        let bats = html
+            .split("ws-model")
+            .find(|c| c.contains(">bats<"))
+            .expect("bats' card");
+        assert!(
+            bats.contains("Judging nothing")
+                && bats.contains("MODEL_ROUTES")
+                && !bats.contains("Waiting for audio")
+                && !bats.contains("/station/capture#classifier"),
+            "{bats}"
+        );
+        let birdnet = html
+            .split("ws-model")
+            .find(|c| c.contains(">birdnet<"))
+            .expect("birdnet's card");
+        assert!(
+            birdnet.contains("Running") && !birdnet.contains("st-source-retry"),
+            "the counterpart: {birdnet}"
+        );
+    }
+
     #[test]
     fn a_failed_database_read_is_said_not_rounded_to_zero() {
         let health = vec![("a".to_owned(), ok(1, 1))];
@@ -364,7 +552,7 @@ mod tests {
             10,
         ));
         assert!(
-            one.contains("The classifier your station is running."),
+            one.contains("The classifier your station is set up with."),
             "{one}"
         );
         assert!(!one.contains("another classifier also cleared"), "{one}");

@@ -40,12 +40,23 @@ press Enter to open the recording. Without a location set, the sky is plain rath
 [review queue](./reviews.md), or an **outage** warning when capture has gone
 quiet during daylight. When all is well and quiet, it's absent entirely. If the
 station cannot read the review queue, the strip says so instead of staying
-absent, because absent is how "nothing is waiting" looks. Two notices stay in
-the strip for as long as their cause does: one when the station has no
-location set ("Your station does not know where it is"), because without one it
-may name birds that don't live near you, and one when the system reports that
-its clock is not synchronised with a time server, because new detections may
-then be filed at the wrong time.
+absent, because absent is how "nothing is waiting" looks. Some notices stay in
+the strip for as long as their cause does. First, one for each part of the
+station's models that is not doing what its configuration asks: the detector
+did not start, stopped, or has no classifier ("Nothing is being identified",
+with the reason); a second classifier that was left out (its file missing or
+damaged, its labels wrong, too big for the memory the station allows) or that
+no `MODEL_ROUTES` entry reaches; and an occurrence filter that is off because
+the station has no coordinates or its file or labels are missing or damaged.
+Each says what to do, and its button goes where that is done: **Install it** or
+**Repair it** when the Capture tab's install button fixes it, **Set your
+location** for a filter with no coordinates, and Station health otherwise. The
+header badge, Station health and `/api/v2/health` say the same thing in the
+same words. Then one when the station has no location set ("Your station does
+not know where it is"), because without one it may name birds that don't live
+near you, and one when the system reports that its clock is not synchronised
+with a time server, because new detections may then be filed at the wrong
+time.
 
 **3 · The shape of the day.** The **day strip** plots the whole day on one
 24-hour timeline — an hourly histogram of how busy each hour was, an amber
