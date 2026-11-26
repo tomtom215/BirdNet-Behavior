@@ -51,7 +51,7 @@
 # file is copied into the cook stage, so the dependency layer is invalidated
 # solely when Cargo.lock or manifest files change — not on every source edit.
 # -----------------------------------------------------------------------------
-FROM rust:1.99-slim-trixie@sha256:ea0999ff67355d958b8799b6751c879a6d770076d26047dca66f6e51e77930d3 AS chef
+FROM rust:1.99-slim-trixie@sha256:f6c4a35d21dbb3c89d7a8d056c193e94fc09037f2b58dd858b09c39a47dd02d7 AS chef
 WORKDIR /build
 # cargo-chef is pinned to the 0.1 minor series for reproducibility.  The
 # --locked flag forces cargo to honour the bundled Cargo.lock from the
