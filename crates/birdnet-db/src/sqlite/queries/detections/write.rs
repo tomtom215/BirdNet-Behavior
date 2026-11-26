@@ -57,10 +57,11 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
     Ok(conn.last_insert_rowid())
 }
 
-/// What names one detection of one analysis, whatever clip it was written
-/// with: a start that replays a detection an earlier stop kept asks for this
-/// before writing it, because a start killed between writing the row and
-/// recording that it had leaves the detection to be replayed (review F02).
+/// What names one detection of one analysis, whatever clip it was written with.
+///
+/// A start that replays a detection an earlier stop kept asks for this before
+/// writing it, because a start killed between writing the row and recording
+/// that it had leaves the detection to be replayed (review F02).
 ///
 /// The clip's name cannot be part of it: a replay cuts its clip again and
 /// gets a name of its own. The analysis's correlation id and the window's

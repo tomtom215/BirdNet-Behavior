@@ -37,7 +37,7 @@
 //!   not record it) and says how many of the hour's detections a reviewer
 //!   confirmed.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 use axum::extract::{Query, State};

@@ -442,13 +442,12 @@ impl ClipQueue {
 /// counted. Returns how many are unsettled, held included.
 fn load_batch(batch: &Path, replay: &mut Replay) -> std::io::Result<usize> {
     let text = std::fs::read_to_string(batch.join(EVENTS))?;
-    let legacy_done = match std::fs::read_to_string(batch.join(LEGACY_DONE)) {
-        Ok(s) => s.trim().parse::<usize>().unwrap_or_else(|_| {
+    let legacy_done = std::fs::read_to_string(batch.join(LEGACY_DONE)).map_or(0, |s| {
+        s.trim().parse::<usize>().unwrap_or_else(|_| {
             tracing::warn!(batch = %batch.display(), "a batch's progress is unreadable; replayed from its start");
             0
-        }),
-        Err(_) => 0,
-    };
+        })
+    });
     let acked: HashSet<usize> = indices(&batch.join(ACKED)).into_iter().collect();
     let mut failures: HashMap<usize, usize> = HashMap::new();
     for i in indices(&batch.join(FAILED)) {
@@ -495,8 +494,7 @@ fn load_batch(batch: &Path, replay: &mut Replay) -> std::io::Result<usize> {
 /// line that is not a number (a write a power cut tore) is skipped.
 fn indices(path: &Path) -> Vec<usize> {
     std::fs::read_to_string(path)
-        .map(|s| s.lines().filter_map(|l| l.trim().parse().ok()).collect())
-        .unwrap_or_default()
+        .map_or_default(|s| s.lines().filter_map(|l| l.trim().parse().ok()).collect())
 }
 
 /// Append `index` to `path` and sync it.
@@ -882,7 +880,7 @@ impl Inbox {
     /// What is left of the replay stays in its own batches, which are already
     /// on the disk with the run and bars they were kept under.
     pub(super) fn keep_the_rest(
-        &mut self,
+        &self,
         events: &mpsc::Receiver<DetectionEvent>,
         freeze: &mut dyn FnMut(DetectionEvent) -> Kept,
     ) -> usize {
@@ -974,7 +972,7 @@ mod tests {
             sample_format: hound::SampleFormat::Int,
         };
         let mut w = hound::WavWriter::create(path, spec).unwrap();
-        for i in 0..(SR as i32 * 15) {
+        for i in 0..(i32::try_from(SR).unwrap() * 15) {
             #[allow(
                 clippy::cast_possible_truncation,
                 reason = "a test signal, wrapped on purpose"

@@ -140,7 +140,7 @@ fn register_run(state: &birdnet_web::state::AppState, sha: &str) -> i64 {
 
 fn provenance(run_id: i64) -> super::processor::RunProvenance {
     super::processor::RunProvenance {
-        run_id: run_id.into(),
+        run_id,
         algorithm: None,
         lat: Some(51.48),
         lon: Some(-0.13),
@@ -208,10 +208,11 @@ fn extractor_into(dir: &Path, own_segment_only: bool) -> Extractor {
     })
 }
 
-/// `(Sci_Name, run_id, Sens, Cutoff)` of every stored row, by name.
-fn rows(
-    state: &birdnet_web::state::AppState,
-) -> Vec<(String, Option<i64>, Option<f64>, Option<f64>)> {
+/// `(Sci_Name, run_id, Sens, Cutoff)` of one row.
+type Row = (String, Option<i64>, Option<f64>, Option<f64>);
+
+/// Every stored row, by name.
+fn rows(state: &birdnet_web::state::AppState) -> Vec<Row> {
     state.with_db(|c| {
         let mut s = c
             .prepare(
@@ -607,12 +608,16 @@ async fn a_stop_keeps_only_the_audio_of_the_clip_on_a_privacy_filtered_station()
         .unwrap()
         .flatten()
         .map(|e| e.file_name().to_string_lossy().into_owned())
-        .filter(|n| n.ends_with(".wav"))
+        .filter(|n| {
+            Path::new(n)
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("wav"))
+        })
         .collect();
     assert_eq!(audio, [SEG], "neighbouring recordings were kept");
     let decoded = birdnet_core::audio::decode::decode_file(&batch.join(SEG)).unwrap();
     // Default extraction: 6 s clip around a 3 s window, so [4.5, 10.5) s.
-    let (from, to) = ((4.5 * 48_000.0) as usize, (10.5 * 48_000.0) as usize);
+    let (from, to) = (48_000 * 9 / 2, 48_000 * 21 / 2);
     let outside = decoded
         .samples
         .iter()

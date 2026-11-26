@@ -436,7 +436,7 @@ mod tests {
         assert_eq!(v["detected_at_utc"], bst);
         let v = serde_json::to_value(ExportedDetection::new(
             &unplaceable,
-            &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+            &birdnet_db::sqlite::ModelAttribution::from_runs(runs),
         ))
         .unwrap();
         assert!(v.get("event_date").is_none(), "{v}");
@@ -483,7 +483,7 @@ mod tests {
         assert_eq!(v["model_agreement"], 2);
         let v = serde_json::to_value(ExportedDetection::new(
             &legacy,
-            &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+            &birdnet_db::sqlite::ModelAttribution::from_runs(runs),
         ))
         .unwrap();
         assert!(

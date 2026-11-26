@@ -500,7 +500,10 @@ fn a_mirrors_credentials_are_never_logged_or_reported() {
         .expect("the fetch ended");
     let err = r.expect_err("a 404 is not an install");
     let mut seen = String::from_utf8_lossy(&sink.0.lock().unwrap()).into_owned();
-    seen.push_str(&format!("\n{err}\n{err:?}"));
+    {
+        use std::fmt::Write as _;
+        let _ = write!(seen, "\n{err}\n{err:?}");
+    }
     assert!(
         seen.contains("127.0.0.1"),
         "the host is still named: {seen}"

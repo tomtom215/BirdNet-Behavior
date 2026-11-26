@@ -1440,13 +1440,15 @@ mod tests {
             .collect();
         assert_eq!(names, ["Species1", "Species2", "Species4"]);
         assert!(out[2].privacy_unassessed && !out[0].privacy_unassessed);
-        let (deaf, _) = infer_windows(&chunks[..2], false, |_| {
+        let every_window_failed = infer_windows(&chunks[..2], false, |_| {
             Err(DaemonError::Inference(
                 crate::inference::model::InferenceError::Shape("refused".into()),
             ))
-        })
-        .map_or((None, ()), |r| (Some(r), ()));
-        assert!(deaf.is_none(), "every window failed: the file is an error");
+        });
+        assert!(
+            every_window_failed.is_err(),
+            "every window failed: the file is an error"
+        );
         let mut m = 0;
         let (out, failed) = infer_windows(&chunks[..2], false, |_| {
             m += 1;

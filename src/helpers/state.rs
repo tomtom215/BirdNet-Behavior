@@ -1071,7 +1071,7 @@ mod tests {
         assert_eq!(level(&state), 1, "NORMAL by default");
         apply_db_durability(&state, Some(&config_with(&[("DB_SYNCHRONOUS", "normal")])));
         assert_eq!(level(&state), 1);
-        apply_db_durability(&state, Some(&config_with(&[("DB_SYNCHRONOUS", "fulll")])));
+        apply_db_durability(&state, Some(&config_with(&[("DB_SYNCHRONOUS", "on")])));
         assert_eq!(level(&state), 1, "a typo is not a change");
         apply_db_durability(&state, Some(&config_with(&[("DB_SYNCHRONOUS", " FULL ")])));
         assert_eq!(level(&state), 2, "FULL was asked for and not applied");

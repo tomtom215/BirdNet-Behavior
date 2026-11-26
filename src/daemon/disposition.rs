@@ -259,25 +259,11 @@ pub(super) fn decide_at_bars(confidence: f32, bars: Bars) -> DispositionDecision
 }
 
 /// The confidence bar in force for a detection, whatever else is decided
-/// about it: what [`decide_disposition`] would admit or quarantine it at.
-/// `None` when it is below the global floor with no per-species override,
-/// which is a drop and never a row (DD-9).
-pub(super) fn applicable_threshold(
-    confidence: f32,
-    sci_name: &str,
-    per_species_thresholds: &HashMap<String, f64>,
-    global_confidence: f32,
-    dynamic: Option<&DynamicThresholds>,
-    now_ms: i64,
-) -> Option<f64> {
-    match decide_disposition(
-        confidence,
-        sci_name,
-        per_species_thresholds,
-        global_confidence,
-        dynamic,
-        now_ms,
-    ) {
+/// about it: what `decision` admitted or quarantined it at. `None` for a
+/// detection below the global floor with no per-species override, which is a
+/// drop and never a row (DD-9).
+pub(super) const fn threshold_of(decision: DispositionDecision) -> Option<f64> {
+    match decision {
         DispositionDecision::Accept { threshold }
         | DispositionDecision::Quarantine { threshold } => Some(threshold),
         DispositionDecision::DropBelowGlobal => None,
@@ -440,20 +426,20 @@ mod tests {
         // The global floor arrives as `f32` and is widened, so the row
         // carries the widened value, not the literal.
         assert_eq!(
-            applicable_threshold(0.80, "Pica pica", &none, 0.70, None, 0),
+            threshold_of(decide_disposition(0.80, "Pica pica", &none, 0.70, None, 0)),
             Some(f64::from(0.70_f32))
         );
         assert_eq!(
-            applicable_threshold(0.60, "Pica pica", &none, 0.70, None, 0),
+            threshold_of(decide_disposition(0.60, "Pica pica", &none, 0.70, None, 0)),
             None
         );
         assert_eq!(
-            applicable_threshold(0.95, "Strix aluco", &t, 0.70, None, 0),
+            threshold_of(decide_disposition(0.95, "Strix aluco", &t, 0.70, None, 0)),
             Some(0.90),
             "accepted against the per-species bar"
         );
         assert_eq!(
-            applicable_threshold(0.60, "Strix aluco", &t, 0.70, None, 0),
+            threshold_of(decide_disposition(0.60, "Strix aluco", &t, 0.70, None, 0)),
             Some(0.90),
             "quarantined, and the row says what it missed"
         );

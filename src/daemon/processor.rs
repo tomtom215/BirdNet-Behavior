@@ -628,7 +628,7 @@ struct Attribution<'a> {
 
 impl<'a> Attribution<'a> {
     /// A live detection's: this processor's run.
-    fn live(p: &'a RunProvenance) -> Self {
+    const fn live(p: &'a RunProvenance) -> Self {
         Self {
             run_id: Some(p.run_id),
             algorithm: p.algorithm,
@@ -709,7 +709,9 @@ fn freeze_for_queue(
 }
 
 /// Mark the replayed detection in hand, if there is one, as finished with.
-fn settled(pending: &mut Option<(crate::daemon::spool::Ticket, crate::daemon::spool::Outcome)>) {
+const fn settled(
+    pending: &mut Option<(crate::daemon::spool::Ticket, crate::daemon::spool::Outcome)>,
+) {
     if let Some((_, outcome)) = pending {
         *outcome = crate::daemon::spool::Outcome::Settled;
     }
@@ -1067,24 +1069,22 @@ pub(super) fn event_processor(
         // daylight would never have recorded. A per-species miss still goes
         // on to the gates, so an implausible hour stays the reason it is filed
         // under.
-        let disposition = match kept_bars {
-            Some(bars) => crate::daemon::disposition::decide_at_bars(detection.confidence, bars),
-            None => decide_disposition(
-                detection.confidence,
-                &detection.scientific_name,
-                species_thresholds,
-                global_confidence,
-                dynamic.tracker(),
-                now_ms,
-            ),
-        };
+        let disposition = kept_bars.map_or_else(
+            || {
+                decide_disposition(
+                    detection.confidence,
+                    &detection.scientific_name,
+                    species_thresholds,
+                    global_confidence,
+                    dynamic.tracker(),
+                    now_ms,
+                )
+            },
+            |bars| crate::daemon::disposition::decide_at_bars(detection.confidence, bars),
+        );
         // The bar in force, whatever else is decided (DD-9): what the decision
         // admitted or quarantined it at, `None` for a drop.
-        let applicable = match disposition {
-            DispositionDecision::Accept { threshold }
-            | DispositionDecision::Quarantine { threshold } => Some(threshold),
-            DispositionDecision::DropBelowGlobal => None,
-        };
+        let applicable = crate::daemon::disposition::threshold_of(disposition);
         // Out of range here this week (ACC-01): the occurrence model held it
         // back, and the daemon has already counted it under "occurrence". One
         // the station's own bar would have dropped anyway is dropped; the rest
@@ -1092,7 +1092,9 @@ pub(super) fn event_processor(
         // them, where a vagrant can be approved rather than lost. Before the
         // clock and hour gates, so each discard has one reason and one count.
         if let Some(sf_probability) = event.out_of_range {
-            if !matches!(disposition, DispositionDecision::DropBelowGlobal) {
+            if matches!(disposition, DispositionDecision::DropBelowGlobal) {
+                settled(&mut unsettled);
+            } else {
                 let week_str = detection.week.to_string();
                 let file_str = event.source_file.to_string_lossy();
                 let source_label = derive_source_label(&event.source_file);
@@ -1138,8 +1140,6 @@ pub(super) fn event_processor(
                     // Halted: the database failed its integrity check. Not settled.
                     None => {}
                 }
-            } else {
-                settled(&mut unsettled);
             }
             continue;
         }
