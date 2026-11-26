@@ -126,14 +126,16 @@ do_repair() {
     # able to repair the commonest broken install there is: a model whose
     # download was interrupted. It used to check presence only, print "Model
     # present — skipping download", and compute no checksum — so the one
-    # subcommand named for fixing this could not fix it. `download_model`'s own
-    # guard now verifies, so handing the decision to it is both correct and one
-    # fewer place for the two to disagree.
+    # subcommand named for fixing this could not fix it. The binary re-hashes
+    # what is there and fetches only what does not verify, so handing the
+    # decision to it is both correct and one fewer place for the two to
+    # disagree.
     download_classifier
 
     # A repair run is how a station installed before the geomodel shipped picks
-    # it up: the download is a no-op when the files are already there. Which
-    # filter that is follows the station's classifier (V2.4: the range filter).
+    # it up, and how a filter whose download failed is tried again: the
+    # install is a re-hash when the files are already there. Which filter that
+    # is follows the station's classifier (V2.4: the range filter).
     download_occurrence_filter
 
     write_config             # idempotent: fixes ownership/permissions, keeps content

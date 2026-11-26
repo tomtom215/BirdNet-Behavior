@@ -25,6 +25,10 @@ main() {
             exit 0
         fi
         macos_install
+        # The same ending as Linux when the classifier could not be installed:
+        # said loudly, last, and exit 75 (installed, not detecting).
+        macos_print_classifier_missing "${MODEL_BINARY:-${BINARY_NAME}}"
+        exit_if_classifier_missing
         exit 0
     fi
 

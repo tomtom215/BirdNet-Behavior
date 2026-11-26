@@ -9,31 +9,34 @@
 # disagreed. The default is now V2.4 with its range filter, and V3.0 is an
 # explicit `--classifier birdnet-v3`.
 #
-# V2.4 is installed by the binary (`birdnet-behavior --install-model`), which
-# owns its digests, its origins and the labels file it carries. So this drives
-# the real `main` (installer/test/lib/install-flow.sh) with a stub binary, and
-# reads what the installer did with it: the config, the models directory, the
-# ids it asked the binary to install, the URLs it fetched itself (V3.0 only),
-# and what it told the operator.
+# Every model is installed by the binary (`birdnet-behavior --install-model`),
+# which owns its digests, its origins, its retries and the labels file it
+# carries (MDL-09). So this drives the real `main`
+# (installer/test/lib/install-flow.sh) with a stub binary, and reads what the
+# installer did with it: the config, the models directory, the ids it asked the
+# binary to install and the retry schedule it handed over, anything it tried to
+# fetch itself (nothing), and what it told the operator.
 #
 #   1. no options            -> V2.4: the binary is asked for the model and for
 #                               the range filter, both live in the config;
 #                               BirdNET-Pi's defaults documented but commented;
 #                               nothing of V3.0 fetched, nothing of V2.4 fetched
 #                               by the installer itself.
-#   2. --classifier birdnet-v3 -> the previous behaviour, file for file.
+#   2. --classifier birdnet-v3 -> the binary is asked for the V3.0 model and
+#                               the geomodel; the config is the previous
+#                               installer's but for the file names.
 #   3. the same by environment, and the flag beating it.
 #   4. a typo is refused before anything is downloaded.
 #   5. the range filter's failure does not fail the install, and is not hidden.
-#   6. the classifier's failure is retried (30 s, then 90 s), and then does NOT
-#      stop the install: it finishes, says last and loudly that the station is
-#      not detecting and how to fix it, and exits 75 (OOB-20, decision 7 of
-#      2026-11-25). Counterpart: a failure that clears on a retry is a plain
-#      success, exit 0, with no such warning.
+#   6. the classifier's failure (after the binary's own retries, whose schedule
+#      the installer hands it: 30 s, then 90 s, or BIRDNET_MODEL_RETRY_WAITS)
+#      does NOT stop the install: it finishes, says last and loudly that the
+#      station is not detecting and how to fix it, and exits 75 (OOB-20,
+#      decision 7 of 2026-11-25).
 #   6b. a local model file (--local-model / BIRDNET_LOCAL_MODEL) is handed to
 #      the binary's check and installed, or refused (exit 75, nothing at the
-#      final name); for V3.0 the installer checks it against its own pin; a
-#      path that is not a file stops the run before anything is installed.
+#      final name), for V3.0 as for V2.4; a path that is not a file stops the
+#      run before anything is installed.
 #   7. BIRDNET_SKIP_MODEL=1 stages nothing and says which files to stage.
 #   8. the free-space floor follows the classifier.
 #   9. --help documents the flag.
@@ -141,7 +144,7 @@ else
 fi
 
 # ── 2. --classifier birdnet-v3 ──────────────────────────────────────────────
-echo "=== 2. counterpart: --classifier birdnet-v3 is the previous behaviour ==="
+echo "=== 2. counterpart: --classifier birdnet-v3 runs V3.0 and its geomodel ==="
 new_sandbox
 flow_run "${SB}" --classifier birdnet-v3
 rc=$?
@@ -159,24 +162,27 @@ if flow_models_match "${SB}" 'birdnet-v24'; then
 else
     pass "nothing of the V2.4 stack was installed"
 fi
-if grep -q 'INSTALL-MODEL' "${SB}/requests.log"; then
-    fail "the binary was asked to install a model for a V3.0 install: $(grep INSTALL-MODEL "${SB}/requests.log" | tr '\n' ';')"
+if grep -qx "INSTALL-MODEL birdnet-v3 dir=$(flow_models_dir "${SB}")" "${SB}/requests.log" \
+    && grep -qx "INSTALL-MODEL birdnet-v3-geomodel dir=$(flow_models_dir "${SB}")" "${SB}/requests.log" \
+    && ! grep -q '^GET ' "${SB}/requests.log"; then
+    pass "the binary was asked for birdnet-v3 and birdnet-v3-geomodel, and the installer fetched nothing itself"
 else
-    pass "the binary was not asked to install anything: V3.0 is fetched by the installer, as before"
+    fail "requests: $(tr '\n' ';' <"${SB}/requests.log")"
 fi
-grep -q 'GET https://github.com/tomtom215/BirdNet-Behavior/releases/download/models-v3.0-preview3/' "${SB}/requests.log" \
-    && pass "from the models-v3.0-preview3 release, as before" || fail "the V3.0 origin changed: $(cat "${SB}/requests.log")"
 grep -qE '^ +Model: +BirdNET\+ V3\.0 preview' "${SB}/out.log" \
     && pass "the closing summary names the V3.0 preview" || fail "the closing summary does not name the V3.0 preview"
 
 # The V3.0 template is what the previous installer wrote, line for line, except
-# for the documented defaults (CONFIDENCE 0.75 -> 0.70 and the OVERLAP wording,
+# for the model files' names (the binary's, MDL-09: compared after mapping the
+# previous installer's names onto them), the documented defaults (CONFIDENCE 0.75 -> 0.70 and the OVERLAP wording,
 # which were wrong for a BirdNET-Pi-compatible station), the new PRIVACY_RANK
 # line, and the RECORDING_SCHEDULE comment's clock (fixed hours were documented
 # as UTC; the scheduler has always used local time, OOB-04). Compare against a config captured from the previous installer, so
 # "unchanged" is a diff and not a belief.
 FIXTURE="${HERE}/data/config-v3-written-by-the-previous-installer.conf"
-expected="$(sed "s|@SB@|${SB}|g" "${FIXTURE}")"
+expected="$(sed -e "s|@SB@|${SB}|g" -e "s|${FLOW_V3_LEGACY_MODEL}|${FLOW_V3_MODEL}|" \
+    -e "s|${FLOW_V3_LEGACY_LABELS}|${FLOW_V3_LABELS}|" -e "s|${FLOW_GEO_LEGACY_MODEL}|${FLOW_GEO_MODEL}|" \
+    -e "s|${FLOW_GEO_LEGACY_LABELS}|${FLOW_GEO_LABELS}|" "${FIXTURE}")"
 actual="$(sed 's|^# Generated by install.sh on .*|# Generated by install.sh on 2026-06-01 00:00 UTC|' "$(flow_config "${SB}")")"
 delta="$(diff <(printf '%s\n' "${expected}") <(printf '%s\n' "${actual}") || true)"
 other="$(grep -E '^[<>]' <<<"${delta}" | grep -vE '^[<>] # (CONFIDENCE|OVERLAP|PRIVACY_RANK)=' \
@@ -249,10 +255,7 @@ grep -q 'WITHOUT species occurrence filtering' "${SB}/out.log" \
     && pass "and the operator is told filtering is off" || fail "the failure was not reported"
 
 # ── 6. a failed classifier ──────────────────────────────────────────────────
-echo "=== 6. a classifier that cannot be installed is retried, then the install finishes, says so last, and exits 75 ==="
-# What a script and a person each need: a status that is neither 0 nor a
-# stopped run, a station that exists (config naming the V2.4 files, so a re-run
-# keeps V2.4), and the last thing on the screen saying it does not detect.
+echo "=== 6. a classifier that cannot be installed: the install finishes, says so last, and exits 75 ==="
 for why in FLOW_FAIL_MODEL FLOW_OLD_BINARY; do
     new_sandbox
     case "${why}" in
@@ -271,19 +274,19 @@ for why in FLOW_FAIL_MODEL FLOW_OLD_BINARY; do
         || fail "${why}: MODEL_PATH is '$(flow_conf "${SB}" MODEL_PATH)'"
     [ ! -e "$(want "${SB}" "${FLOW_V24_MODEL}")" ] \
         && pass "${why}: nothing is at the model's name" || fail "${why}: a model file appeared"
+    # The binary retries; the installer asks once and hands it the schedule.
     tries="$(grep -c '^INSTALL-MODEL birdnet-v24 ' "${SB}/requests.log")"
-    [ "${tries}" -eq 3 ] && pass "${why}: three attempts" || fail "${why}: ${tries} attempts, not 3"
-    if [ "$(grep '^SLEEP' "${SB}/requests.log" | tr '\n' ' ')" = "SLEEP 30 SLEEP 90 " ]; then
-        pass "${why}: 30 s and then 90 s between them (about two minutes)"
+    [ "${tries}" -eq 1 ] && pass "${why}: the installer asks the binary once" || fail "${why}: ${tries} calls, not 1"
+    if grep -qx 'RETRY-WAITS birdnet-v24 30 90' "${SB}/requests.log" && ! grep -q '^SLEEP' "${SB}/requests.log"; then
+        pass "${why}: with the retry schedule 30 90, and no waiting of its own"
     else
-        fail "${why}: waited '$(grep '^SLEEP' "${SB}/requests.log" | tr '\n' ' ')'"
+        fail "${why}: schedule '$(grep '^RETRY-WAITS birdnet-v24' "${SB}/requests.log")', sleeps '$(grep -c '^SLEEP' "${SB}/requests.log")'"
     fi
     if grep -q 'Installation complete!' "${SB}/out.log"; then
         fail "${why}: the summary says 'Installation complete!' over a station that cannot detect"
     else
         pass "${why}: the summary does not say 'Installation complete!'"
     fi
-    # Last, after everything else the summary says.
     tail_text="$(sed -n '/For troubleshooting/,$p' "${SB}/out.log")"
     if grep -q 'NOT DETECTING BIRDS' <<<"${tail_text}" && grep -q 'install.sh repair' <<<"${tail_text}" \
         && grep -q -- '--local-model' <<<"${tail_text}" && grep -q 'status 75' <<<"${tail_text}"; then
@@ -292,46 +295,26 @@ for why in FLOW_FAIL_MODEL FLOW_OLD_BINARY; do
         fail "${why}: the end of the run does not say it: $(tail -12 "${SB}/out.log" | tr '\n' '|')"
     fi
 done
-# The wait list is the operator's (and a test's) to change.
+# The operator's schedule reaches the binary as given — every model's, the
+# filter's too, which the installer used to fetch once with no retry at all.
 new_sandbox
-FLOW_FAIL_MODEL=1 BIRDNET_MODEL_RETRY_WAITS="" flow_run "${SB}"
-rc=$?
-tries="$(grep -c '^INSTALL-MODEL birdnet-v24 ' "${SB}/requests.log")"
-[ "${rc}" -eq 75 ] && [ "${tries}" -eq 1 ] && ! grep -q '^SLEEP' "${SB}/requests.log" \
-    && pass "BIRDNET_MODEL_RETRY_WAITS=\"\" is one attempt and no wait" \
-    || fail "BIRDNET_MODEL_RETRY_WAITS=\"\": exit ${rc}, ${tries} attempts"
-new_sandbox
-FLOW_FAIL_MODEL=1 BIRDNET_MODEL_RETRY_WAITS="5 abc" flow_run "${SB}"
-[ "$(grep '^SLEEP' "${SB}/requests.log" | tr '\n' ' ')" = "SLEEP 30 SLEEP 90 " ] \
-    && pass "a wait list that is not numbers falls back to 30 90, and says so" \
-    || fail "BIRDNET_MODEL_RETRY_WAITS='5 abc' waited '$(grep '^SLEEP' "${SB}/requests.log" | tr '\n' ' ')'"
-# Counterpart: a failure that clears on a retry is a success like any other.
-echo "=== 6. counterpart: a download that fails once and then works is a plain success ==="
-new_sandbox
-FLOW_FAIL_MODEL_TIMES=1 flow_run "${SB}"
-rc=$?
-tries="$(grep -c '^INSTALL-MODEL birdnet-v24 ' "${SB}/requests.log")"
-if [ "${rc}" -eq 0 ] && [ "${tries}" -eq 2 ] && [ -s "$(want "${SB}" "${FLOW_V24_MODEL}")" ] \
-    && ! grep -q 'NOT DETECTING' "${SB}/out.log" && grep -q 'Installation complete!' "${SB}/out.log"; then
-    pass "exit 0 after two attempts, the model installed, and no not-detecting warning"
+BIRDNET_MODEL_RETRY_WAITS="" flow_run "${SB}"
+if grep -qx 'RETRY-WAITS birdnet-v24 ' "${SB}/requests.log" && grep -qx 'RETRY-WAITS birdnet-v24-range-v2 ' "${SB}/requests.log"; then
+    pass "BIRDNET_MODEL_RETRY_WAITS=\"\" reaches the binary for the classifier and the filter"
 else
-    fail "exit ${rc}, ${tries} attempts; model $([ -s "$(want "${SB}" "${FLOW_V24_MODEL}")" ] && echo present || echo missing)"
-    sed 's/^/        /' "${SB}/out.log" | tail -6
+    fail "the schedule handed over: $(grep '^RETRY-WAITS' "${SB}/requests.log" | tr '\n' ';')"
 fi
-# The installer's own V3.0 download follows the same rule.
 new_sandbox
 FLOW_FAIL_V3_MODEL=1 flow_run "${SB}" --classifier birdnet-v3
 rc=$?
-v3_gets="$(grep -c 'V3.0-preview3_Global_11K_FP32.onnx' "${SB}/requests.log")"
-if [ "${rc}" -eq 75 ] && [ "${v3_gets}" -eq 6 ] && [ "$(flow_conf "${SB}" MODEL_PATH)" = "$(want "${SB}" "${FLOW_V3_MODEL}")" ] \
-    && grep -q 'NOT DETECTING BIRDS' "${SB}/out.log"; then
-    pass "--classifier birdnet-v3: both origins tried three times, the install finished, exit 75"
+if [ "${rc}" -eq 75 ] && [ "$(flow_conf "${SB}" MODEL_PATH)" = "$(want "${SB}" "${FLOW_V3_MODEL}")" ] \
+    && grep -q 'NOT DETECTING BIRDS' "${SB}/out.log" && ! grep -q '^GET ' "${SB}/requests.log"; then
+    pass "--classifier birdnet-v3 with the model unreachable: the install finished, exit 75"
 else
-    fail "--classifier birdnet-v3 with the model unreachable: exit ${rc}, ${v3_gets} model requests"
+    fail "--classifier birdnet-v3 with the model unreachable: exit ${rc}; requests: $(tr '\n' ';' <"${SB}/requests.log")"
     sed 's/^/        /' "${SB}/out.log" | tail -6
 fi
 
-# ── 6b. a local model file ──────────────────────────────────────────────────
 echo "=== 6b. a local model file is checked like a download: installed when it matches, refused when not ==="
 for how in env flag; do
     new_sandbox
@@ -373,7 +356,7 @@ new_sandbox
 printf '%s' "${FLOW_BODY_V3_MODEL}" >"${SB}/v3.onnx"
 flow_run "${SB}" --classifier birdnet-v3 --local-model "${SB}/v3.onnx"
 rc=$?
-if [ "${rc}" -eq 0 ] && ! grep -q 'V3.0-preview3_Global_11K_FP32.onnx' "${SB}/requests.log" \
+if [ "${rc}" -eq 0 ] && grep -qx "INSTALL-MODEL birdnet-v3 dir=$(flow_models_dir "${SB}") from=${SB}/v3.onnx" "${SB}/requests.log" \
     && [ "$(cat "$(want "${SB}" "${FLOW_V3_MODEL}")" 2>/dev/null)" = "${FLOW_BODY_V3_MODEL}" ]; then
     pass "--classifier birdnet-v3 --local-model: the matching file is installed and the model is not downloaded"
 else
@@ -383,8 +366,8 @@ new_sandbox
 printf '%s' "not the V3.0 model" >"${SB}/v3.onnx"
 flow_run "${SB}" --classifier birdnet-v3 --local-model "${SB}/v3.onnx"
 rc=$?
-if [ "${rc}" -eq 75 ] && [ "$(flow_models_count "${SB}" 'V3.0-preview3_Global_11K_FP32')" -eq 0 ] \
-    && grep -q 'Checksum mismatch' "${SB}/out.log"; then
+if [ "${rc}" -eq 75 ] && [ ! -e "$(want "${SB}" "${FLOW_V3_MODEL}")" ] \
+    && grep -q 'sha256 mismatch' "${SB}/out.log"; then
     pass "--classifier birdnet-v3: a file that does not match the pin is refused and leaves nothing behind; exit 75"
 else
     fail "V3.0 wrong local model: exit ${rc}; models: $(ls "$(flow_models_dir "${SB}")" | tr '\n' ' ')"

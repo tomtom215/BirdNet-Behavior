@@ -157,9 +157,8 @@ SERVICE_WAS_RUNNING=0
 #
 # Two are supported. `--classifier` (or BIRDNET_CLASSIFIER) picks one for a new
 # install; select_classifier in 52-classifier.sh copies the chosen one's names
-# (and, for V3.0, its pins) into the unprefixed MODEL_FILE / LABELS_FILE /
-# MODEL_SHA256 / LABELS_SHA256 / MODEL_RELEASE_TAG that the rest of the
-# installer reads.
+# into the unprefixed CLASSIFIER / MODEL_FILE / LABELS_FILE / FILTER_ID that the
+# rest of the installer reads.
 #
 #   birdnet-v24  BirdNET V2.4 + its range (occurrence) filter v2. THE DEFAULT.
 #                The network BirdNET-Pi and birdnet-go run, so a station that
@@ -173,9 +172,22 @@ SERVICE_WAS_RUNNING=0
 # A classifier and its occurrence filter are a pair and are never mixed: the
 # V2.4 range filter is indexed like the V2.4 labels (by position) and means
 # nothing to another network; the geomodel is matched by name through its own
-# label file. The V3.0 pins below are also in the Rust catalogue and in the
-# container's entrypoint; installer/test/model-pins-match-catalogue.sh fails
-# when they disagree.
+# label file.
+#
+# Every model file is installed by the binary, not by this script (MDL-09):
+# `birdnet-behavior --install-model <id>` for each of the four ids below. The
+# digests, the sizes, the origins (this project's release first, then the
+# publisher's), the retries, the resume and the timeouts all live in
+# crates/birdnet-integrations/src/model_catalog.rs, and the binary verifies
+# every file against them and renames it into place only when it matches.
+# Nothing about the bytes is pinned here — no digest, no URL, no size — so there
+# is no second copy to go stale. What IS here is the names the binary gives the
+# files, so the config can point at them, and the names this installer used to
+# give the V3.0 files itself, so an existing station's config can be moved onto
+# the new names (the binary adopts a verified file under an old name in place,
+# without downloading it again). installer/test/model-pins-match-catalogue.sh
+# holds every name to the catalogue, and fails if a digest or a URL of any
+# catalogue file appears in this file or in the container's entrypoint.
 # ---------------------------------------------------------------------------
 CLASSIFIER_V24="birdnet-v24"
 CLASSIFIER_V3="birdnet-v3"
@@ -186,39 +198,41 @@ DEFAULT_CLASSIFIER="${CLASSIFIER_V24}"
 # is already installed, into CLASSIFIER.
 CLASSIFIER_REQUEST="${BIRDNET_CLASSIFIER:-}"
 
-# ---------------------------------------------------------------------------
-# BirdNET V2.4 (the default). FP32 ONNX (~54 MB) + labels (~0.3 MB) + range
-# filter v2 (~30 MB), arch-independent.
-#
-# Installed by the binary, not by this script: `birdnet-behavior --install-model
-# birdnet-v24` and `... birdnet-v24-range-v2`. Nothing about those files is
-# pinned here — no digest, no URL, no size. The digests, the origins and the
-# size check live in crates/birdnet-integrations/src/model_catalog.rs, and the
-# binary verifies each file against them and renames it into place only when it
-# matches. That is deliberate and it is not only tidiness: the V2.4 labels are a
-# file the binary itself carries (BirdNET-Pi's English names on V2.4's class
-# order — the file birdnet-go publishes names 460 of 6 522 classes differently,
-# which would split a species in two the day a BirdNET-Pi history is imported),
-# so there is nothing for this script to download, and a second copy of the
-# other two pins would be a second place for them to go stale.
-#
-# What IS here is the names the binary gives the files, so the config can point
-# at them. installer/test/model-pins-match-catalogue.sh holds them to the
-# catalogue's ids, and fails if a digest or a URL for V2.4 ever appears in this
-# file or in the container's entrypoint.
-# ---------------------------------------------------------------------------
+# BirdNET V2.4 (the default): FP32 ONNX (~54 MB), labels the binary carries
+# (BirdNET-Pi's English names on V2.4's class order — the file birdnet-go
+# publishes names 460 of 6 522 classes differently, which would split a species
+# in two the day a BirdNET-Pi history is imported), and the range filter v2
+# (~30 MB).
 V24_MODEL_ID="birdnet-v24"
 V24_RANGE_ID="birdnet-v24-range-v2"
 V24_MODEL_FILE="birdnet-v24.onnx"
 V24_LABELS_FILE="birdnet-v24_labels.txt"
 V24_RANGE_FILE="birdnet-v24-range-v2.onnx"
 
+# BirdNET+ V3.0 preview (opt-in; what every install before V2.4 became the
+# default runs): FP32 ONNX (~541 MB) + labels, and the BirdNET geomodel V3.0.2
+# (~14 MB) + its own labels, which score a different species list (12 012
+# against 11 560) and are matched to the classifier's by name.
+V3_MODEL_ID="birdnet-v3"
+V3_GEOMODEL_ID="birdnet-v3-geomodel"
+V3_MODEL_FILE="birdnet-v3.onnx"
+V3_LABELS_FILE="birdnet-v3_labels.csv"
+GEOMODEL_FILE="birdnet-v3-geomodel.onnx"
+GEOMODEL_LABELS_FILE="birdnet-v3-geomodel_labels.txt"
+# The names this installer gave those four files before the binary installed
+# them (the publishers' own names). A station's config may name them; the
+# update moves it onto the names above once the binary has adopted the files.
+V3_LEGACY_MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
+V3_LEGACY_LABELS_FILE="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
+GEOMODEL_LEGACY_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx"
+GEOMODEL_LEGACY_LABELS_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"
+
 # ---------------------------------------------------------------------------
 # When the classifier cannot be installed (OOB-20; decision 7 of 2026-11-25).
 #
 # A failed classifier download used to be `fatal` before the config and the
-# service existed, leaving a binary and nothing else. Now the fetch is retried
-# a bounded number of times, and if it still fails the install FINISHES — the
+# service existed, leaving a binary and nothing else. Now the binary retries a
+# bounded number of times, and if it still fails the install FINISHES — the
 # config, the unit, the dashboard — and says loudly, last thing on the screen,
 # that the station is not detecting and how to install the model. The run then
 # exits with EXIT_NO_CLASSIFIER, so a script can tell "installed, not
@@ -226,16 +240,17 @@ V24_RANGE_FILE="birdnet-v24-range-v2.onnx"
 # status a failing command gives under `set -e`). 75 is sysexits' EX_TEMPFAIL:
 # "a temporary failure; try again later", which is exactly the remedy.
 #
-#   BIRDNET_MODEL_RETRY_WAITS  seconds to wait before each retry, space
-#                              separated: "30 90" is three attempts over two
-#                              minutes. "" is one attempt. Tests set "0 0".
+#   BIRDNET_MODEL_RETRY_WAITS  seconds to wait before each further round of a
+#                              model's origins, space separated: "30 90" is
+#                              three rounds over two minutes. "" is one round.
+#                              Read by the binary, which does the retrying for
+#                              every model (each round resumes what the last
+#                              one received); tests set "0 0".
 #   BIRDNET_LOCAL_MODEL        (or --local-model PATH) install the classifier
 #                              from a file already on this machine instead of
-#                              downloading it. It is checked against the same
-#                              pins as a download (V2.4: the sha256 AND size the
-#                              binary carries; V3.0: the sha256 below) and a
-#                              file that does not match is refused, never
-#                              installed. For an offline install.
+#                              downloading it. The binary checks it against the
+#                              same sha256 and size as a download and refuses a
+#                              file that does not match. For an offline install.
 # BIRDNET_SKIP_MODEL=1 is not a failure: the operator asked for it, and it
 # still exits 0.
 # ---------------------------------------------------------------------------
@@ -247,38 +262,6 @@ LOCAL_MODEL="${BIRDNET_LOCAL_MODEL:-}"
 CLASSIFIER_MISSING=0
 CLASSIFIER_MISSING_WHY=""
 
-# ---------------------------------------------------------------------------
-# BirdNET+ V3.0 model files (opt-in: --classifier birdnet-v3). FP32 ONNX
-# (~541 MB), arch-independent and working on every platform. This is the
-# successor to BirdNET V2.4, the network BirdNET-Pi and birdnet-go run, not the
-# same model: its detections differ by design. See docs/book/guides/parity.md.
-#
-# Primary origin is a stable, arch-independent GitHub release shared by all app
-# releases (uploaded once, never re-pushed per patch), so a fresh install pulls
-# the binary AND the model from the same host (GitHub) and is offline-capable
-# after that single fetch. Zenodo is the upstream source and the fallback when
-# the GitHub asset is absent (older app releases) or unreachable.
-#
-# Both files are verified against the pinned sha256 below regardless of which
-# origin served them — these hashes are the integrity root of trust (they live
-# in version-controlled, provenance-attested source), so a corrupted or tampered
-# download from either host is rejected. The same hashes are published as the
-# `SHA256SUMS` asset of the models release; publish-model.yml cross-checks the
-# Zenodo bytes against these values before it uploads, so the two never drift.
-# ---------------------------------------------------------------------------
-V3_MODEL_FILE="BirdNET+_V3.0-preview3_Global_11K_FP32.onnx"
-V3_LABELS_FILE="BirdNET+_V3.0-preview3_Global_11K_Labels.csv"
-V3_MODEL_SHA256="2a0f9efba1a98e3193ad3dfcb8323116a7de88e39545f3619a7ea46e3bb7d743"
-V3_LABELS_SHA256="8124b0ea2d187104c5e2cd95a0f937165647e20349c8fd34d4d5ef991821f8f0"
-
-# Primary origin: the stable GitHub models release (one per model version).
-V3_MODEL_RELEASE_TAG="models-v3.0-preview3"
-
-# Fallback origin: Zenodo. The API /content endpoint handles the + in the
-# filenames correctly and needs no login.
-V3_ZENODO_RECORD="18247420"
-ZENODO_API="https://zenodo.org/api/records/${V3_ZENODO_RECORD}/files"
-
 # What the rest of the installer reads: the SELECTED classifier's files. Empty
 # until select_classifier runs (52-classifier.sh runs it with the default as
 # soon as it is loaded, and main re-runs it once it knows better).
@@ -286,54 +269,10 @@ CLASSIFIER=""
 CLASSIFIER_NAME=""
 MODEL_FILE=""
 LABELS_FILE=""
-MODEL_SHA256=""
-LABELS_SHA256=""
-MODEL_RELEASE_TAG=""
-MODEL_GH_BASE=""
+FILTER_ID=""
 MODEL_SIZE_HINT=""
 # One line the final summary prints under "Classifier:", set by resolve_classifier.
 CLASSIFIER_SUMMARY=""
-
-# ---------------------------------------------------------------------------
-# BirdNET Geomodel v3.0.2 — the species occurrence ("range") filter.
-#
-# Separate from the classifier above, and versioned separately: the classifier
-# says *what* it heard, the geomodel says which species plausibly occur at this
-# latitude/longitude in this week of the year. Without it the station keeps
-# every one of the classifier's ~11 560 species as a candidate wherever it is,
-# which is how a garden in Berlin reports birds that have never left Peru.
-#
-# The two do NOT score the same species list — the geomodel covers 12 012
-# species across birds, mammals, insects, amphibians and reptiles — so its own
-# label file ships beside it and is what maps one list onto the other. Both are
-# required; the station refuses a model it cannot align rather than reading one
-# list's index into the other.
-#
-# FP32 rather than FP16: both are genuine upstream artifacts and agree to
-# within one species in ~300 at the default threshold, but FP32 loads about
-# twice as fast (no FP16→FP32 cast nodes for the CPU execution provider) and
-# upstream marks it the recommended variant. 14 MB against the classifier's
-# 541 MB is not a size worth optimising.
-#
-# Origins mirror the classifier's: our own models release first (same host as
-# the binary), then the upstream birdnet-team release. Both are verified
-# against the sha256 pinned here before the bytes are accepted.
-#
-# Licence: the geomodel weights are CC BY-SA 4.0 (Stefan Kahl, K. Lisa Yang
-# Center for Conservation Bioacoustics) with prohibited uses covering poaching
-# and military applications — see MODEL_LICENSE.txt in the upstream release.
-# Redistribution is permitted with attribution; that is what the mirror does.
-GEOMODEL_VERSION="v3.0.2"
-GEOMODEL_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx"
-GEOMODEL_LABELS_FILE="BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"
-GEOMODEL_SHA256="b151f680a47de5371f39b3df129aea5946ac6baa039582274f833b42eaf992ea"
-GEOMODEL_LABELS_SHA256="c15818db07e55978d909a9bcd916cd0615b0183f789227d9516059151787c784"
-
-# Primary origin: our models release (the same one the V3.0 classifier comes
-# from, so a fresh install still contacts a single host).
-GEOMODEL_GH_BASE="https://github.com/${REPO}/releases/download/${V3_MODEL_RELEASE_TAG}"
-# Fallback origin: the upstream release the mirror is taken from.
-GEOMODEL_UPSTREAM_BASE="https://github.com/birdnet-team/geomodel/releases/download/${GEOMODEL_VERSION}"
 
 # Colour codes (used only when stdout is a terminal)
 if [ -t 1 ]; then
@@ -690,8 +629,7 @@ EOT
 # Download helpers (curl or wget) and release-version resolution
 # ---------------------------------------------------------------------------
 
-# Every origin this installer talks to is https (GitHub, and the model hosts it
-# falls back to). Say so to curl and wget, so that a redirect cannot move a
+# Every origin this installer talks to is https (GitHub). Say so to curl and wget, so that a redirect cannot move a
 # download onto plain http or an older TLS, where the SHA256SUMS that the
 # archive is checked against would be read over a channel anyone on the path
 # can rewrite.
@@ -709,41 +647,9 @@ download() {
     fi
 }
 
-# `download`, except that "not there" (HTTP 404) is an answer rather than an
-# error: it returns 4 and prints nothing, so a caller with another origin to
-# try can say so in its own words. Any other failure is reported as before.
-#
-# Why: the models release may not carry the geomodel yet (RELEASING.md), and
-# that documented fallback to upstream printed curl's "The requested URL
-# returned error: 404" and a [WARN] on every install — an expected path dressed
-# as a fault, which teaches operators to skim past real ones.
-download_or_absent() {
-    local url="$1"
-    local dest="$2"
-    local code
-    if ! command -v curl &>/dev/null; then
-        download "${url}" "${dest}"
-        return
-    fi
-    # No -f: an HTTP error is read from the status code instead of printed.
-    # -S still reports transport failures (DNS, TLS, timeouts).
-    if ! code="$(curl "${CURL_HTTPS_ONLY[@]}" -sSL --retry 3 --retry-delay 2 -o "${dest}" -w '%{http_code}' "${url}")"; then
-        rm -f "${dest}"
-        return 1
-    fi
-    case "${code}" in
-        2??) return 0 ;;
-        404) rm -f "${dest}"; return 4 ;;
-        *)
-            rm -f "${dest}"
-            warn "HTTP ${code} from ${url}"
-            return 1
-            ;;
-    esac
-}
-
 # Large-file download helper — resumes on interrupt, shows a progress bar
-# so the operator sees something is happening during the ~541 MB model pull.
+# so the operator sees something is happening during a large download (the
+# macOS binary; every model file is installed by the binary itself).
 #
 #   download_large URL DEST [HUMAN_NAME]
 #
@@ -752,9 +658,8 @@ download_or_absent() {
 #   - Print a progress bar to the terminal (-#).
 #   - Up to 5 automatic retries with exponential backoff for transient errors.
 #   - Treat HTTP errors as failures (-f).
-#   - A definitive HTTP 404 fails immediately (no retries) so a missing asset
-#     falls through to the next source at once instead of stalling ~10 s on
-#     five back-off retries — `fetch_verified_model` then tries Zenodo. We do
+#   - A definitive HTTP 404 fails immediately (no retries) instead of stalling
+#     ~10 s on five back-off retries. We do
 #     NOT pass --retry-all-errors (which would retry the 404); curl's default
 #     --retry already covers the transient cases (timeouts, 5xx, 429), and
 #     --retry-connrefused keeps a slow-to-wake CDN resilient.
@@ -876,6 +781,10 @@ free_mb_for_path() {
 # is already present, since that is the only large download.
 check_disk_space() {
     if [ -f "${MODEL_DIR}/${MODEL_FILE}" ]; then
+        return 0
+    fi
+    # An earlier installer's copy is adopted in place, which costs no space.
+    if [ "${CLASSIFIER:-}" = "${CLASSIFIER_V3}" ] && [ -f "${MODEL_DIR}/${V3_LEGACY_MODEL_FILE}" ]; then
         return 0
     fi
     local free_mb
@@ -1319,46 +1228,34 @@ valid_classifier_id() {
 }
 
 # Make $1 the classifier the rest of the installer works with, by copying its
-# file names (and, for V3.0 only, its digests and release tag) into the
-# unprefixed names the download, config and summary code read.
-# Silent: it only sets variables.
+# file names and its occurrence filter's catalogue id into the unprefixed names
+# the install, config and summary code read. Silent: it only sets variables.
 select_classifier() {
     case "$1" in
         birdnet-v24)
-            CLASSIFIER="birdnet-v24"
+            CLASSIFIER="${V24_MODEL_ID}"
             CLASSIFIER_NAME="BirdNET V2.4"
             MODEL_FILE="${V24_MODEL_FILE}"
             LABELS_FILE="${V24_LABELS_FILE}"
-            # No digests and no release tag: the binary installs these files
-            # and owns what they must hash to (see 10-config.sh).
-            MODEL_SHA256=""
-            LABELS_SHA256=""
-            MODEL_RELEASE_TAG=""
+            FILTER_ID="${V24_RANGE_ID}"
             MODEL_SIZE_HINT="~54 MB"
             # The binary will not install into less than the model's size plus
             # a 512 MiB margin, so the floor is above that, not above 85 MB.
             REQUIRED_FREE_MB=600
             ;;
         birdnet-v3)
-            CLASSIFIER="birdnet-v3"
+            CLASSIFIER="${V3_MODEL_ID}"
             CLASSIFIER_NAME="BirdNET+ V3.0"
             MODEL_FILE="${V3_MODEL_FILE}"
             LABELS_FILE="${V3_LABELS_FILE}"
-            MODEL_SHA256="${V3_MODEL_SHA256}"
-            LABELS_SHA256="${V3_LABELS_SHA256}"
-            MODEL_RELEASE_TAG="${V3_MODEL_RELEASE_TAG}"
+            FILTER_ID="${V3_GEOMODEL_ID}"
             MODEL_SIZE_HINT="~541 MB"
-            REQUIRED_FREE_MB=900
+            REQUIRED_FREE_MB=1100
             ;;
         *)
             fatal "Unknown classifier '$1'. Choose ${CLASSIFIER_V24} (the default) or ${CLASSIFIER_V3}."
             ;;
     esac
-    if [ -n "${MODEL_RELEASE_TAG}" ]; then
-        MODEL_GH_BASE="https://github.com/${REPO}/releases/download/${MODEL_RELEASE_TAG}"
-    else
-        MODEL_GH_BASE=""
-    fi
 }
 
 # The value of KEY in FILE (default: the station config): the last active
@@ -1397,7 +1294,7 @@ resolve_classifier() {
     elif [ -n "${requested}" ]; then
         how="requested"
         chosen="${requested}"
-    elif [ -f "${MODEL_DIR}/${V3_MODEL_FILE}" ]; then
+    elif [ -f "${MODEL_DIR}/${V3_MODEL_FILE}" ] || [ -f "${MODEL_DIR}/${V3_LEGACY_MODEL_FILE}" ]; then
         how="v3-files"
         chosen="${CLASSIFIER_V3}"
     else
@@ -1409,7 +1306,8 @@ resolve_classifier() {
     case "${how}" in
         kept)
             if [ "${chosen}" = "${CLASSIFIER_V24}" ] \
-                || [ "${kept_model}" = "${MODEL_DIR}/${V3_MODEL_FILE}" ]; then
+                || [ "${kept_model}" = "${MODEL_DIR}/${V3_MODEL_FILE}" ] \
+                || [ "${kept_model}" = "${MODEL_DIR}/${V3_LEGACY_MODEL_FILE}" ]; then
                 CLASSIFIER_SUMMARY="$(classifier_summary "${chosen}")"
             elif [ -n "${kept_model}" ]; then
                 CLASSIFIER_SUMMARY="the model in MODEL_PATH (${kept_model}) — this installer did not change it"
@@ -1458,196 +1356,58 @@ select_classifier "${DEFAULT_CLASSIFIER}"
 
 # ===== installer/lib/55-model.sh =====
 # ---------------------------------------------------------------------------
-# Two classifiers are installed two ways, on purpose.
+# Installing the models: the binary does it (MDL-09).
 #
-#   BirdNET V2.4 (the default) is installed by the binary itself — see
-#   "BirdNET V2.4: the binary installs it" at the end of this file. Nothing in
-#   this script downloads, hashes or names an origin for those files.
+# Every model file a station runs — BirdNET V2.4 and its range filter, the
+# BirdNET+ V3.0 preview and its geomodel — is installed by
+# `birdnet-behavior --install-model <id>`. The binary fetches each file from its
+# origins in order (this project's release first, then the publisher's), resumes
+# a transfer that dropped, gives up on one that stalls, tries the origins again a
+# bounded number of times (BIRDNET_MODEL_RETRY_WAITS), checks the sha256 and the
+# size it pins, and renames the file into place only when it matches; a file
+# already there is re-hashed rather than trusted for being there, and one an
+# earlier version of this script left under the publisher's name is adopted in
+# place when it verifies, not downloaded again. This script asks for the files
+# and reads the binary's exit status; what they must hash to, and where they
+# come from, appears nowhere here.
 #
-#   BirdNET+ V3.0 (--classifier birdnet-v3) is installed by the functions below,
-#   exactly as before: from our own models release, falling back to Zenodo, each
-#   file checked against the pins in 10-config.sh. They are unchanged by V2.4
-#   becoming the default.
-#
-# Download the BirdNET+ V3.0 model + labels.
-#
-# Origin: the stable, arch-independent `models-v3.0-preview3` GitHub release
-# (so the binary and the model are fetched from the *same* host and the install
-# is offline-capable after that one fetch), falling back to Zenodo — the
-# upstream source — when the GitHub asset is missing (e.g. installing an older
-# app release whose line predates the model release) or unreachable.
-#
-# Whichever host serves the bytes, each file is verified against the sha256
-# pinned in 10-config.sh before it is accepted: those hashes are the integrity
-# root of trust (they live in version-controlled, provenance-attested source),
-# so a corrupted or tampered download from either origin is rejected and the
-# next source is tried. The same hashes are published as the `SHA256SUMS` asset
-# of the models release.
+# The same call on every run, install, update and repair alike, so a model that
+# a bad card damaged after it was installed is found and replaced by the next
+# `install.sh repair`, and a filter whose download failed at install is tried
+# again by the next update — the filters used to be fetched once with no retry.
 # ---------------------------------------------------------------------------
 
-# Verify that FILE has the expected sha256. Returns 0 on a match, 1 on a
-# mismatch.
-#
-# A missing sha256sum is fatal, not a pass. It used to `return 0` — the same
-# value a verified file returns — so the one tool that could detect a tampered
-# 541 MB model being absent counted as the model being fine. preflight()
-# already refuses to run without sha256sum, so this is a backstop rather than
-# a path an operator reaches; a backstop that returns success is not one.
-verify_model_sha256() {
-    local file="$1" expected="$2"
-    if ! command -v sha256sum &>/dev/null; then
-        # `${file##*/}` rather than basename: the one situation this branch
-        # fires in is a broken PATH, and the abort message must not itself
-        # depend on an external tool to render.
-        fatal "sha256sum is not available, so ${file##*/} cannot be verified. Refusing to install an unverified model. Install coreutils and re-run."
-    fi
-    local actual
-    actual="$(sha256sum "${file}" | awk '{print $1}')"
-    if [ "${actual}" = "${expected}" ]; then
-        return 0
-    fi
-    warn "  Checksum mismatch for $(basename "${file}")"
-    warn "    expected: ${expected}"
-    warn "    actual:   ${actual}"
-    return 1
-}
-
-# Fetch one model file from the first origin that serves bytes matching its
-# pinned sha256. A file is only accepted once the checksum matches; a mismatch
-# discards it and falls through to the next origin.
-#
-#   fetch_verified_model DEST EXPECTED_SHA HUMAN_NAME RESUMABLE LABEL URL [LABEL URL...]
-#
-# The origins are passed as label/URL pairs rather than derived here, because
-# the two model families do not share a URL shape: Zenodo needs
-# `<api>/<file>/content` while both GitHub releases take `<base>/<file>`.
-# Building them at the call site keeps that knowledge next to the config that
-# defines it, and lets the geomodel use its own upstream without teaching this
-# function about a third source.
-#
-# RESUMABLE=1 routes through download_large (resume + progress bar) for the
-# ~541 MB classifier; any other value uses the plain download helper.
-# Returns 0 once a verified copy is in place, 1 if every origin failed.
-fetch_verified_model() {
-    local dest="$1" expected_sha="$2" human="$3" resumable="$4"
-    shift 4
-
-    while [ "$#" -ge 2 ]; do
-        local label="$1" url="$2"
-        shift 2
-
-        info "  Fetching ${human} from ${label}…"
-        if [ "${resumable}" = "1" ]; then
-            if ! download_large "${url}" "${dest}" "${human}"; then
-                warn "  ${human}: download from ${label} failed; trying the next source."
-                continue
-            fi
-        else
-            local rc=0
-            download_or_absent "${url}" "${dest}" || rc=$?
-            if [ "${rc}" -eq 4 ]; then
-                # Not a failure: the origin answered that it does not carry the
-                # file (the geomodel before it is mirrored; see RELEASING.md).
-                info "  ${human}: not published at ${label}; trying the next source."
-                continue
-            fi
-            if [ "${rc}" -ne 0 ]; then
-                warn "  ${human}: download from ${label} failed; trying the next source."
-                continue
-            fi
-        fi
-
-        if verify_model_sha256 "${dest}" "${expected_sha}"; then
-            success "  ${human}: sha256 verified (${label})."
-            return 0
-        fi
-
-        warn "  ${human}: discarding the file from ${label} and trying the next source."
-        rm -f "${dest}"
-    done
-
-    return 1
-}
-
-# The origin label/URL pairs for one classifier file: our models release first,
-# then Zenodo.
-classifier_origins() {
-    local filename="$1"
-    printf '%s\n' \
-        "GitHub release ${MODEL_RELEASE_TAG}" "${MODEL_GH_BASE}/${filename}" \
-        "Zenodo" "${ZENODO_API}/${filename}/content"
-}
-
-# The origin label/URL pairs for one geomodel file: our models release first,
-# then the upstream birdnet-team release it is mirrored from.
-geomodel_origins() {
-    local filename="$1"
-    printf '%s\n' \
-        "GitHub release ${MODEL_RELEASE_TAG}" "${GEOMODEL_GH_BASE}/${filename}" \
-        "upstream birdnet-team/geomodel ${GEOMODEL_VERSION}" "${GEOMODEL_UPSTREAM_BASE}/${filename}"
-}
-
-# Is FILE present *and* the file it claims to be?
-#
-# The distinction this draws is the whole finding. Every guard here used to ask
-# `[ -f "${dest}" ]`, and a partial download is a file. So:
-#
-#   1. a 541 MB fetch drops at 60 % and `fetch_verified_model` fails;
-#   2. the failure path deliberately KEEPS the partial and prints "Re-run this
-#      installer to resume from where it stopped";
-#   3. the operator re-runs, and the presence guard skips the fetch entirely;
-#   4. the installer prints "Model already downloaded — skipping" and
-#      "Validation passed";
-#   5. `--doctor` passes it, because `src/doctor/model.rs` accepts any file over
-#      one megabyte;
-#   6. the daemon logs "failed to start detection daemon", returns `None`, and
-#      `app.rs` carries on and serves the web UI;
-#   7. `/api/v2/health` answers `200 "healthy"`, because its status is SQLite's
-#      and nothing else.
-#
-# The operator seals the box, drives it forty kilometres out, and gets a green
-# dashboard that never records a bird. Reproduced end to end against the real
-# `download_model` with only the network helpers stubbed: `exit=0`, one call
-# (for the labels), model left at 29 bytes.
-#
-# Presence is not verification. Costs one sha256 of the cached file per install
-# or repair run, which is seconds even on a Pi, and is the only thing that can
-# tell a finished download from an abandoned one.
-model_file_is_verified() {
-    local file="$1" expected="$2"
-    [ -f "${file}" ] || return 1
-    verify_model_sha256 "${file}" "${expected}"
-}
-
-# Run "$@" until it succeeds, waiting MODEL_RETRY_WAITS (seconds, space
-# separated) between attempts: one more attempt than there are waits. Returns
-# the last attempt's failure. WHAT names the thing for the messages.
-#
-# Bounded on purpose (OOB-20). A field station's uplink drops for a minute and
-# comes back, and a mirror answers 503 for a moment; neither should cost the
-# operator a second trip to the box. An outage that lasts longer is not waited
-# out here: the install finishes without the classifier and says so
-# (classifier_not_installed), which is the better place to be than a terminal
-# that sits retrying for an hour.
-MODEL_ATTEMPTS=1
-retry_with_backoff() {
-    local what="$1" spec="${MODEL_RETRY_WAITS}"
+# Run `birdnet-behavior --install-model ID` into ${MODEL_DIR}. Output is the
+# binary's own, shown as it comes: it says what it is installing, how far it
+# has got, and why when it refuses. The binary is the installed one, or
+# MODEL_BINARY when that is set (the macOS path, whose binary lives elsewhere).
+install_model_with_binary() {
+    local id="$1" bin="${MODEL_BINARY:-${INSTALL_DIR}/${BINARY_NAME}}"
     shift
-    if ! [[ "${spec}" =~ ^[[:space:]]*([0-9]+([[:space:]]+[0-9]+)*)?[[:space:]]*$ ]]; then
-        warn "BIRDNET_MODEL_RETRY_WAITS='${spec}' is not a list of seconds; using 30 90."
-        spec="30 90"
+    if [ ! -x "${bin}" ]; then
+        warn "${bin} is not installed, so ${id} cannot be installed with it."
+        return 127
     fi
+    # The child gets the model directory and the retry schedule, and nothing
+    # else of the installer's own settings: the binary reports every BIRDNET_*
+    # variable it does not read, so `BIRDNET_CLASSIFIER=… sudo -E bash
+    # install.sh` would open the install with "BIRDNET_CLASSIFIER is not a
+    # variable this station reads". `--config /dev/null` is an empty config:
+    # there is no config yet on a fresh install, and without one the binary
+    # warns that it found none. Any further arguments are the binary's
+    # (`--from-file PATH`).
+    env -u BIRDNET_CLASSIFIER -u BIRDNET_SKIP_MODEL -u BIRDNET_NONINTERACTIVE \
+        -u BIRDNET_BINARY_TARBALL -u BIRDNET_SKIP_GLIBC_CHECK -u BIRDNET_LOCAL_MODEL \
+        BIRDNET_MODEL_RETRY_WAITS="${MODEL_RETRY_WAITS}" \
+        BIRDNET_MODEL_DIR="${MODEL_DIR}" "${bin}" --config /dev/null --install-model "${id}" "$@"
+}
+
+# How many rounds the binary makes of a model's origins under
+# MODEL_RETRY_WAITS, for the messages.
+model_attempts() {
     local -a waits=()
-    read -r -a waits <<<"${spec}"
-    MODEL_ATTEMPTS=$(( ${#waits[@]} + 1 ))
-    local n=1
-    while :; do
-        "$@" && return 0
-        [ "${n}" -lt "${MODEL_ATTEMPTS}" ] || return 1
-        warn "${what}: attempt ${n} of ${MODEL_ATTEMPTS} failed; trying again in ${waits[n - 1]} s."
-        sleep "${waits[n - 1]}"
-        n=$((n + 1))
-    done
+    read -r -a waits <<<"${MODEL_RETRY_WAITS}"
+    echo $(( ${#waits[@]} + 1 ))
 }
 
 # Record that the classifier is not installed, and say so now. The install
@@ -1662,371 +1422,146 @@ classifier_not_installed() {
               "How to install it is at the end of this run."
 }
 
-# Copy the operator's model file SRC to DEST, keeping it only if it has the
-# pinned sha256 EXPECTED (the V3.0 pins; V2.4's are the binary's). Staged
-# beside DEST under a name the station never loads, and renamed into place
-# only once it verifies, so a refused file never lands under the final name.
-install_local_model_file() {
-    local src="$1" dest="$2" expected="$3" stage
-    stage="${dest}.local.$$"
-    rm -f "${stage}"
-    if ! cp -- "${src}" "${stage}"; then
-        rm -f "${stage}"
-        warn "  Could not copy ${src} into ${MODEL_DIR}."
-        return 1
-    fi
-    if ! verify_model_sha256 "${stage}" "${expected}"; then
-        rm -f "${stage}"
-        return 1
-    fi
-    mv -f "${stage}" "${dest}"
+# Give the service user what the binary wrote into ${MODEL_DIR}: the files and
+# their verification records.
+own_model_dir() {
+    chown -R "${SERVICE_USER}:${SERVICE_USER}" "${MODEL_DIR}" 2>/dev/null || true
 }
 
-download_model() {
-    local model_dest="${MODEL_DIR}/${MODEL_FILE}"
-    local labels_dest="${MODEL_DIR}/${LABELS_FILE}"
-
-    # Skip only if both files are present *and* verify. See
-    # `model_file_is_verified`: a partial download is a file, and this guard
-    # asking only whether one existed is what let a truncated model survive
-    # every re-run, every repair and every downstream check.
-    if model_file_is_verified "${model_dest}" "${MODEL_SHA256}" &&
-       model_file_is_verified "${labels_dest}" "${LABELS_SHA256}"; then
-        success "Model already downloaded and verified at ${MODEL_DIR} — skipping."
-        return
-    fi
-
-    # Explicit skip: BIRDNET_SKIP_MODEL=1 lets an air-gapped operator stage the
-    # ~541 MB model out-of-band (place it at ${MODEL_DIR} later), and lets a CI
-    # install smoke test exercise the full flow without the large download. The
-    # daemon won't detect until the model is in place, but the install, config,
-    # unit, and web UI all come up.
+# The selected classifier, from its origins or from --local-model.
+download_classifier() {
     if [ "${BIRDNET_SKIP_MODEL:-0}" = "1" ]; then
         install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
-        loud_warn "BIRDNET_SKIP_MODEL=1 — the ML model was NOT downloaded." \
-                  "The service will start but will detect NOTHING until you stage it:" \
-                  "  place ${MODEL_FILE} and ${LABELS_FILE} in ${MODEL_DIR}," \
-                  "  then restart the service."
-        return
-    fi
-
-    info "Fetching the BirdNET+ V3.0 model (~541 MB FP32 ONNX) + labels…"
-    info "  Primary source: GitHub release ${MODEL_RELEASE_TAG} (sha256-verified)."
-    info "  Fallback:       Zenodo. This may take a few minutes on a slow link."
-
-    install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
-
-    # Model (~541 MB) — resumable so a dropped connection picks up where it left
-    # off on the next run instead of restarting from 0 MB.
-    if ! model_file_is_verified "${model_dest}" "${MODEL_SHA256}"; then
-        if [ -n "${LOCAL_MODEL}" ]; then
-            info "  Installing the model from ${LOCAL_MODEL} (checked against the same sha256 as a download)…"
-            if ! install_local_model_file "${LOCAL_MODEL}" "${model_dest}" "${MODEL_SHA256}"; then
-                classifier_not_installed "${LOCAL_MODEL} was refused: it is not the BirdNET+ V3.0 model this release pins (the checksum is above)"
-                return 0
-            fi
-        else
-            local model_origins
-            mapfile -t model_origins < <(classifier_origins "${MODEL_FILE}")
-            if ! retry_with_backoff "BirdNET+ V3.0 model" fetch_verified_model "${model_dest}" "${MODEL_SHA256}" \
-                "BirdNET+ V3.0 model (~541 MB)" 1 "${model_origins[@]}"; then
-                warn "Model download failed or could not be verified from any source."
-                warn "Any partial file is kept at:"
-                warn "  ${model_dest}"
-                warn "Re-running this installer resumes from where it stopped — the"
-                warn "guard above checks the checksum, not merely that a file exists,"
-                warn "so a partial is resumed rather than mistaken for a finished one."
-                warn "Common causes: no internet connection, GitHub/Zenodo temporarily"
-                warn "down, or disk full."
-                classifier_not_installed "the BirdNET+ V3.0 model could not be downloaded and verified (${MODEL_ATTEMPTS} attempts)"
-                return 0
-            fi
-        fi
-        chown "${SERVICE_USER}:${SERVICE_USER}" "${model_dest}"
-        success "Model installed to ${model_dest}"
-    fi
-
-    # Labels (small file — no resume needed).
-    if ! model_file_is_verified "${labels_dest}" "${LABELS_SHA256}"; then
-        local labels_origins
-        mapfile -t labels_origins < <(classifier_origins "${LABELS_FILE}")
-        if ! retry_with_backoff "BirdNET+ V3.0 labels" fetch_verified_model "${labels_dest}" "${LABELS_SHA256}" \
-            "species labels CSV" 0 "${labels_origins[@]}"; then
-            classifier_not_installed "the BirdNET+ V3.0 labels could not be downloaded and verified (${MODEL_ATTEMPTS} attempts)"
-            return 0
-        fi
-        chown "${SERVICE_USER}:${SERVICE_USER}" "${labels_dest}"
-        success "Labels installed to ${labels_dest}"
-    fi
-}
-
-# ---------------------------------------------------------------------------
-# Download the BirdNET geomodel + its labels (the species occurrence filter).
-#
-# Deliberately NON-FATAL, unlike the classifier. A station without the
-# classifier detects nothing and must stop; a station without the geomodel
-# detects everything and merely stops filtering by location, which is exactly
-# how every release before this one behaved. Aborting an otherwise good install
-# over a 14 MB optional download would be the worse failure — so this warns,
-# leaves METADATA_MODEL_PATH unset, and `--doctor` reports the filter as off
-# with the command to fix it.
-#
-# Both files are needed or neither is used: the model's 12 012 outputs are
-# meaningless without the label file that names them, and the station refuses a
-# model it cannot align. A half-download therefore removes what it got rather
-# than leaving a configuration that cannot start.
-#
-# Sets GEOMODEL_INSTALLED=1 when both files are verified and in place, which is
-# what 62-config-file.sh keys the METADATA_* settings on.
-# ---------------------------------------------------------------------------
-GEOMODEL_INSTALLED=0
-
-download_geomodel() {
-    local model_dest="${MODEL_DIR}/${GEOMODEL_FILE}"
-    local labels_dest="${MODEL_DIR}/${GEOMODEL_LABELS_FILE}"
-
-    # Skip only if both files are present *and* verify — the same rule
-    # `download_model` applies, for the same reason: a partial download is a
-    # file, and this guard used to ask only whether one existed (ON-3). A
-    # half-fetched geomodel then counted as installed on every re-run and
-    # every `repair`, 62-config-file.sh wrote the METADATA_* settings for it,
-    # and the daemon refused the pair on every start with the occurrence
-    # filter silently off. `installer/test/geomodel-resume.sh` holds this.
-    if model_file_is_verified "${model_dest}" "${GEOMODEL_SHA256}" &&
-       model_file_is_verified "${labels_dest}" "${GEOMODEL_LABELS_SHA256}"; then
-        GEOMODEL_INSTALLED=1
-        success "Geomodel already downloaded and verified at ${MODEL_DIR} — skipping."
-        return 0
-    fi
-
-    # The same escape hatch the classifier honours: an air-gapped operator
-    # stages the files by hand, and the install-smoke CI job skips the fetch.
-    if [ "${BIRDNET_SKIP_MODEL:-0}" = "1" ]; then
-        info "BIRDNET_SKIP_MODEL=1 — skipping the geomodel download too."
-        return 0
-    fi
-
-    info "Fetching the BirdNET geomodel ${GEOMODEL_VERSION} (~14 MB) + labels…"
-    info "  This is the species occurrence filter: it drops birds that do not"
-    info "  occur near this station at this time of year."
-
-    install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
-
-    local model_origins labels_origins
-    mapfile -t model_origins < <(geomodel_origins "${GEOMODEL_FILE}")
-    mapfile -t labels_origins < <(geomodel_origins "${GEOMODEL_LABELS_FILE}")
-
-    if ! model_file_is_verified "${model_dest}" "${GEOMODEL_SHA256}" &&
-        ! fetch_verified_model "${model_dest}" "${GEOMODEL_SHA256}" \
-            "geomodel (~14 MB)" 0 "${model_origins[@]}"; then
-        rm -f "${model_dest}"
-        warn "Geomodel download failed or could not be verified from any source."
-        warn "The station will run WITHOUT species occurrence filtering: every"
-        warn "species the classifier knows stays a candidate wherever it is."
-        warn "Re-run this installer to retry, then check with:"
-        warn "  birdnet-behavior --doctor"
-        return 0
-    fi
-
-    if ! model_file_is_verified "${labels_dest}" "${GEOMODEL_LABELS_SHA256}" &&
-        ! fetch_verified_model "${labels_dest}" "${GEOMODEL_LABELS_SHA256}" \
-            "geomodel labels" 0 "${labels_origins[@]}"; then
-        # The model alone cannot be used, and a configured-but-unusable pair is
-        # worse than none: the daemon would refuse it on every start. Remove
-        # both so the next run is a clean retry.
-        rm -f "${labels_dest}" "${model_dest}"
-        warn "Geomodel labels failed to download; removing the model too, since"
-        warn "the station cannot use one without the other. Occurrence filtering"
-        warn "is OFF. Re-run this installer to retry."
-        return 0
-    fi
-
-    chown "${SERVICE_USER}:${SERVICE_USER}" "${model_dest}" "${labels_dest}"
-    GEOMODEL_INSTALLED=1
-    success "Geomodel installed to ${model_dest}"
-    # Whether filtering is on depends on the config naming it, which
-    # write_config settles and reports (enable_geomodel_in_kept_config).
-    return 0
-}
-
-# ---------------------------------------------------------------------------
-# BirdNET V2.4: the binary installs it.
-#
-# `birdnet-behavior --install-model birdnet-v24` fetches the model, writes the
-# labels (a file the binary carries: BirdNET-Pi's English names on V2.4's class
-# order), checks the model's sha256 and size and the labels' sha256, and renames
-# each into place only when it matches, so nothing under a name the station
-# loads is ever half-written or unverified. `--install-model
-# birdnet-v24-range-v2` does the same for the range filter. This script runs
-# them and checks only that the files appeared; what they must hash to, and where
-# they come from, is the binary's business (model_catalog.rs) and appears nowhere
-# here. Pinning V2.4 in this script as well would be a second copy of digests
-# that already live in the binary, with nothing but a test to say when it went
-# stale; the V3.0 pins above are the only ones left, and they have the test.
-#
-# What this gives up, and why that is acceptable: the V3.0 code re-hashes a file
-# that is already there before trusting it, because it wrote that file with a
-# plain download that a dropped connection leaves truncated at the final name.
-# The binary's install is atomic — a file under its final name has already been
-# verified once — so a file that is present and non-empty is trusted, and a
-# missing one is installed. A file damaged AFTER it was installed (a bad card, a
-# truncated restore) is not found here; `birdnet-behavior --install-model
-# birdnet-v24` over the top replaces it, and the cheap fix for this gap is an
-# idempotent --install-model that re-hashes what is there, which belongs in the
-# binary.
-# ---------------------------------------------------------------------------
-
-# Run `birdnet-behavior --install-model ID` into ${MODEL_DIR}. Output is the
-# binary's own, shown as it comes: it says what it is installing, and why when it
-# refuses.
-install_model_with_binary() {
-    local id="$1" bin="${INSTALL_DIR}/${BINARY_NAME}"
-    shift
-    if [ ! -x "${bin}" ]; then
-        warn "${bin} is not installed, so ${id} cannot be installed with it."
-        return 127
-    fi
-    # The child gets the model directory and nothing of the installer's own
-    # settings: the binary reports every BIRDNET_* variable it does not read, so
-    # `BIRDNET_CLASSIFIER=… sudo -E bash install.sh` would open the install with
-    # "BIRDNET_CLASSIFIER is not a variable this station reads". `--config
-    # /dev/null` is an empty config: there is no config yet on a fresh install,
-    # and without one the binary warns that it found none.
-    # Any further arguments are the binary's (`--from-file PATH`).
-    env -u BIRDNET_CLASSIFIER -u BIRDNET_SKIP_MODEL -u BIRDNET_NONINTERACTIVE \
-        -u BIRDNET_BINARY_TARBALL -u BIRDNET_SKIP_GLIBC_CHECK \
-        -u BIRDNET_LOCAL_MODEL -u BIRDNET_MODEL_RETRY_WAITS \
-        BIRDNET_MODEL_DIR="${MODEL_DIR}" "${bin}" --config /dev/null --install-model "${id}" "$@"
-}
-
-# Is FILE there and not empty? (The binary's installs are atomic: a file at its
-# final name is a finished one. See above for what that does not cover.)
-installed_file_present() {
-    [ -s "$1" ]
-}
-
-download_model_v24() {
-    local model_dest="${MODEL_DIR}/${V24_MODEL_FILE}"
-    local labels_dest="${MODEL_DIR}/${V24_LABELS_FILE}"
-
-    if installed_file_present "${model_dest}" && installed_file_present "${labels_dest}"; then
-        success "BirdNET V2.4 model and labels already installed at ${MODEL_DIR} — skipping."
-        return
-    fi
-
-    if [ "${BIRDNET_SKIP_MODEL:-0}" = "1" ]; then
-        install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
+        local filter_files="${V24_RANGE_FILE}"
+        [ "${FILTER_ID}" = "${V3_GEOMODEL_ID}" ] && filter_files="${GEOMODEL_FILE} and ${GEOMODEL_LABELS_FILE}"
         loud_warn "BIRDNET_SKIP_MODEL=1 — the ML model was NOT installed." \
                   "The service will start but will detect NOTHING until you stage it:" \
-                  "  put ${V24_MODEL_FILE} and ${V24_LABELS_FILE} (and ${V24_RANGE_FILE} to filter by location)" \
+                  "  put ${MODEL_FILE} and ${LABELS_FILE} (and ${filter_files} to filter by location)" \
                   "  in ${MODEL_DIR}, then restart the service. They are what" \
-                  "  ${BINARY_NAME} --install-model ${V24_MODEL_ID} and ${V24_RANGE_ID} write."
+                  "  ${BINARY_NAME} --install-model ${CLASSIFIER} and ${FILTER_ID} write."
         return
     fi
 
-    info "Installing the BirdNET V2.4 model (${MODEL_SIZE_HINT} FP32 ONNX) + labels with ${BINARY_NAME} --install-model…"
-    info "  The binary checks each file's sha256 and size before it keeps it."
-    info "  BirdNET is licensed CC BY-NC-SA 4.0: free to use, but not for commercial purposes."
+    info "Installing the ${CLASSIFIER_NAME} classifier (${MODEL_SIZE_HINT}) + labels with ${BINARY_NAME} --install-model ${CLASSIFIER}…"
+    info "  The binary checks each file's sha256 and size before it keeps it, resumes a"
+    info "  download that drops, and tries its origins $(model_attempts) time(s) before giving up."
+    case "${CLASSIFIER}" in
+        "${CLASSIFIER_V24}") info "  BirdNET is licensed CC BY-NC-SA 4.0: free to use, but not for commercial purposes." ;;
+        *)                   info "  BirdNET+ V3.0 is licensed CC BY-SA 4.0." ;;
+    esac
 
     install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
 
     if [ -n "${LOCAL_MODEL}" ]; then
-        # The binary checks the file against the sha256 AND size it pins for
-        # V2.4 — the same check a download passes — and copies it into place
-        # only when both match. One attempt: a file that does not match will
-        # not match on the second try.
+        # The binary checks the file against the sha256 AND size it pins — the
+        # same check a download passes — and copies it into place only when
+        # both match. A file that does not match will not match on a retry.
         info "  From ${LOCAL_MODEL}, checked against the same sha256 and size as a download."
-        if ! install_model_with_binary "${V24_MODEL_ID}" --from-file "${LOCAL_MODEL}"; then
-            classifier_not_installed "${LOCAL_MODEL} was refused: it is not the BirdNET V2.4 model this release pins (the reason is above)"
+        if ! install_model_with_binary "${CLASSIFIER}" --from-file "${LOCAL_MODEL}"; then
+            own_model_dir
+            classifier_not_installed "${LOCAL_MODEL} was refused: it is not the ${CLASSIFIER_NAME} model this release pins (the reason is above)"
             return 0
         fi
-    elif ! retry_with_backoff "BirdNET V2.4" install_model_with_binary "${V24_MODEL_ID}"; then
-        warn "BirdNET V2.4 could not be installed (the reason is above)."
-        warn "Common causes: no internet connection, github.com and huggingface.co both"
-        warn "unreachable, less than ~600 MB free in ${MODEL_DIR}, or a ${BINARY_NAME} older than"
-        warn "BirdNET V2.4 support (it answers that the model is unknown) — install a current release."
-        warn "The BirdNET+ V3.0 preview is the other classifier, on a NEW install:"
-        warn "  sudo bash install.sh --classifier ${CLASSIFIER_V3}"
-        classifier_not_installed "BirdNET V2.4 could not be downloaded and verified (${MODEL_ATTEMPTS} attempts)"
+    elif ! install_model_with_binary "${CLASSIFIER}"; then
+        own_model_dir
+        warn "${CLASSIFIER_NAME} could not be installed (the reason is above)."
+        warn "Common causes: no internet connection, every origin of the model unreachable,"
+        warn "less free space in ${MODEL_DIR} than the model plus 512 MiB, or a ${BINARY_NAME}"
+        warn "older than this installer (it answers that the model is unknown) — install a current release."
+        classifier_not_installed "${CLASSIFIER_NAME} could not be downloaded and verified ($(model_attempts) attempts)"
         return 0
     fi
-    if ! installed_file_present "${model_dest}" || ! installed_file_present "${labels_dest}"; then
-        fatal "${BINARY_NAME} --install-model ${V24_MODEL_ID} reported success but ${model_dest} or ${labels_dest} is missing; this installer and the binary disagree about the file names."
-    fi
-    chown "${SERVICE_USER}:${SERVICE_USER}" "${model_dest}" "${labels_dest}"
-    success "BirdNET V2.4 model and labels installed to ${MODEL_DIR}"
+    own_model_dir
+    success "${CLASSIFIER_NAME} model and labels installed and verified in ${MODEL_DIR}"
 }
 
-# The V2.4 counterpart of download_geomodel, with the same stance: NON-FATAL. A
-# station without the classifier detects nothing and must stop; one without the
-# filter detects everything and merely stops filtering by location, so aborting
-# an otherwise good install over a 30 MB optional download would be the worse
+# The occurrence filter that belongs to the selected classifier, and only that
+# one: the V2.4 range filter for V2.4, the geomodel for V3.0.
+#
+# Deliberately NON-FATAL, unlike the classifier. A station without the
+# classifier detects nothing and must stop; a station without the filter
+# detects everything and merely stops filtering by location, so aborting an
+# otherwise good install over an optional 14–30 MB download would be the worse
 # failure. It warns, leaves METADATA_MODEL_PATH commented out, and `--doctor`
 # reports the filter as off with the command that fixes it.
 #
-# One file, no labels of its own: the filter is indexed like the V2.4 labels. For
-# the same reason it is only ever installed for V2.4, and the geomodel only for
-# V3.0 (download_occurrence_filter below); each means nothing to the other
-# network.
-#
-# Sets RANGE_FILTER_INSTALLED=1 when the file is in place, which is what
-# 62-config-file.sh keys METADATA_MODEL_PATH on.
+# Sets RANGE_FILTER_INSTALLED=1 or GEOMODEL_INSTALLED=1 once the binary has the
+# files in place and verified, which is what 62-config-file.sh keys the
+# METADATA_* settings on.
 RANGE_FILTER_INSTALLED=0
+GEOMODEL_INSTALLED=0
 
-download_range_filter() {
-    local dest="${MODEL_DIR}/${V24_RANGE_FILE}"
-
-    if installed_file_present "${dest}"; then
-        RANGE_FILTER_INSTALLED=1
-        success "Range filter already installed at ${MODEL_DIR} — skipping."
-        return 0
-    fi
-
+download_occurrence_filter() {
     if [ "${BIRDNET_SKIP_MODEL:-0}" = "1" ]; then
-        info "BIRDNET_SKIP_MODEL=1 — skipping the range filter install too."
+        info "BIRDNET_SKIP_MODEL=1 — skipping the occurrence filter install too."
         return 0
     fi
+    local what="the BirdNET V2.4 range filter v2 (~30 MB)"
+    [ "${FILTER_ID}" = "${V3_GEOMODEL_ID}" ] && what="the BirdNET geomodel (~14 MB) + labels"
 
-    info "Installing the BirdNET V2.4 range filter v2 (~30 MB) with ${BINARY_NAME} --install-model…"
+    info "Installing ${what} with ${BINARY_NAME} --install-model ${FILTER_ID}…"
     info "  This is the species occurrence filter: it drops birds that do not"
     info "  occur near this station at this time of year (it needs LATITUDE and LONGITUDE)."
 
     install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
 
-    if ! install_model_with_binary "${V24_RANGE_ID}" || ! installed_file_present "${dest}"; then
-        rm -f "${dest}"
-        warn "The range filter could not be installed (the reason is above)."
+    if ! install_model_with_binary "${FILTER_ID}"; then
+        own_model_dir
+        warn "The occurrence filter could not be installed (the reason is above)."
         warn "The station will run WITHOUT species occurrence filtering: every"
         warn "species the classifier knows stays a candidate wherever it is."
-        warn "Re-run this installer to retry, then check with:"
+        warn "Re-run this installer to retry (sudo bash install.sh repair), then check with:"
         warn "  birdnet-behavior --doctor"
         return 0
     fi
-
-    chown "${SERVICE_USER}:${SERVICE_USER}" "${dest}"
-    RANGE_FILTER_INSTALLED=1
-    success "Range filter installed to ${dest}"
+    own_model_dir
+    if [ "${FILTER_ID}" = "${V3_GEOMODEL_ID}" ]; then
+        GEOMODEL_INSTALLED=1
+    else
+        RANGE_FILTER_INSTALLED=1
+    fi
+    success "Occurrence filter installed and verified in ${MODEL_DIR}"
+    # Whether filtering is on depends on the config naming it, which
+    # write_config settles and reports.
     return 0
 }
 
-# What do_install / do_repair call. The classifier's own installer: the binary
-# for V2.4, the download code above for V3.0 (and for a station whose config
-# names neither, as before).
-download_classifier() {
-    if [ "${CLASSIFIER}" = "${CLASSIFIER_V24}" ]; then
-        download_model_v24
-    else
-        download_model
-    fi
+# The V3.0 files under the names this installer gave them before the binary
+# installed them, as config keys and file names: KEY LEGACY_NAME NEW_NAME.
+legacy_model_names() {
+    printf '%s %s %s\n' \
+        MODEL_PATH "${V3_LEGACY_MODEL_FILE}" "${V3_MODEL_FILE}" \
+        LABELS_PATH "${V3_LEGACY_LABELS_FILE}" "${V3_LABELS_FILE}" \
+        METADATA_MODEL_PATH "${GEOMODEL_LEGACY_FILE}" "${GEOMODEL_FILE}" \
+        METADATA_LABELS_PATH "${GEOMODEL_LEGACY_LABELS_FILE}" "${GEOMODEL_LABELS_FILE}"
 }
 
-# The occurrence filter that belongs to the selected classifier, and only that
-# one: the V2.4 range filter for V2.4, the geomodel for everything else.
-download_occurrence_filter() {
-    if [ "${CLASSIFIER}" = "${CLASSIFIER_V24}" ]; then
-        download_range_filter
-    else
-        download_geomodel
+# Move a kept config off the old V3.0 file names, and then remove the old files.
+#
+# The binary has, by now, adopted each old file that verified under its new
+# name — a hard link, so no second copy and no download — and a config line that
+# names the old path exactly is the one this installer wrote, so it is pointed at
+# the new name. Only a line whose new file is really there is moved: a station
+# whose model could not be installed keeps the path it had. An old file is
+# removed only once no active line of the config names it (and only when the
+# new one exists), so nothing the station loads disappears under it; a file an
+# operator pointed somewhere else is never touched.
+move_config_off_legacy_names() {
+    [ -f "${CONFIG_FILE}" ] || return 0
+    local key old new moved=0 active
+    while read -r key old new; do
+        [ -e "${MODEL_DIR}/${new}" ] || continue
+        if [ "$(config_value "${key}")" = "${MODEL_DIR}/${old}" ]; then
+            sed -i "s|^\\([[:space:]]*${key}[[:space:]]*=\\).*\$|\\1${MODEL_DIR}/${new}|" "${CONFIG_FILE}"
+            moved=1
+        fi
+        active="$(grep -E '^[[:space:]]*[A-Z_0-9]+[[:space:]]*=' "${CONFIG_FILE}" || true)"
+        if [ -e "${MODEL_DIR}/${old}" ] && ! grep -qF -- "${MODEL_DIR}/${old}" <<<"${active}"; then
+            rm -f "${MODEL_DIR}/${old}" "${MODEL_DIR}/${old}.verified"
+        fi
+    done < <(legacy_model_names)
+    if [ "${moved}" = 1 ]; then
+        success "Pointed ${CONFIG_FILE} at the model files under the names ${BINARY_NAME} gives them (the same files, verified)."
     fi
 }
 
@@ -2193,6 +1728,7 @@ enable_range_filter_in_kept_config() {
 write_config() {
     if [ -f "${CONFIG_FILE}" ]; then
         warn "Config file already exists at ${CONFIG_FILE} — skipping."
+        move_config_off_legacy_names
         enable_geomodel_in_kept_config
         enable_range_filter_in_kept_config
         # Upgrade from a version that left the config world-readable: tighten it
@@ -2390,7 +1926,11 @@ EOF
     chown "root:${SERVICE_USER}" "${CONFIG_FILE}"
     chmod 0640 "${CONFIG_FILE}"
     success "Default config written — edit ${CONFIG_FILE} to configure your station."
-    if [ "${GEOMODEL_INSTALLED:-0}" = "1" ]; then
+    # A station restored from a backup of its data may hold the V3.0 files under
+    # the names an earlier installer gave them; the binary adopted them, and
+    # nothing names the old ones now.
+    move_config_off_legacy_names
+    if [ "${GEOMODEL_INSTALLED:-0}" = "1" ] || [ "${RANGE_FILTER_INSTALLED:-0}" = "1" ]; then
         success "Species occurrence filtering is ON (threshold SF_THRESH, default 0.03)."
     fi
 }
@@ -3442,14 +2982,16 @@ do_repair() {
     # able to repair the commonest broken install there is: a model whose
     # download was interrupted. It used to check presence only, print "Model
     # present — skipping download", and compute no checksum — so the one
-    # subcommand named for fixing this could not fix it. `download_model`'s own
-    # guard now verifies, so handing the decision to it is both correct and one
-    # fewer place for the two to disagree.
+    # subcommand named for fixing this could not fix it. The binary re-hashes
+    # what is there and fetches only what does not verify, so handing the
+    # decision to it is both correct and one fewer place for the two to
+    # disagree.
     download_classifier
 
     # A repair run is how a station installed before the geomodel shipped picks
-    # it up: the download is a no-op when the files are already there. Which
-    # filter that is follows the station's classifier (V2.4: the range filter).
+    # it up, and how a filter whose download failed is tried again: the
+    # install is a re-hash when the files are already there. Which filter that
+    # is follows the station's classifier (V2.4: the range filter).
     download_occurrence_filter
 
     write_config             # idempotent: fixes ownership/permissions, keeps content
@@ -3967,41 +3509,106 @@ mac_brew_dep() { # $1=formula  $2=why
     esac
 }
 
-# Put the classifier's files in ${MAC_DATA_DIR}/models by asking the binary to
-# install them (`--install-model`), not by downloading them here.
-#
-# Linux's installer fetches and checks the files itself; macOS does not ship
-# `sha256sum`, and the binary already carries the same sha256 pins (the Rust
-# catalogue is the source of truth the Linux installer's are tested against),
-# fetches atomically through a .part file, and refuses a size or digest it
-# cannot verify. The files land under the names the Rust installer gives them
+# Put the classifier's files, and its occurrence filter's, in
+# ${MAC_DATA_DIR}/models by asking the binary to install them (`--install-model`)
+# — the one install mechanism every installer uses (55-model.sh says what it
+# does). The files land under the names the binary gives them
 # (birdnet-v24.onnx, birdnet-v24_labels.txt, birdnet-v24-range-v2.onnx; for the
-# V3.0 preview birdnet-v3.onnx and birdnet-v3_labels.csv), which is what the
-# config below names. The V3.0 geomodel is not in that catalogue, so a macOS
-# V3.0 station has no occurrence filter until one is added by hand.
+# V3.0 preview birdnet-v3.onnx, birdnet-v3_labels.csv, birdnet-v3-geomodel.onnx
+# and birdnet-v3-geomodel_labels.txt), which is what the config below names.
 #
-# Non-fatal: a failed fetch leaves the config naming the files and prints the
-# command that fetches them, so an install on a flaky link can be finished
-# later. Returns 1 when any file could not be installed.
+# Run on every install, also over a config that is kept, so a re-run retries
+# what failed and replaces what does not verify. A failed classifier is
+# recorded (CLASSIFIER_MISSING) and said loudly at the end, and the run exits
+# EXIT_NO_CLASSIFIER, as on Linux; a failed filter only warns.
+#
+# Sets MAC_FILTER_INSTALLED=1 when the occurrence filter is in place.
+MAC_FILTER_INSTALLED=0
 macos_install_models() { # $1=binary path  $2=classifier id
-    local bin="$1" id="$2" dir="${MAC_DATA_DIR}/models" item rc=0 items
-    mkdir -p "${dir}"
-    case "${id}" in
-        birdnet-v24) items="birdnet-v24 birdnet-v24-range-v2" ;;
-        *)           items="birdnet-v3" ;;
+    local classifier="$2" filter
+    MODEL_BINARY="$1"
+    MODEL_DIR="${MAC_DATA_DIR}/models"
+    mkdir -p "${MODEL_DIR}"
+    select_classifier "${classifier}"
+    filter="${FILTER_ID}"
+    info "Installing ${CLASSIFIER_NAME} into ${MODEL_DIR} (sha256-verified)…"
+    if [ -n "${LOCAL_MODEL}" ]; then
+        install_model_with_binary "${classifier}" --from-file "${LOCAL_MODEL}" \
+            || classifier_not_installed "${LOCAL_MODEL} was refused: it is not the ${CLASSIFIER_NAME} model this release pins (the reason is above)"
+    elif ! install_model_with_binary "${classifier}"; then
+        classifier_not_installed "${CLASSIFIER_NAME} could not be downloaded and verified ($(model_attempts) attempts)"
+    fi
+    info "Installing its species-occurrence filter (${filter})…"
+    if install_model_with_binary "${filter}"; then
+        MAC_FILTER_INSTALLED=1
+    else
+        warn "The occurrence filter could not be installed; the station runs without it."
+        warn "Run this installer again to retry."
+    fi
+}
+
+# The classifier a kept macOS config runs: one of the two whose files this
+# installer manages, by the MODEL_PATH it names, or nothing (a model of the
+# operator's own, which is theirs to install).
+macos_kept_classifier() { # $1=config file
+    local models="${MAC_DATA_DIR}/models" model
+    model="$(config_value MODEL_PATH "$1")"
+    case "${model}" in
+        "${models}/${V24_MODEL_FILE}") echo "${CLASSIFIER_V24}" ;;
+        "${models}/${V3_MODEL_FILE}") echo "${CLASSIFIER_V3}" ;;
+        *) ;;
     esac
-    for item in ${items}; do
-        info "Installing ${item} into ${dir} (sha256-verified)…"
-        # Without the installer's own BIRDNET_* settings (the binary reports every
-        # one it does not read) and with an empty config (there is none yet).
-        if ! env -u BIRDNET_CLASSIFIER -u BIRDNET_NONINTERACTIVE -u BIRDNET_BINARY_TARBALL \
-            BIRDNET_MODEL_DIR="${dir}" "${bin}" --config /dev/null --install-model "${item}"; then
-            warn "Could not install ${item}. Finish later with:"
-            warn "  BIRDNET_MODEL_DIR=\"${dir}\" \"${bin}\" --install-model ${item}"
-            rc=1
-        fi
-    done
-    return "${rc}"
+}
+
+# Fill in a kept macOS config's commented-out filter lines — the ones this
+# installer wrote when the filter was not there — now that it is (MDL-14).
+macos_enable_filter_in_kept_config() { # $1=config file  $2=classifier id
+    local conf="$1" models="${MAC_DATA_DIR}/models"
+    [ "${MAC_FILTER_INSTALLED}" = 1 ] || return 0
+    if [ "$2" = "${CLASSIFIER_V24}" ]; then
+        sed -i.bak -e "s|^# METADATA_MODEL_PATH=\(${models}/${V24_RANGE_FILE}\)\{0,1\}\$|METADATA_MODEL_PATH=${models}/${V24_RANGE_FILE}|" "${conf}"
+    else
+        # A config the previous macOS installer wrote for V3.0 has the model's
+        # placeholder and no labels line at all; the geomodel is unusable
+        # without its labels, so the line is added beside the model's.
+        awk -v m="METADATA_MODEL_PATH=${models}/${GEOMODEL_FILE}" \
+            -v l="METADATA_LABELS_PATH=${models}/${GEOMODEL_LABELS_FILE}" '
+            { lines[NR] = $0 }
+            /^#? ?METADATA_LABELS_PATH=/ { has_labels = 1 }
+            END {
+                for (i = 1; i <= NR; i++) {
+                    if (lines[i] == "# METADATA_MODEL_PATH=") {
+                        print m
+                        if (!has_labels) print l
+                    } else if (lines[i] == "# METADATA_LABELS_PATH=") {
+                        print l
+                    } else {
+                        print lines[i]
+                    }
+                }
+            }' "${conf}" >"${conf}.new" && mv "${conf}.new" "${conf}"
+    fi
+    rm -f "${conf}.bak"
+    if grep -qE '^METADATA_MODEL_PATH=' "${conf}"; then
+        success "Species-occurrence filtering is configured in ${conf}."
+    fi
+}
+
+# The last thing a macOS run says when the classifier is not installed: the
+# Linux summary's words, with the macOS commands.
+macos_print_classifier_missing() { # $1=binary path
+    [ "${CLASSIFIER_MISSING}" = 1 ] || return 0
+    echo
+    loud_warn "THIS STATION IS NOT DETECTING BIRDS: its classifier is not installed." \
+              "  Why: ${CLASSIFIER_MISSING_WHY}." \
+              "  Everything else is installed. To install the classifier, once this Mac" \
+              "  can reach the internet, run this installer again (it keeps your config):" \
+              "      bash install.sh" \
+              "  or, from a copy of the model file you already have (it must match the" \
+              "  same pinned sha256 as a download, or it is refused):" \
+              "      bash install.sh --local-model /path/to/that/file" \
+              "  Then check with:  \"$1\" --doctor --config \"${MAC_DATA_DIR}/birdnet.conf\"" \
+              "  This run exits with status ${EXIT_NO_CLASSIFIER}: installed, not detecting."
 }
 
 macos_setup_config_and_agent() { # $1=binary path
@@ -4016,26 +3623,25 @@ macos_setup_config_and_agent() { # $1=binary path
         fi
         local mac_classifier="${CLASSIFIER_REQUEST:-${DEFAULT_CLASSIFIER}}"
         local mac_models="${MAC_DATA_DIR}/models"
-        local mac_model_path mac_labels_path mac_filter_line mac_name
+        local mac_model_path mac_labels_path mac_filter_lines mac_name
+        macos_install_models "${bin}" "${mac_classifier}"
+        mac_name="${CLASSIFIER_NAME}"
+        mac_model_path="${mac_models}/${MODEL_FILE}"
+        mac_labels_path="${mac_models}/${LABELS_FILE}"
+        # Live only when the filter is really there, so a failed fetch cannot
+        # leave a config the doctor reports as FAIL.
         if [ "${mac_classifier}" = "${CLASSIFIER_V24}" ]; then
-            mac_name="BirdNET V2.4"
-            mac_model_path="${mac_models}/${V24_MODEL_FILE}"
-            mac_labels_path="${mac_models}/${V24_LABELS_FILE}"
-            mac_filter_line="# METADATA_MODEL_PATH=${mac_models}/${V24_RANGE_FILE}"
+            mac_filter_lines="# METADATA_MODEL_PATH=${mac_models}/${V24_RANGE_FILE}"
+            [ "${MAC_FILTER_INSTALLED}" = 1 ] && mac_filter_lines="METADATA_MODEL_PATH=${mac_models}/${V24_RANGE_FILE}"
+        elif [ "${MAC_FILTER_INSTALLED}" = 1 ]; then
+            mac_filter_lines="METADATA_MODEL_PATH=${mac_models}/${GEOMODEL_FILE}"$'\n'"METADATA_LABELS_PATH=${mac_models}/${GEOMODEL_LABELS_FILE}"
         else
-            mac_name="BirdNET+ V3.0 preview"
-            mac_model_path="${mac_models}/birdnet-v3.onnx"
-            mac_labels_path="${mac_models}/birdnet-v3_labels.csv"
-            mac_filter_line="# METADATA_MODEL_PATH="
-            info "BirdNET+ V3.0 on macOS runs without species-occurrence filtering: the binary does not install the geomodel (the Linux installer does)."
+            mac_filter_lines="# METADATA_MODEL_PATH="$'\n'"# METADATA_LABELS_PATH="
         fi
-        if macos_install_models "${bin}" "${mac_classifier}"; then
-            # Live only when the file is really there, so a failed fetch cannot
-            # leave a config the doctor reports as FAIL.
-            [ "${mac_classifier}" = "${CLASSIFIER_V24}" ] && mac_filter_line="${mac_filter_line#\# }"
-            success "Classifier: ${mac_name}."
-        else
+        if [ "${CLASSIFIER_MISSING}" = 1 ]; then
             warn "The config below names the ${mac_name} files; the station detects nothing until they are installed."
+        else
+            success "Classifier: ${mac_name}."
         fi
         cat > "${MAC_DATA_DIR}/birdnet.conf" <<CONF
 # BirdNet-Behavior config (macOS). Set your coordinates and a mic device.
@@ -4045,7 +3651,7 @@ macos_setup_config_and_agent() { # $1=binary path
 # and the metadata model would filter this station's species list for that
 # spot. An unset location skips occurrence filtering entirely, which is honest;
 # a wrong one produces a confident species list for the wrong continent, and
-# `config_has_location` would report the station as configured.
+# \`config_has_location\` would report the station as configured.
 SITENAME=My Backyard
 # LATITUDE=51.5074
 # LONGITUDE=-0.1278
@@ -4057,11 +3663,19 @@ IMAGE_CACHE_DIR=${MAC_DATA_DIR}/image_cache
 MODEL_PATH=${mac_model_path}
 LABELS_PATH=${mac_labels_path}
 # Species-occurrence filtering needs LATITUDE and LONGITUDE above as well.
-${mac_filter_line}
+${mac_filter_lines}
 CONF
         success "Wrote starter config: ${MAC_DATA_DIR}/birdnet.conf"
     else
         info "Keeping existing config: ${MAC_DATA_DIR}/birdnet.conf"
+        local kept
+        kept="$(macos_kept_classifier "${MAC_DATA_DIR}/birdnet.conf")"
+        if [ -n "${kept}" ]; then
+            macos_install_models "${bin}" "${kept}"
+            macos_enable_filter_in_kept_config "${MAC_DATA_DIR}/birdnet.conf" "${kept}"
+        else
+            info "Its MODEL_PATH names a model of your own, so no model is installed or changed."
+        fi
     fi
     cat > "${MAC_PLIST}" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -4324,6 +3938,10 @@ main() {
             exit 0
         fi
         macos_install
+        # The same ending as Linux when the classifier could not be installed:
+        # said loudly, last, and exit 75 (installed, not detecting).
+        macos_print_classifier_missing "${MODEL_BINARY:-${BINARY_NAME}}"
+        exit_if_classifier_missing
         exit 0
     fi
 
