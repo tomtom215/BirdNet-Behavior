@@ -326,11 +326,20 @@ impl Snapshot {
         self.files.iter().any(|f| f.state == PartState::Installed)
     }
 
-    /// Whether an install from this page fixes the condition `key`
-    /// ([`crate::model_conditions::ModelCondition::key`]).
+    /// The file an install from this page would fetch to fix the condition
+    /// `key` ([`crate::model_conditions::ModelCondition::key`]), when one would.
+    #[must_use]
+    pub fn fix_for(&self, key: &str) -> Option<&ModelFile> {
+        if self.phase == Phase::Installing {
+            return None;
+        }
+        self.to_install().find(|f| f.role.condition_key() == key)
+    }
+
+    /// Whether an install from this page fixes the condition `key`.
     #[must_use]
     pub fn installs_fix(&self, key: &str) -> bool {
-        self.phase != Phase::Installing && self.to_install().any(|f| f.role.condition_key() == key)
+        self.fix_for(key).is_some()
     }
 
     /// The occurrence filter's file, when the station is set up for one the
@@ -688,6 +697,9 @@ fn classifier_file(
 ) -> ModelFile {
     let (disk, verified) = on_disk(entry, dir);
     let (state, note) = match (disk, published) {
+        (Some(state), Some(c)) if matches!(c.status, ClassifierStatus::LeftOut { .. }) => {
+            (state, Some(c.message()))
+        }
         (Some(state), _) => (state, None),
         (None, _) if installed_since_start => (PartState::Installed, None),
         (None, None) => (PartState::Installed, None),
@@ -697,16 +709,15 @@ fn classifier_file(
                 fault: ClassifierFault::DetectorNotRunning,
                 ..
             } => (PartState::Installed, None),
-            // A file fault the station met loading it: an install fixes it
-            // unless the file is known to be the pinned one, when a download
-            // would change nothing and the reason is all there is to say.
+            // The model file failed to load and nobody has hashed it since it
+            // changed: an install re-hashes it and replaces it if it is not
+            // the pinned file. One known to be the pinned file would come back
+            // the same, and the reason is all there is to say. A labels fault
+            // with the catalogue's labels in place (the poll found them) is a
+            // labels file the configuration names elsewhere, which no install
+            // touches.
             ClassifierStatus::LeftOut {
-                fault:
-                    ClassifierFault::FileMissing
-                    | ClassifierFault::WillNotLoad
-                    | ClassifierFault::LabelsMissing
-                    | ClassifierFault::LabelsUnreadable
-                    | ClassifierFault::LabelsWrongLength,
+                fault: ClassifierFault::FileMissing | ClassifierFault::WillNotLoad,
                 ..
             } if !verified => (PartState::Damaged, Some(c.message())),
             ClassifierStatus::Unrouted | ClassifierStatus::LeftOut { .. } => {
@@ -734,7 +745,15 @@ fn filter_file(
 ) -> ModelFile {
     let (disk, verified) = on_disk(entry, dir);
     let (state, note) = match (disk, published) {
-        (Some(state), _) => (state, None),
+        (
+            Some(state),
+            FilterState::Off {
+                reason: FilterOff::NotConfigured | FilterOff::DetectorNotRunning,
+                ..
+            }
+            | FilterState::Active { .. },
+        ) => (state, None),
+        (Some(state), FilterState::Off { .. }) => (state, Some(published.message())),
         (None, _) if installed_since_start => (PartState::Installed, None),
         (None, FilterState::Active { .. }) => (PartState::InUse, None),
         (
@@ -744,14 +763,11 @@ fn filter_file(
                 ..
             },
         ) => (PartState::Installed, None),
+        // As for a classifier: only the model file, and only while unhashed.
         (
             None,
             FilterState::Off {
-                reason:
-                    FilterOff::ModelMissing
-                    | FilterOff::ModelUnusable
-                    | FilterOff::LabelsMissing
-                    | FilterOff::LabelsUnreadable,
+                reason: FilterOff::ModelMissing | FilterOff::ModelUnusable,
                 ..
             },
         ) if !verified => (PartState::Damaged, Some(published.message())),
@@ -1140,6 +1156,42 @@ mod tests {
                 .as_deref()
                 .is_some_and(|n| n.contains("MODEL_ROUTES"))
         );
+    }
+
+    /// A labels fault with the catalogue's labels in place is a labels file
+    /// the configuration names elsewhere: no install fixes it, so none is
+    /// offered and the reason is said. Seen on a real station whose
+    /// `LABELS_PATH` named V3.0's labels beside V2.4, which the panel first
+    /// offered to "repair" with a download that would have changed nothing.
+    #[test]
+    fn a_labels_file_named_elsewhere_is_not_offered_for_repair() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        put_default(dir.path());
+        let model = dir.path().join("birdnet-v24.onnx");
+        let mut failed = ModelsState {
+            classifiers: vec![classifier(
+                "birdnet",
+                true,
+                model.clone(),
+                ClassifierStatus::left_out(
+                    ClassifierFault::LabelsWrongLength,
+                    "its model scores 6522 classes and its labels file names 11560",
+                ),
+            )],
+            ..none()
+        };
+        failed.set_detector(DetectorState::Failed {
+            why: "its labels file names 11560".to_owned(),
+        });
+        let named = Layout {
+            model: Some(model),
+            ..layout(dir.path())
+        };
+        let snap = setup(named).snapshot(false, &failed);
+        assert_eq!(snap.files[0].state, PartState::NotUsed, "{:?}", snap.files);
+        assert!(snap.to_install().next().is_none());
+        assert_eq!(snap.phase, Phase::DidNotStart);
+        assert!(!snap.installs_fix(crate::model_conditions::DETECTOR_KEY));
     }
 
     /// An install refused where it would change nothing, with the reason.

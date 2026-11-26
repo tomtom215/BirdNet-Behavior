@@ -330,10 +330,9 @@ fn filter_sentence(snap: &Snapshot) -> String {
             } => "No local species filter is set up, so every species the model knows stays \
                   possible wherever the station is."
                 .to_owned(),
-            FilterState::Off { why, .. } => format!(
-                "The local species filter is off. {}",
-                escape_html(&crate::model_conditions::capitalize_first(why))
-            ),
+            FilterState::Off { .. } => escape_html(&crate::model_conditions::capitalize_first(
+                &snap.published_filter.message(),
+            )),
         };
     };
     match filter.state {
@@ -350,15 +349,9 @@ fn filter_sentence(snap: &Snapshot) -> String {
         PartState::Damaged => "The local species filter's file is damaged, so it is off. The \
                                button below repairs it."
             .to_owned(),
-        PartState::NotUsed => format!(
-            "The local species filter is off. {}",
-            escape_html(
-                &filter
-                    .note
-                    .as_deref()
-                    .map_or_else(String::new, crate::model_conditions::capitalize_first)
-            )
-        ),
+        PartState::NotUsed => {
+            "The local species filter is off; its line below says why and what to do.".to_owned()
+        }
     }
 }
 

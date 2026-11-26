@@ -219,10 +219,17 @@ async fn gather(state: &AppState) -> Snapshot {
             ),
             &published.classifiers,
             &|c| {
-                setup.installs_fix(&if c.primary {
+                let key = if c.primary {
                     crate::model_conditions::DETECTOR_KEY.to_owned()
                 } else {
                     crate::model_conditions::classifier_key(&c.id)
+                };
+                setup.fix_for(&key).map(|file| {
+                    if file.state == crate::classifier_setup::PartState::Damaged {
+                        "Repair it on the Capture tab"
+                    } else {
+                        "Install it from the Capture tab"
+                    }
                 })
             },
         );

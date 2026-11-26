@@ -588,6 +588,26 @@ fn station_has_location(state: &AppState) -> bool {
     state.with_read_db(location_is_set)
 }
 
+/// `text` with every absolute path cut to its file name. Today is read by
+/// whoever looks at the birds; the folder a model lives in is Station
+/// health's to print (and the Capture tab's, for an administrator), and a
+/// path as long as a data directory's ran a notice off a phone.
+fn file_names_only(text: &str) -> String {
+    text.split(' ')
+        .map(|word| {
+            let path = word.trim_start_matches('(');
+            if path.starts_with('/') && path[1..].contains('/') {
+                let lead = &word[..word.len() - path.len()];
+                let name = path.rsplit('/').next().unwrap_or(path);
+                format!("{lead}{name}")
+            } else {
+                word.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// Where a model notice sends its reader, and what its button says: the
 /// Capture tab's install button when it fixes the condition, the location
 /// form for a filter that has no position, and otherwise Station health,
@@ -596,20 +616,25 @@ fn model_notice_action(
     condition: &crate::model_conditions::ModelCondition,
     setup: &crate::classifier_setup::Snapshot,
 ) -> (&'static str, &'static str) {
-    if setup.installs_fix(&condition.key) {
-        (
-            "/station/capture#classifier",
-            if setup.repairs() {
-                "Repair it"
+    setup.fix_for(&condition.key).map_or_else(
+        || {
+            if condition.state == "off_no_coordinates" {
+                ("/station/capture#set-location", "Set your location")
             } else {
-                "Install it"
-            },
-        )
-    } else if condition.state == "off_no_coordinates" {
-        ("/station/capture#set-location", "Set your location")
-    } else {
-        ("/station", "Open Station health")
-    }
+                ("/station", "Open Station health")
+            }
+        },
+        |file| {
+            (
+                "/station/capture#classifier",
+                if file.state == crate::classifier_setup::PartState::Damaged {
+                    "Repair it"
+                } else {
+                    "Install it"
+                },
+            )
+        },
+    )
 }
 
 /// Warnings that stand on Today for as long as their cause does, whatever
@@ -631,11 +656,18 @@ fn standing_notices(
     let mut out = String::new();
     for condition in models {
         let (href, action) = model_notice_action(condition, setup);
+        let body = file_names_only(&condition.body());
+        // The clause before the first colon is what is wrong; after it, why.
+        let (what, why) = body
+            .split_once(": ")
+            .map_or((body.as_str(), ""), |(w, y)| (w, y));
         let _ = write!(
             out,
-            r#"<div class="x-nudge" data-screen-label="Models banner" data-announce="{title}."><span class="ico">⚠</span><div class="txt"><b>{title}.</b> {body}</div><a class="bnb-btn primary" href="{href}">{action} →</a></div>"#,
+            r#"<div class="x-nudge" data-screen-label="Models banner" data-announce="{title}."><span class="ico">⚠</span><div class="txt"><b>{what}{colon}</b> {why}</div><a class="bnb-btn primary" href="{href}">{action} →</a></div>"#,
             title = super::escape_html(&condition.title),
-            body = super::escape_html(&condition.body()),
+            what = super::escape_html(what),
+            colon = if why.is_empty() { "" } else { ":" },
+            why = super::escape_html(why),
         );
     }
     if !has_location {
@@ -2017,6 +2049,20 @@ mod tests {
         assert!(
             html.contains("species occurrence filter is off") && html.contains("install it again"),
             "a damaged filter: {html}"
+        );
+    }
+
+    /// Today names a model's file, not the folder it is in: a data
+    /// directory's path ran the notice off a phone at 390 px.
+    #[test]
+    fn a_notice_names_files_not_folders() {
+        assert_eq!(
+            file_names_only(
+                "its model file /data/model/perch-v2.onnx will not load (/x/y/z.onnx failed: bad); \
+                 see /etc/birdnet/birdnet.conf, while a/b/c and /root stay"
+            ),
+            "its model file perch-v2.onnx will not load (z.onnx failed: bad); see birdnet.conf, \
+             while a/b/c and /root stay"
         );
     }
 

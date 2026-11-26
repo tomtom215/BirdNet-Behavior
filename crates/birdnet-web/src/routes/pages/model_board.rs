@@ -79,8 +79,9 @@ pub struct ModelCard {
     /// What the station says about a classifier that is left out or
     /// unrouted, in words that say what to do.
     pub note: Option<String>,
-    /// Whether the Capture tab's install button fixes it.
-    pub repair: bool,
+    /// The words of a link to the Capture tab's install button, when that
+    /// button fixes it.
+    pub fix: Option<&'static str>,
 }
 
 /// Build the cards from the daemon's health record and today's per-model counts.
@@ -127,7 +128,7 @@ pub fn cards(
                 info: infos.iter().find(|i| &i.id == id).cloned(),
                 mean_window_micros: h.mean_inference_micros(),
                 note: None,
-                repair: false,
+                fix: None,
             }
         })
         .collect()
@@ -141,11 +142,12 @@ pub fn cards(
 /// reaches would read "Waiting for audio" for ever. A window record for a
 /// classifier the published list does not name is kept, after them.
 ///
-/// `repairs` says whether the install button fixes a classifier, by id.
+/// `fix` gives the words of a link to the install button, for a classifier
+/// that button fixes.
 pub fn with_configured(
     from_windows: Vec<ModelCard>,
     configured: &[ClassifierState],
-    repairs: &dyn Fn(&ClassifierState) -> bool,
+    fix: &dyn Fn(&ClassifierState) -> Option<&'static str>,
 ) -> Vec<ModelCard> {
     let blank = |c: &ClassifierState, state| ModelCard {
         id: c.id.clone(),
@@ -159,7 +161,7 @@ pub fn with_configured(
         info: None,
         mean_window_micros: None,
         note: Some(c.message()),
-        repair: repairs(c),
+        fix: fix(c),
     };
     let mut rest = from_windows;
     let mut out: Vec<ModelCard> = configured
@@ -285,11 +287,9 @@ fn note_line(c: &ModelCard) -> String {
     let Some(note) = &c.note else {
         return String::new();
     };
-    let fix = if c.repair {
-        " <a href=\"/station/capture#classifier\">Install it from the Capture tab</a>"
-    } else {
-        ""
-    };
+    let fix = c.fix.map_or_else(String::new, |words| {
+        format!(" <a href=\"/station/capture#classifier\">{words}</a>")
+    });
     format!(
         "<div class=\"st-source-retry\">{}.{fix}</div>",
         escape_html(&crate::model_conditions::capitalize_first(note)),
@@ -492,7 +492,7 @@ mod tests {
             ("bats".to_owned(), ModelHealth::default()),
         ];
         let got = with_configured(cards(&health, Some(&[]), &[], 1_000), &published, &|c| {
-            c.id == "perch"
+            (c.id == "perch").then_some("Repair it on the Capture tab")
         });
         let states: Vec<_> = got.iter().map(|c| (c.id.as_str(), c.state)).collect();
         assert_eq!(
