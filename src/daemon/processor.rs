@@ -401,7 +401,10 @@ pub(super) fn storable_bars(
 /// The lowest confidence any species may be recorded at: `model`, or a
 /// per-species threshold below it. Clamped to 0–1 — a stored threshold is
 /// validated where it is typed, but this feeds the classifier directly.
-#[allow(clippy::cast_possible_truncation)]
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "clamped to 0..=1 first; f32 is the classifier's precision"
+)]
 pub(super) fn lowest_threshold(
     model: f32,
     thresholds: &std::collections::HashMap<String, f64>,
@@ -733,37 +736,21 @@ async fn post_soundscape_for_row(
 }
 
 /// How often an idle processor looks for an operator's reset.
-const RESET_POLL: std::time::Duration = std::time::Duration::from_secs(1);
-
-/// The next detection event, applying the operator's threshold resets while
-/// waiting. `None` when the channel is closed.
 ///
 /// The web side deletes the stored rows and then leaves a request for the
 /// tracker. Applied only when the next event arrived, a reset made at night, or
 /// at a quiet feeder, sat unapplied for hours, and any write the processor made
 /// in the meantime from its in-memory copy restored the rows the operator had
-/// just been told were gone. Polling bounds that to [`RESET_POLL`].
-fn wait_for_event(
-    event_rx: &mpsc::Receiver<birdnet_core::detection::daemon::DetectionEvent>,
-    dynamic: &mut DynamicThresholdState,
-    state: &birdnet_web::state::AppState,
-) -> Option<birdnet_core::detection::daemon::DetectionEvent> {
-    loop {
-        match event_rx.recv_timeout(RESET_POLL) {
-            Ok(event) => return Some(event),
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                dynamic.apply_resets(state);
-            }
-            Err(mpsc::RecvTimeoutError::Disconnected) => return None,
-        }
-    }
-}
+/// just been told were gone. Polling bounds that to this.
+const RESET_POLL: std::time::Duration = std::time::Duration::from_secs(1);
 
 /// Bridge detection events from the daemon to database inserts and WebSocket broadcasts.
 #[allow(
     clippy::needless_pass_by_value,
     clippy::too_many_arguments,
-    clippy::too_many_lines
+    clippy::too_many_lines,
+    reason = "one loop owning every piece of state a detection passes through; its \
+              too_many_lines is counted in tests/data/clippy_allows.tsv"
 )]
 pub(super) fn event_processor(
     event_rx: mpsc::Receiver<birdnet_core::detection::daemon::DetectionEvent>,
@@ -816,10 +803,23 @@ pub(super) fn event_processor(
         tracing::info!(species, "per-species minimum intervals in force");
     }
 
+    // What the last stop kept is processed first; once this station stops,
+    // what is left is kept for the next start rather than worked through
+    // past the unit's stop timeout (`spool`).
+    let mut inbox = crate::daemon::spool::Inbox::new(state.db_path(), state.subscribe_shutdown());
     loop {
-        let Some(event) = wait_for_event(&event_rx, &mut dynamic, &state) else {
-            tracing::info!("event channel closed, stopping event processor");
-            break;
+        let event = match inbox.next(&event_rx, RESET_POLL, &mut || {
+            dynamic.apply_resets(&state);
+        }) {
+            crate::daemon::spool::Next::Event(event) => *event,
+            crate::daemon::spool::Next::Closed => {
+                tracing::info!("event channel closed, stopping event processor");
+                break;
+            }
+            crate::daemon::spool::Next::Kept(n) => {
+                tracing::info!(kept = n, "stopping event processor");
+                break;
+            }
         };
         dynamic.apply_resets(&state);
         let now_ms = crate::daemon::disposition::epoch_ms();
@@ -2096,7 +2096,10 @@ mod tests {
         // (0.5 is left out: it is exactly representable, so widening it changes nothing
         // and it could not tell the two conversions apart.)
         for typed in [0.7_f64, 0.3, 0.95, 0.1] {
-            #[allow(clippy::cast_possible_truncation)]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "the narrowing is what the test is about"
+            )]
             let as_f32 = typed as f32;
             assert_eq!(as_typed(as_f32), typed, "{typed}");
             assert!(
@@ -2334,8 +2337,14 @@ mod tests {
         let (tx, rx) = mpsc::channel();
         let waiting_state = state.clone();
         let waiter = std::thread::spawn(move || {
-            let got = wait_for_event(&rx, &mut dynamic, &waiting_state);
-            (got.is_none(), dynamic)
+            let mut inbox = crate::daemon::spool::Inbox::new(
+                waiting_state.db_path(),
+                waiting_state.subscribe_shutdown(),
+            );
+            let got = inbox.next(&rx, RESET_POLL, &mut || {
+                dynamic.apply_resets(&waiting_state);
+            });
+            (matches!(got, crate::daemon::spool::Next::Closed), dynamic)
         });
         handle.request(birdnet_core::detection::dynamic_threshold::Reset::All);
 
@@ -2892,7 +2901,10 @@ mod tests {
         let seen = std::sync::Arc::clone(&connections);
         std::thread::spawn(move || {
             // Never read: holding the streams is what keeps each send in flight.
-            #[allow(clippy::collection_is_never_read)]
+            #[allow(
+                clippy::collection_is_never_read,
+                reason = "holding the streams is what keeps each send in flight"
+            )]
             let mut held = Vec::new();
             for stream in listener.incoming().flatten() {
                 seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -5431,7 +5443,10 @@ mod tests {
     }
 
     /// As [`run_processor_full`], with the learned-threshold tracker supplied.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a test driver passing the processor's own arguments through"
+    )]
     async fn run_processor_dynamic(
         state: &birdnet_web::state::AppState,
         events: Vec<birdnet_core::detection::daemon::DetectionEvent>,
@@ -5460,7 +5475,10 @@ mod tests {
     /// As [`run_processor_dynamic`], with a `BirdWeather` client and the
     /// extractor under the test's control — the DD-32 gate needs a clip it
     /// can find and a stub it can read.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a test driver passing the processor's own arguments through"
+    )]
     async fn run_processor_integrated(
         state: &birdnet_web::state::AppState,
         events: Vec<birdnet_core::detection::daemon::DetectionEvent>,
@@ -5643,7 +5661,10 @@ mod tests {
         let mut x: u32 = 1;
         for _ in 0..48_000 * 3 {
             x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
-            #[allow(clippy::cast_possible_truncation)]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "keeping the low 16 bits is the noise generator"
+            )]
             w.write_sample(((x >> 16) as i16) / 8).unwrap();
         }
         w.finalize().unwrap();

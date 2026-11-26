@@ -18,7 +18,8 @@ use birdnet_core::detection::dynamic_threshold::DynamicThresholds;
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    clippy::cast_precision_loss
+    clippy::cast_precision_loss,
+    reason = "a confidence is 0..=1, so its percentage fits a u32; truncation is the behaviour"
 )]
 pub(super) fn confidence_pct_trunc(confidence: f32) -> u32 {
     (confidence * 100.0) as u32
@@ -30,7 +31,11 @@ pub(super) fn confidence_pct_trunc(confidence: f32) -> u32 {
 /// 100.0).round() as u32` in the MQTT payload builder. Extracted for
 /// the same reason as [`confidence_pct_trunc`].
 #[must_use]
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "a confidence is 0..=1, so its rounded percentage fits a u32"
+)]
 pub(super) fn confidence_pct_round(confidence: f32) -> u32 {
     (confidence * 100.0).round() as u32
 }
@@ -40,7 +45,10 @@ pub(super) fn confidence_pct_round(confidence: f32) -> u32 {
 /// Extracted so the `/ 1000.0` arithmetic mutant has a unit-testable
 /// surface independent of the rest of `event_processor`.
 #[must_use]
-#[allow(clippy::cast_precision_loss)]
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "a latency in milliseconds is far inside f64's exact integers"
+)]
 pub(super) fn latency_ms_to_seconds(latency_ms: u64) -> f64 {
     (latency_ms as f64) / 1000.0
 }

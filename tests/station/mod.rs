@@ -64,11 +64,11 @@ pub fn recording() -> PathBuf {
 /// 3 s windows.
 ///
 /// Not the whole 30 s. With the tiny models every class clears a low
-/// confidence in every window, so the whole file is about 300 detections on
-/// a two-classifier station, each one a clip the processor cuts after the
-/// daemon has stopped — about 50 s on this machine, measured with the
-/// released binary as well, which a stop then waits out. Six seconds keeps a
-/// station's whole life inside a test's budget.
+/// confidence in every window, so the whole file is about 200 detections on
+/// a two-classifier station, each a clip to cut: about 30 s of work, which a
+/// test reading the database waits out. Six seconds keeps a station's whole
+/// life inside a test's budget. ([`Station::hand_whole_recording`] hands the
+/// whole file, for the test of a stop with that backlog.)
 const HANDED_SECS: u32 = 6;
 
 /// The first [`HANDED_SECS`] of [`recording`], written to `to`.
@@ -115,6 +115,7 @@ pub const TINY_META_LABELS: &str = "Pica pica_Eurasian Magpie\nParus major_Great
 pub struct StationDir {
     dir: tempfile::TempDir,
     settings: Vec<String>,
+    env: Vec<(String, String)>,
 }
 
 impl StationDir {
@@ -132,7 +133,18 @@ impl StationDir {
             format!("RECS_DIR={}", dir.path().join("watch").display()),
             "CONFIDENCE=0.01".to_owned(),
         ];
-        Self { dir, settings }
+        Self {
+            dir,
+            settings,
+            env: Vec::new(),
+        }
+    }
+
+    /// Set an environment variable for the station's process (it starts
+    /// from an empty environment otherwise).
+    pub fn env(&mut self, key: &str, value: impl std::fmt::Display) -> &mut Self {
+        self.env.push((key.to_owned(), value.to_string()));
+        self
     }
 
     /// The directory itself.
@@ -219,35 +231,17 @@ impl StationDir {
     pub fn start(self) -> Station {
         let config = self.dir.path().join("birdnet.conf");
         std::fs::write(&config, self.settings.join("\n") + "\n").expect("write config");
-        let port = free_port();
         let log_path = self.dir.path().join("station.log");
-        let log = std::fs::File::create(&log_path).expect("log file");
-        let child = Command::new(BIN)
-            .args([
-                "--config",
-                &config.display().to_string(),
-                "--listen",
-                &format!("127.0.0.1:{port}"),
-                "--offline",
-            ])
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", self.dir.path().join("home"))
-            .env("RUST_LOG", "info")
-            .env("NO_COLOR", "1")
-            .stdin(Stdio::null())
-            .stdout(log.try_clone().expect("log handle"))
-            .stderr(log)
-            .spawn()
-            .unwrap_or_else(|e| panic!("spawn {BIN}: {e}"));
+        std::fs::File::create(&log_path).expect("log file");
         let mut station = Station {
-            child: Some(child),
-            port,
+            child: None,
+            port: free_port(),
             dir: self.dir,
             log_path,
             handed: 0,
+            env: self.env,
         };
-        station.wait_until_up();
+        station.spawn();
         station
     }
 }
@@ -259,9 +253,104 @@ pub struct Station {
     dir: tempfile::TempDir,
     log_path: PathBuf,
     handed: u32,
+    env: Vec<(String, String)>,
 }
 
 impl Station {
+    /// Start the binary on the station's configuration and port, its output
+    /// appended to the log; return once it answers.
+    fn spawn(&mut self) {
+        let config = self.dir.path().join("birdnet.conf");
+        let log = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&self.log_path)
+            .expect("log file");
+        let child = Command::new(BIN)
+            .args([
+                "--config",
+                &config.display().to_string(),
+                "--listen",
+                &format!("127.0.0.1:{}", self.port),
+                "--offline",
+            ])
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", self.dir.path().join("home"))
+            .env("RUST_LOG", "info")
+            .env("NO_COLOR", "1")
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
+            .stdin(Stdio::null())
+            .stdout(log.try_clone().expect("log handle"))
+            .stderr(log)
+            .spawn()
+            .unwrap_or_else(|e| panic!("spawn {BIN}: {e}"));
+        self.child = Some(child);
+        self.wait_until_up();
+    }
+
+    /// Start a stopped station again, on the same directory, configuration
+    /// and port.
+    ///
+    /// # Panics
+    ///
+    /// If it is still running.
+    pub fn restart(&mut self) {
+        assert!(self.child.is_none(), "restart a station that has stopped");
+        self.spawn();
+    }
+
+    /// The directory the station lives in.
+    pub fn path(&self) -> &Path {
+        self.dir.path()
+    }
+
+    /// Send SIGTERM, as systemd does, and return how long the process took
+    /// to exit, or `None` when it had not within `limit` (it is then killed).
+    pub fn stop_within(&mut self, limit: Duration) -> Option<Duration> {
+        let mut child = self.child.take()?;
+        let sent = Instant::now();
+        let _ = Command::new("kill")
+            .args(["-TERM", &child.id().to_string()])
+            .status();
+        while sent.elapsed() < limit {
+            if child.try_wait().ok().flatten().is_some() {
+                return Some(sent.elapsed());
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        None
+    }
+
+    /// Drop the whole magpie recording (30 s, not the excerpt
+    /// [`Self::hand_recording`] hands) into the watch folder.
+    pub fn hand_whole_recording(&mut self) {
+        self.handed += 1;
+        let name = format!("2026-05-19-birdnet-09:{:02}:00.wav", self.handed);
+        let watch = self.dir.path().join("watch");
+        let part = watch.join(format!(".{name}.part"));
+        std::fs::copy(recording(), &part).expect("copy the recording");
+        std::fs::rename(&part, watch.join(&name)).expect("hand the recording over");
+    }
+
+    /// Every detection's clip file name (`File_Name`), in row order.
+    pub fn clip_names(&self) -> Vec<String> {
+        let path = self.dir.path().join("data/birds.db");
+        let Ok(conn) = rusqlite::Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        ) else {
+            return Vec::new();
+        };
+        let Ok(mut stmt) =
+            conn.prepare("SELECT COALESCE(File_Name, '') FROM detections ORDER BY rowid")
+        else {
+            return Vec::new();
+        };
+        stmt.query_map([], |r| r.get(0))
+            .map_or_else(|_| Vec::new(), |rows| rows.filter_map(Result::ok).collect())
+    }
     fn wait_until_up(&mut self) {
         let deadline = Instant::now() + UP_WITHIN;
         loop {
@@ -327,6 +416,48 @@ impl Station {
             .split_once("\r\n\r\n")
             .map_or_default(|(_, b)| b.to_owned());
         Some((status, dechunk(&body)))
+    }
+
+    /// How many times the process has started: a restart in place runs the
+    /// program again under the same process id and the same log.
+    pub fn starts(&self) -> usize {
+        self.log().matches("starting BirdNet-Behavior").count()
+    }
+
+    /// How many lines of the log contain `text`.
+    pub fn log_lines(&self, text: &str) -> usize {
+        self.log().lines().filter(|l| l.contains(text)).count()
+    }
+
+    /// The value of one series now, or `None` when the station does not
+    /// answer (it may be restarting) or does not export it.
+    pub fn metric_now(&self, series: &str) -> Option<f64> {
+        match self.get("/api/v2/metrics") {
+            Some((200, body)) => series_value(&body, series),
+            _ => None,
+        }
+    }
+
+    /// Wait until `series` reads 1, or `within` has passed; whether it did.
+    /// Tolerates a station that is restarting and not answering.
+    pub fn wait_for_state(&self, series: &str, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        loop {
+            if self.metric_now(series) == Some(1.0) {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+
+    /// Whether the process has exited.
+    pub fn has_exited(&mut self) -> bool {
+        self.child
+            .as_mut()
+            .is_some_and(|c| c.try_wait().ok().flatten().is_some())
     }
 
     /// The Prometheus exposition.
@@ -479,6 +610,74 @@ impl Drop for Station {
             let _ = child.wait();
         }
     }
+}
+
+/// A loopback HTTP origin for model files: `GET /<name>` answers the file of
+/// that name in the directory it serves, whole, and 404 for anything else.
+/// Reserved first and served later, so a test can have a station retry an
+/// origin that is down and then see it come back.
+pub struct Mirror {
+    port: u16,
+}
+
+impl Mirror {
+    /// A port for the mirror, not yet listening.
+    pub fn reserve() -> Self {
+        Self { port: free_port() }
+    }
+
+    /// The base URL to set as `BIRDNET_MODEL_MIRROR`.
+    pub fn url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+
+    /// Start serving `dir` on the reserved port, on a thread of its own.
+    pub fn serve(&self, dir: &Path) {
+        let listener = TcpListener::bind(("127.0.0.1", self.port)).expect("bind the mirror");
+        let dir = dir.to_path_buf();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(sock) = conn else { continue };
+                let dir = dir.clone();
+                std::thread::spawn(move || answer(sock, &dir));
+            }
+        });
+    }
+}
+
+/// Answer one request to a [`Mirror`].
+fn answer(mut sock: TcpStream, dir: &Path) {
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        match sock.read(&mut byte) {
+            Ok(1) => head.push(byte[0]),
+            _ => return,
+        }
+    }
+    let head = String::from_utf8_lossy(&head);
+    let name = head
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/")
+        .trim_start_matches('/')
+        .to_owned();
+    let file = (!name.is_empty() && !name.contains('/') && !name.contains(".."))
+        .then(|| std::fs::read(dir.join(&name)).ok())
+        .flatten();
+    let _ = match file {
+        Some(bytes) => sock
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                )
+                .as_bytes(),
+            )
+            .and_then(|()| sock.write_all(&bytes)),
+        None => sock
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+    };
 }
 
 /// A port nothing is listening on, chosen by the kernel.

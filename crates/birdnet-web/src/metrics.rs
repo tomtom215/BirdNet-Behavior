@@ -269,6 +269,10 @@ pub struct MetricsRegistry {
     /// are read from it too, so the one number that would have made the
     /// inert-filter defect visible cannot disagree with the reason given.
     models: RwLock<birdnet_core::inference::model_state::ModelsState>,
+    /// Each model file the configuration names and the catalogue knows, and
+    /// what the station is doing to keep it the pinned file (MDL-10),
+    /// exported as `birdnet_model_file_state`.
+    model_files: RwLock<Vec<birdnet_core::inference::model_state::ModelFile>>,
     /// Clips the database referenced and the disk did not have, found and
     /// stamped by the last reconciliation pass (S-14). `u64::MAX` until a
     /// pass has run.
@@ -340,6 +344,7 @@ impl MetricsRegistry {
             capture_restarts: RwLock::new(HashMap::new()),
             capture_stalls: RwLock::new(HashMap::new()),
             models: RwLock::new(birdnet_core::inference::model_state::ModelsState::default()),
+            model_files: RwLock::new(Vec::new()),
             orphaned_clips: AtomicU64::new(u64::MAX),
             analytics_mirror_failures_total: AtomicU64::new(0),
             analytics_mirror_last_failure: AtomicU64::new(0),
@@ -586,6 +591,30 @@ impl MetricsRegistry {
         // replaces one part), so the last one written is read rather than an
         // invented "starting".
         self.models
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Publish what the station is doing about one model file (MDL-10),
+    /// replacing what was published for the same path.
+    pub fn set_model_file(&self, file: birdnet_core::inference::model_state::ModelFile) {
+        let mut files = self
+            .model_files
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(slot) = files.iter_mut().find(|f| f.path == file.path) {
+            *slot = file;
+        } else {
+            files.push(file);
+        }
+    }
+
+    /// Every model file the station looks after, in the order first
+    /// published, with what it is doing about each (MDL-10).
+    #[must_use]
+    pub fn model_files(&self) -> Vec<birdnet_core::inference::model_state::ModelFile> {
+        self.model_files
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone()
@@ -958,6 +987,7 @@ impl MetricsRegistry {
             capture_restarts: Self::read_map(&self.capture_restarts),
             capture_stalls: Self::read_map(&self.capture_stalls),
             models: self.models_state(),
+            model_files: self.model_files(),
             orphaned_clips: self.orphaned_clips(),
             analytics_mirror_failures: self.analytics_mirror_failures(),
             disk_full: DiskFullSnapshot {
@@ -1066,6 +1096,8 @@ pub struct MetricsSnapshot {
     /// What the station did with its model files: the detector, each
     /// classifier and the occurrence filter.
     pub models: birdnet_core::inference::model_state::ModelsState,
+    /// The model files the station looks after (MDL-10).
+    pub model_files: Vec<birdnet_core::inference::model_state::ModelFile>,
     /// Orphaned clips found by the last reconciliation pass; `None` until one
     /// has run.
     pub orphaned_clips: Option<u64>,
@@ -1140,6 +1172,36 @@ fn push_models_series(
         out.push_str("# HELP birdnet_occurrence_candidates Species the occurrence filter currently admits.\n");
         out.push_str("# TYPE birdnet_occurrence_candidates gauge\n");
         let _ = writeln!(out, "birdnet_occurrence_candidates {n}");
+    }
+}
+
+/// Each model file the station looks after (MDL-10) as a state-set gauge:
+/// one series per state, the one it is in at 1. Nothing is exported before
+/// the first file is published, so a station with no catalogue file
+/// configured has no series that would read as "checked".
+fn push_model_file_series(
+    out: &mut String,
+    files: &[birdnet_core::inference::model_state::ModelFile],
+) {
+    use birdnet_core::inference::model_state::RepairState;
+    use std::fmt::Write as _;
+    if files.is_empty() {
+        return;
+    }
+    out.push_str("# HELP birdnet_model_file_state Each model file the configuration names and the catalogue knows: 1 for the state it is in (checking, verified, fetching, will_retry, not_fetched, repaired), 0 for the others.\n");
+    out.push_str("# TYPE birdnet_model_file_state gauge\n");
+    for file in files {
+        let name = escape_label(&file.path.file_name().map_or_else(
+            || file.path.display().to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        ));
+        for code in RepairState::CODES {
+            let _ = writeln!(
+                out,
+                "birdnet_model_file_state{{file=\"{name}\",state=\"{code}\"}} {}",
+                u8::from(*code == file.repair.code())
+            );
+        }
     }
 }
 
@@ -1377,6 +1439,7 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
     push_model_health_series(&mut out, &snap.model_health);
 
     push_models_series(&mut out, &snap.models);
+    push_model_file_series(&mut out, &snap.model_files);
 
     out.push_str("# HELP birdnet_http_responses_total Web responses served, by status class.\n");
     out.push_str("# TYPE birdnet_http_responses_total counter\n");
@@ -2037,6 +2100,45 @@ mod operational_metrics_tests {
     /// Each classifier gets one series per state, the one it is in at 1, and
     /// the detector its own; a station that has published no classifier yet
     /// has no classifier family, rather than an invented one.
+    /// Each model file the station looks after is one state-set family
+    /// (MDL-10), replaced in place when its state changes; none is exported
+    /// before the first is published.
+    #[test]
+    fn each_model_file_is_exported_in_the_state_it_is_in() {
+        use birdnet_core::inference::model_state::{ModelFile, RepairState};
+        let r = MetricsRegistry::new();
+        assert!(!render_runtime_metrics(&r.snapshot()).contains("birdnet_model_file_state"));
+        let file = |repair| ModelFile {
+            catalogue_id: "birdnet-v24".to_owned(),
+            path: "/m/birdnet-v24.onnx".into(),
+            repair,
+        };
+        r.set_model_file(file(RepairState::Checking));
+        r.set_model_file(file(RepairState::WillRetry {
+            at_unix: 9,
+            attempts: 1,
+            why: "refused".to_owned(),
+        }));
+        assert_eq!(
+            r.model_files().len(),
+            1,
+            "the same path is replaced, not added"
+        );
+        let out = render_runtime_metrics(&r.snapshot());
+        assert!(
+            out.contains(
+                "birdnet_model_file_state{file=\"birdnet-v24.onnx\",state=\"will_retry\"} 1"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "birdnet_model_file_state{file=\"birdnet-v24.onnx\",state=\"checking\"} 0"
+            ),
+            "{out}"
+        );
+    }
+
     #[test]
     fn the_models_state_is_exported_one_series_per_state() {
         use birdnet_core::inference::model_state::{
@@ -2211,7 +2313,9 @@ mod operational_metrics_tests {
                     primary: true,
                     model_path: "/m/a.onnx".into(),
                     labels_path: None,
-                    status: birdnet_core::inference::model_state::ClassifierStatus::Unrouted,
+                    status: birdnet_core::inference::model_state::ClassifierStatus::Unrouted {
+                        primary: "birdnet".to_owned(),
+                    },
                 },
             ]);
             r.inc_detection_dropped("quality");

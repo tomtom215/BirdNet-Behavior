@@ -433,3 +433,48 @@ fn a_station_with_no_classifier_says_the_detector_is_not_configured() {
     let station = StationDir::new().start();
     assert_eq!(detector(&station), state("not_configured"));
 }
+
+/// **A filter turned off in the configuration is off, and nothing tries to
+/// load it.** `METADATA_MODEL_PATH=off` (or `none`, in any case, from the
+/// file, the environment or the command line) is an owner running unfiltered
+/// on purpose: the filter is published as not configured, the station says so
+/// once at INFO, and nothing looks for a file called `off`.
+///
+/// Observed failing before the predicate existed: the station looked for a
+/// model file named `off`, and the filter was `off_model_missing`.
+#[test]
+fn a_filter_turned_off_is_not_configured_and_not_looked_for() {
+    for (how, value) in [("file", "off"), ("environment", "NONE")] {
+        let mut dir = StationDir::new();
+        dir.with_primary().with_coordinates();
+        if how == "file" {
+            dir.set("METADATA_MODEL_PATH", value);
+        } else {
+            dir.env("BIRDNET_METADATA_MODEL", value);
+        }
+        let mut station = dir.start();
+        detects(&mut station);
+        assert_eq!(
+            filter(&station),
+            state("off_not_configured"),
+            "{how}:\n{}",
+            station.log()
+        );
+        let log = station.log();
+        assert_eq!(
+            log.lines()
+                .filter(|l| l.contains("turned off in the configuration"))
+                .count(),
+            1,
+            "{how}: said once:\n{log}"
+        );
+        for absent in [
+            "loading metadata ONNX model",
+            "no metadata model configured",
+            " WARN birdnet_core::detection::daemon::run: species occurrence",
+        ] {
+            assert!(!log.contains(absent), "{how}: {absent:?}:\n{log}");
+        }
+        station.stop();
+    }
+}
