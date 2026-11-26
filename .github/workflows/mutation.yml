@@ -195,7 +195,7 @@ jobs:
   ffmpeg:
     name: ffmpeg (built once, cached)
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 30  # observed 5m14s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Restore the cached ffmpeg
@@ -305,7 +305,10 @@ jobs:
             # shards, for the same spread between equal-sized shards.
             # 2026-11-22: the window the schedule of 2026-11-16 read (run
             # 43837159692) put [3/3] at 45m, 76% of 60. 70 puts 45m at 64%.
-            timeout_minutes: 70
+            # 2026-11-26: run 45812277918's CI-config job put [3/3] at 56m of
+            # 70, 80%, and failed the check. 80 puts 56m at 70%. All three
+            # shards, as before. max_missed is unchanged.
+            timeout_minutes: 80
             # Wrapper-method mutants on `BirdNetModel` (`infer_sample_rate`,
             # `recommended_chunk_samples`, `is_probability_output`,
             # setters, `predict`) used to be uncatchable without a real
@@ -319,13 +322,13 @@ jobs:
             slug: inference-model.rs-2
             shard: "1/3"
             file: crates/birdnet-core/src/inference/model.rs
-            timeout_minutes: 70
+            timeout_minutes: 80
             max_missed: 0
           - label: "inference/model.rs [3/3]"
             slug: inference-model.rs-3
             shard: "2/3"
             file: crates/birdnet-core/src/inference/model.rs
-            timeout_minutes: 70
+            timeout_minutes: 80
             max_missed: 0
           - label: audio/extraction/extractor.rs
             slug: audio-extraction-extractor.rs
