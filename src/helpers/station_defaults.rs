@@ -17,8 +17,19 @@
 //! * **The classifier.** When neither `--model`/`--labels` nor `MODEL_PATH`/
 //!   `LABELS_PATH` is set, and the default classifier (BirdNET V2.4) is in the
 //!   station's model directory and verifies against its pins
-//!   ([`is_installed`]), use it — and its range filter, when that is there and
-//!   verifies too and no `METADATA_MODEL_PATH` is set.
+//!   ([`is_installed`]), use it.
+//! * **The occurrence filter.** When nothing names one (`--metadata-model`,
+//!   `METADATA_MODEL_PATH`), and the classifier the station runs is a
+//!   catalogue model at the name an install gives it, use the filter that
+//!   belongs to that classifier ([`occurrence_filter_for`]) when it is
+//!   installed beside it and verifies — with its labels file, for the
+//!   geomodel, unless `METADATA_LABELS_PATH` names one. This is what makes a
+//!   filter installed from the browser the one the next start runs (MDL-14):
+//!   the service cannot write its configuration file (the installer leaves
+//!   it `root`-owned and read-only to the service), an installer whose filter
+//!   download failed leaves `METADATA_MODEL_PATH` commented out, and a
+//!   container restarted from the dashboard runs again with the environment
+//!   it started with, which named no filter.
 //! * **The watch directory.** When neither `--watch-dir` nor `RECS_DIR` is set,
 //!   the capture segments go to a `birdnet-stream` directory under the system
 //!   temporary directory, which is RAM-backed on the Raspberry Pi images and is
@@ -32,8 +43,8 @@ use std::path::{Path, PathBuf};
 
 use birdnet_core::config::Config;
 use birdnet_integrations::model_catalog::{
-    CatalogEntry, DEFAULT_CLASSIFIER_ID, DEFAULT_RANGE_FILTER_ID, find, installed_paths,
-    is_installed,
+    CATALOG, CatalogEntry, DEFAULT_CLASSIFIER_ID, find, installed_paths, is_installed,
+    occurrence_filter_for,
 };
 
 use crate::cli::Cli;
@@ -88,7 +99,8 @@ pub fn model_dir_with(
 pub struct Applied {
     /// The default classifier was found installed and will be used.
     pub classifier: bool,
-    /// Its range filter was found installed and will be used.
+    /// The occurrence filter that belongs to the classifier was found
+    /// installed beside it and will be used.
     pub range_filter: bool,
     /// The watch directory that was filled in.
     pub watch_dir: Option<PathBuf>,
@@ -149,15 +161,37 @@ pub fn apply_in(
             cli.model = Some(model);
             cli.labels = Some(labels);
             applied.classifier = true;
-            if cli.metadata_model.is_none()
-                && !set("METADATA_MODEL_PATH")
-                && let Some(range) = find(DEFAULT_RANGE_FILTER_ID)
-                && installed(range, model_dir)
-            {
-                cli.metadata_model = Some(installed_paths(range, model_dir).0);
-                applied.range_filter = true;
-            }
         }
+    }
+
+    // The filter of the classifier this start runs, from beside it.
+    let classifier = cli.model.clone().or_else(|| {
+        config
+            .and_then(|c| c.get("MODEL_PATH"))
+            .map(str::trim)
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    });
+    if cli.metadata_model.is_none()
+        && !set("METADATA_MODEL_PATH")
+        && !cli.web_only
+        && let Some(classifier) = classifier
+        && let Some(dir) = classifier.parent()
+        && let Some(entry) = CATALOG
+            .iter()
+            .find(|e| installed_paths(e, dir).0 == classifier)
+        && let Some(filter) = occurrence_filter_for(entry.id)
+        && installed(filter, dir)
+    {
+        let (model, labels) = installed_paths(filter, dir);
+        cli.metadata_model = Some(model);
+        if let Some(labels) = labels
+            && cli.metadata_labels.is_none()
+            && !set("METADATA_LABELS_PATH")
+        {
+            cli.metadata_labels = Some(labels);
+        }
+        applied.range_filter = true;
     }
 
     if cli.watch_dir.is_none() && !set("RECS_DIR") && !cli.web_only {
@@ -203,7 +237,7 @@ mod tests {
         f.set_len(model.model_bytes).unwrap();
         std::fs::write(l.unwrap(), "x\n").unwrap();
         if with_range {
-            let range = find(DEFAULT_RANGE_FILTER_ID).unwrap();
+            let range = find(birdnet_integrations::model_catalog::DEFAULT_RANGE_FILTER_ID).unwrap();
             let f = std::fs::File::create(installed_paths(range, dir).0).unwrap();
             f.set_len(range.model_bytes).unwrap();
         }
@@ -323,6 +357,84 @@ mod tests {
         let applied = apply_here(&mut cli, Some(&cfg), dir.path());
         assert!(applied.classifier && !applied.range_filter, "{applied:?}");
         assert!(cli.metadata_model.is_none());
+    }
+
+    /// MDL-14: a filter installed from the browser beside a classifier the
+    /// configuration names — a bare-metal station whose installer left
+    /// `METADATA_MODEL_PATH` commented out, or a container restarted from the
+    /// dashboard with the environment it started with — is the one the next
+    /// start runs: the V2.4 range filter for V2.4, the geomodel and its labels
+    /// for V3.0, and never one for the other.
+    #[test]
+    fn the_filter_installed_beside_a_named_classifier_is_used() {
+        use birdnet_integrations::model_catalog::{
+            DEFAULT_RANGE_FILTER_ID, V3_CLASSIFIER_ID, V3_GEOMODEL_ID,
+        };
+        let dir = tempfile::tempdir().unwrap();
+        let path = |id: &str| installed_paths(find(id).unwrap(), dir.path());
+        let touch = |p: &Path| std::fs::write(p, b"x").unwrap();
+        touch(&path(V3_CLASSIFIER_ID).0);
+        touch(&path(DEFAULT_RANGE_FILTER_ID).0);
+
+        // V3.0 named, only V2.4's filter there: nothing adopted.
+        let v3 = path(V3_CLASSIFIER_ID).0;
+        let cfg = config_with(&[("MODEL_PATH", v3.to_str().unwrap())]);
+        let mut cli = bare();
+        assert!(!apply_here(&mut cli, Some(&cfg), dir.path()).range_filter);
+        assert!(cli.metadata_model.is_none());
+
+        // The geomodel installed beside it: adopted, with its labels.
+        let (geo, geo_labels) = path(V3_GEOMODEL_ID);
+        touch(&geo);
+        let mut cli = bare();
+        assert!(apply_here(&mut cli, Some(&cfg), dir.path()).range_filter);
+        assert_eq!(cli.metadata_model.as_deref(), Some(geo.as_path()));
+        assert_eq!(cli.metadata_labels, geo_labels);
+        assert!(
+            cli.model.is_none(),
+            "the classifier stays the configuration's"
+        );
+
+        // The same through the environment a container passes.
+        let mut cli = Cli::parse_from(["birdnet-behavior", "--model", v3.to_str().unwrap()]);
+        assert!(apply_here(&mut cli, None, dir.path()).range_filter);
+        assert_eq!(cli.metadata_model.as_deref(), Some(geo.as_path()));
+
+        // V2.4 named: its own filter.
+        install_default(dir.path(), true);
+        let v24 = path(DEFAULT_CLASSIFIER_ID).0;
+        let cfg = config_with(&[("MODEL_PATH", v24.to_str().unwrap())]);
+        let mut cli = bare();
+        assert!(apply_here(&mut cli, Some(&cfg), dir.path()).range_filter);
+        assert_eq!(
+            cli.metadata_model.as_deref(),
+            Some(path(DEFAULT_RANGE_FILTER_ID).0.as_path())
+        );
+        assert!(cli.metadata_labels.is_none(), "the range filter has none");
+
+        // The counterparts: a filter the operator named, labels the operator
+        // named, and a classifier that is not the catalogue's file.
+        let cfg = config_with(&[
+            ("MODEL_PATH", v3.to_str().unwrap()),
+            ("METADATA_MODEL_PATH", "/m/own-geo.onnx"),
+        ]);
+        let mut cli = bare();
+        assert!(!apply_here(&mut cli, Some(&cfg), dir.path()).range_filter);
+        assert!(cli.metadata_model.is_none());
+        let cfg = config_with(&[
+            ("MODEL_PATH", v3.to_str().unwrap()),
+            ("METADATA_LABELS_PATH", "/m/own-labels.txt"),
+        ]);
+        let mut cli = bare();
+        assert!(apply_here(&mut cli, Some(&cfg), dir.path()).range_filter);
+        assert!(
+            cli.metadata_labels.is_none(),
+            "the named labels are the config's"
+        );
+        let own = dir.path().join("own.onnx");
+        let cfg = config_with(&[("MODEL_PATH", own.to_str().unwrap())]);
+        let mut cli = bare();
+        assert!(!apply_here(&mut cli, Some(&cfg), dir.path()).range_filter);
     }
 
     /// An explicit watch directory, or a `RECS_DIR`, is left alone; web-only

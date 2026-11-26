@@ -63,6 +63,16 @@
 //!   only NaN — which logged one line per segment while every series stayed
 //!   green and the deadman waited out its twenty-four hours (birdnet-go
 //!   `e853776`);
+//! * the station's models not doing what its configuration asks (MDL-03,
+//!   MDL-06): a detector that did not start, stopped or has no classifier, so
+//!   nothing is identified while the web pages go on serving; a second
+//!   classifier left out (its file missing or damaged, its labels wrong, too
+//!   big for the memory allowed) or loaded with no route to it, which said so
+//!   in one INFO line; an occurrence filter that is off with no coordinates or
+//!   a missing or damaged file, so every species is a candidate wherever the
+//!   station is. The decision and the words are
+//!   `birdnet_web::model_conditions`, which the badge, the Health page, the
+//!   Today page and `/api/v2/health` read too;
 //! * anything the **operator** wrote a rule for (`G-29`). Every condition above
 //!   is a threshold chosen in this repository. Those are the right defaults and
 //!   they are not everyone's: the rule that catches a dying microphone at a
@@ -371,7 +381,7 @@ type Check = fn(&AppState, &mut Findings);
 /// drifting apart. A check dropped during a refactor is otherwise invisible:
 /// it produces no failure, no warning, and no condition — exactly what a
 /// healthy station produces.
-const CHECKS: [(&str, Check); 16] = [
+const CHECKS: [(&str, Check); 17] = [
     ("sources", check_sources),
     ("disk", check_disk),
     ("data-volume", check_data_volume),
@@ -387,6 +397,7 @@ const CHECKS: [(&str, Check); 16] = [
     ("flapping", check_flapping),
     ("backlog", check_backlog),
     ("classifiers", check_classifiers),
+    ("models", check_models),
     ("metric-rules", check_metric_rules),
 ];
 
@@ -992,6 +1003,23 @@ fn classifier_conditions(
                     h.consecutive_failures
                 ),
             }
+        })
+        .collect()
+}
+
+fn check_models(state: &AppState, out: &mut Findings) {
+    out.extend(model_conditions(&state.models_state()));
+}
+
+/// One condition per part of the station's models that is not what its
+/// configuration asks for, keyed `models:…`, in the words every page uses.
+fn model_conditions(models: &birdnet_core::inference::model_state::ModelsState) -> Vec<Condition> {
+    birdnet_web::model_conditions::conditions(models)
+        .into_iter()
+        .map(|c| Condition {
+            body: c.body(),
+            key: c.key,
+            title: c.title,
         })
         .collect()
 }
@@ -1614,6 +1642,7 @@ mod tests {
             "flapping",
             "backlog",
             "classifiers",
+            "models",
             "metric-rules",
         ] {
             assert!(
@@ -1623,8 +1652,8 @@ mod tests {
         }
         assert_eq!(
             CHECKS.len(),
-            16,
-            "a seventeenth check needs a line in the module doc and in this gate"
+            17,
+            "an eighteenth check needs a line in the module doc and in this gate"
         );
     }
 
@@ -1710,6 +1739,76 @@ mod tests {
             erroring[0].body.contains("returns an error"),
             "{}",
             erroring[0].body
+        );
+    }
+
+    /// MDL-03, MDL-06: what the station's models are doing that its
+    /// configuration did not ask for is a condition, one per part, keyed so
+    /// that a second classifier and the detector are separate episodes; a
+    /// station whose models run as configured has none. `evaluate` running the
+    /// check is `every_documented_condition_is_actually_checked`'s.
+    #[test]
+    fn models_not_running_as_configured_are_conditions_and_running_ones_are_not() {
+        use birdnet_core::inference::model_state::{
+            ClassifierFault, ClassifierState, ClassifierStatus, DetectorState, FilterOff,
+            FilterState, ModelsState,
+        };
+        let classifier = |id: &str, primary: bool, status| ClassifierState {
+            id: id.to_owned(),
+            primary,
+            model_path: std::path::PathBuf::from(format!("/m/{id}.onnx")),
+            labels_path: None,
+            status,
+        };
+        let judging = || ClassifierStatus::Judging {
+            sources: Vec::new(),
+            unrouted_sources: true,
+        };
+        let running = ModelsState {
+            detector: DetectorState::Running,
+            classifiers: vec![
+                classifier("birdnet", true, judging()),
+                classifier("perch", false, judging()),
+            ],
+            occurrence_filter: FilterState::Active {
+                candidates: Some(140),
+            },
+        };
+        assert_eq!(model_conditions(&running), [], "the counterpart");
+
+        let mut broken = running;
+        broken.classifiers[1].status = ClassifierStatus::left_out(
+            ClassifierFault::LabelsMissing,
+            "its labels file /m/perch.csv is not there",
+        );
+        broken.occurrence_filter =
+            FilterState::off(FilterOff::NoCoordinates, "set LATITUDE and LONGITUDE");
+        let found = model_conditions(&broken);
+        let keys: Vec<&str> = found.iter().map(|c| c.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            ["models:classifier:perch", "models:occurrence-filter"],
+            "{found:?}"
+        );
+        assert!(
+            found[0]
+                .body
+                .starts_with("Classifier `perch` is not running")
+                && found[0].body.contains("/m/perch.csv is not there")
+                && found[0].body.ends_with('.'),
+            "{}",
+            found[0].body
+        );
+
+        broken.set_detector(DetectorState::Failed {
+            why: "its model file will not load".to_owned(),
+        });
+        let found = model_conditions(&broken);
+        assert_eq!(found[0].key, "models:detector", "{found:?}");
+        assert!(
+            found[0].body.starts_with("Nothing is being identified"),
+            "{}",
+            found[0].body
         );
     }
 

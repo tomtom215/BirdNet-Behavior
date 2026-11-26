@@ -290,18 +290,34 @@ Drop them on a dashboard or trigger automations from them — "flash the porch l
 > dashboard or alert rule that referenced the old gauge names — the bundled
 > `docs/grafana-dashboard.json` already is.
 
-`GET /api/v2/health?strict=1` is the probe to point a **pager** at. The plain
-`/api/v2/health` answers `200` whenever the database is serving, which is right
-for the container health check — Docker restarts an unhealthy container, and a
-station whose detection daemon is down is exactly the one that must stay up to
-be diagnosed. The strict form additionally returns `503` when the detection
-daemon is not running, when the data disk is critically full or `df` cannot
-read it, or when the admin-password bootstrap failed at start, so a monitor
-that should wake a human can get a red out of the same endpoint. A data volume
-that is not taking writes at all — a read-only remount, a card full to the
-byte, a mount that has gone away — is `503` on both forms. Both report
-`detection_daemon`, `detection_silence_secs` and `data_volume` in the body
-either way.
+`GET /api/v2/health?strict=1` is the probe to point a **pager** at, and the
+one the container image's health check and the bundled `docker-compose.yml`
+use. The plain `/api/v2/health` is liveness: it answers `200` whenever the
+database is serving. The strict form additionally returns `503` when the
+station is not identifying birds — the detector failed to start, stopped, or
+has no classifier configured — when the data disk is critically full or `df`
+cannot read it, when the admin-password bootstrap failed at start, when the
+detection deadman has tripped, or when a classifier fails every window, so a
+monitor that should wake a human can get a red out of the same endpoint. A
+data volume that is not taking writes at all — a read-only remount, a card full
+to the byte, a mount that has gone away — is `503` on both forms. Docker does
+not restart a container for being unhealthy; the status is what `docker ps`
+and your monitor read.
+
+Both forms report what became of the station's models in the body: `models`
+holds one state for the detector, each classifier the configuration names and
+the occurrence filter (the `state` codes are the ones the
+`birdnet_detector_state`, `birdnet_classifier_state` and
+`birdnet_occurrence_filter_state` gauges export), and `model_conditions` lists
+each one that is not what the configuration asks for, with a `sentence` that
+says what to do and `stops_detection`. A second classifier that was left out
+(its file missing or damaged, its labels wrong, too big for the memory the
+station allows) or that no `MODEL_ROUTES` entry reaches, and an occurrence
+filter that is off (no coordinates, its model or labels missing or unusable),
+are listed there and are **not** `503` under `?strict=1`: the station is still
+identifying birds with its primary classifier, and the header badge, Station
+health and the Today page say the same thing. Both forms also report
+`detection_daemon`, `detection_silence_secs` and `data_volume` either way.
 
 The freshness and queue-depth gauges are the two you want alerts on for an
 unattended station:

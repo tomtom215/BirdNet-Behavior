@@ -407,8 +407,19 @@ WORKDIR /data
 # Web UI default port (override via BIRDNET_LISTEN).
 EXPOSE 8502/tcp
 
-# Container health check — hit the web server's health endpoint.  The binary
-# exposes /api/v2/health which returns 200 OK when ready to serve requests.
+# Container health check — the strict health endpoint, which answers 503 when
+# the station is not identifying birds (its detector failed, stopped or has no
+# classifier: a model that did not download, a damaged file; MDL-03), and for
+# everything else that endpoint grades: a database that is not serving, a data
+# volume that loses writes or is critically full, the detection deadman's
+# silence, a classifier failing every window, a start the boot journal says
+# lost something.
+# The plain /api/v2/health answered 200 for a station that had recorded
+# nothing since it started, so `docker ps` said "healthy" over it. Docker does
+# not restart a container for being unhealthy (a restart policy acts on the
+# process exiting); the status is what the owner and their monitor read.
+# Where something does restart unhealthy containers, a restart runs this
+# image's entrypoint, which installs a missing or damaged model again.
 #
 # start-period is 15 min because a first-run model install can be slow: the
 # binary installs the default BirdNET V2.4 (~85 MB with its range filter), or the
@@ -420,7 +431,7 @@ EXPOSE 8502/tcp
 # download nothing, so this window has no steady-state cost.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15m --retries=3 \
     CMD curl --fail --silent --show-error --max-time 4 \
-             "http://127.0.0.1:${BIRDNET_LISTEN##*:}/api/v2/health" \
+             "http://127.0.0.1:${BIRDNET_LISTEN##*:}/api/v2/health?strict=1" \
         || exit 1
 
 USER birdnet:birdnet

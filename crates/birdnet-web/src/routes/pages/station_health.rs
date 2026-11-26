@@ -22,7 +22,6 @@ use birdnet_db::audio_sources::AudioSourceStore;
 use birdnet_db::sqlite::SourceActivity;
 
 use super::escape_html;
-use crate::metrics::OccurrenceFilterState;
 use crate::state::AppState;
 use crate::system_info::{self, format_bytes, format_uptime};
 
@@ -97,13 +96,20 @@ struct Snapshot {
     /// *unknown*, not *the sampler has not run yet* — and the panel is silent in
     /// that second case, so the two must not look alike.
     acoustic_failed: bool,
-    /// What the species occurrence filter is doing (ON-12).
-    occurrence: OccurrenceFilterState,
     /// Classifiers failing every window (`e853776`), by id.
     failing_classifiers: Vec<String>,
     /// One card per classifier the daemon has reported on; empty before it has
     /// analysed a file.
     models: Vec<super::model_board::ModelCard>,
+    /// What the station's models are doing that its configuration did not ask
+    /// for (MDL-03, MDL-06).
+    model_conditions: Vec<crate::model_conditions::ModelCondition>,
+    /// The words of the Capture tab's install button, when it fixes one of
+    /// them.
+    install_offer: Option<&'static str>,
+    /// What the running station is doing with its occurrence filter, with the
+    /// reason when it is off (MDL-04, MDL-05).
+    filter: birdnet_core::inference::model_state::FilterState,
     /// What a scan of the watch folder found, when the folder is known and
     /// readable.
     recordings_folder: Option<crate::watch_folder::FolderScan>,
@@ -202,12 +208,26 @@ async fn gather(state: &AppState) -> Snapshot {
                 }
             }
         };
-        let models = super::model_board::cards(
-            &health,
-            leads.as_deref(),
-            &state.metrics().model_info(),
-            birdnet_core::inference::health::unix_now(),
+        let published = state.models_state();
+        let setup = crate::routes::admin::classifier::snapshot_of(&state);
+        let models = super::model_board::with_configured(
+            super::model_board::cards(
+                &health,
+                leads.as_deref(),
+                &state.metrics().model_info(),
+                birdnet_core::inference::health::unix_now(),
+            ),
+            &published.classifiers,
+            &|c| {
+                setup.installs_fix(&if c.primary {
+                    crate::model_conditions::DETECTOR_KEY.to_owned()
+                } else {
+                    crate::model_conditions::classifier_key(&c.id)
+                })
+            },
         );
+        let model_conditions = crate::model_conditions::conditions(&published);
+        let install_offer = install_offer(&setup, &model_conditions);
 
         let vitals = build_vitals(&sys, disk.as_ref(), scratch.as_ref());
         Snapshot {
@@ -243,7 +263,7 @@ async fn gather(state: &AppState) -> Snapshot {
             service_uptime: system_info::process_uptime_secs(),
             acoustic,
             acoustic_failed,
-            occurrence: state.metrics().occurrence_filter(),
+            filter: published.occurrence_filter,
             failing_classifiers: state
                 .metrics()
                 .model_health()
@@ -252,6 +272,8 @@ async fn gather(state: &AppState) -> Snapshot {
                 .map(|(id, _)| id)
                 .collect(),
             models,
+            model_conditions,
+            install_offer,
             recordings_folder: state
                 .watch_dir()
                 .and_then(|dir| crate::watch_folder::scan(&dir)),
@@ -285,14 +307,34 @@ async fn gather(state: &AppState) -> Snapshot {
         service_uptime: None,
         acoustic: Vec::new(),
         acoustic_failed: true,
-        occurrence: OccurrenceFilterState {
-            active: false,
-            candidates: None,
-        },
         failing_classifiers: Vec::new(),
         models: Vec::new(),
+        model_conditions: Vec::new(),
+        install_offer: None,
+        filter: birdnet_core::inference::model_state::FilterState::off(
+            birdnet_core::inference::model_state::FilterOff::DetectorNotRunning,
+            "the station's state could not be read",
+        ),
         recordings_folder: None,
     })
+}
+
+/// The Capture tab's button, when it fixes a condition on this page: what it
+/// says there, for a link to it here.
+fn install_offer(
+    setup: &crate::classifier_setup::Snapshot,
+    conditions: &[crate::model_conditions::ModelCondition],
+) -> Option<&'static str> {
+    conditions
+        .iter()
+        .any(|c| setup.installs_fix(&c.key))
+        .then(|| {
+            if setup.repairs() {
+                "Repair the model files"
+            } else {
+                "Install the missing model files"
+            }
+        })
 }
 
 #[allow(
@@ -429,8 +471,14 @@ fn facts(s: &Snapshot) -> super::station_issues::Facts<'_> {
         queued_uploads: s.queued_uploads,
         capture: &s.capture,
         source_names: &s.source_names,
-        filter_admits_nothing: s.occurrence.admits_nothing(),
+        filter_admits_nothing: matches!(
+            s.filter,
+            birdnet_core::inference::model_state::FilterState::Active {
+                candidates: Some(0)
+            }
+        ),
         failing_classifiers: &s.failing_classifiers,
+        models: &s.model_conditions,
         recordings_folder: s.recordings_folder.as_ref(),
     }
 }
@@ -474,10 +522,16 @@ fn status_banner(s: &Snapshot) -> String {
             n = s.activity.len(),
         )
     } else {
+        let fix = s.install_offer.map_or_else(String::new, |label| {
+            format!(
+                "<div class=\"cls-actions\"><a class=\"bnb-btn primary\" \
+                 href=\"/station/capture#classifier\">{label} →</a></div>"
+            )
+        });
         format!(
             "<div class=\"st-status warn\"><span class=\"ico\" aria-hidden=\"true\">!</span><div>\
              <div class=\"t\">Needs attention</div>\
-             <div class=\"s\">{}</div></div></div>",
+             <div class=\"s\">{}</div></div></div>{fix}",
             escape_html(&super::station_issues::sentences(&issues)),
         )
     }
@@ -745,20 +799,38 @@ fn pipeline_row(s: &Snapshot) -> String {
          <div><div class=\"lab\">Species filter</div><div class=\"v\">{filter}</div></div>\
          </div>",
         total = super::group_thousands(s.total_detections),
-        filter = occurrence_cell(s.occurrence),
+        filter = occurrence_cell(&s.filter),
     )
 }
 
 /// The species-filter cell of the pipeline row: the one number that shows a
-/// filter admitting nothing, which used to reach only Prometheus.
-fn occurrence_cell(f: OccurrenceFilterState) -> String {
-    match (f.active, f.candidates) {
-        (false, _) => "off · every species the model knows is a candidate".to_string(),
-        (true, None) => "on · has not run yet".to_string(),
-        (true, Some(0)) => {
-            "<span class=\"mono\">0</span> species admitted · nothing can be recorded".to_string()
-        }
-        (true, Some(n)) => format!("on · admitting <span class=\"mono\">{n}</span> species"),
+/// filter admitting nothing, which used to reach only Prometheus, and, when
+/// it is off, why — read from what the running station published, never from
+/// the configuration (MDL-04, MDL-05). The banner above carries the sentence
+/// that says what to do.
+fn occurrence_cell(f: &birdnet_core::inference::model_state::FilterState) -> String {
+    use birdnet_core::inference::model_state::{FilterOff, FilterState};
+    match f {
+        FilterState::Active { candidates: None } => "on · has not run yet".to_string(),
+        FilterState::Active {
+            candidates: Some(0),
+        } => "<span class=\"mono\">0</span> species admitted · nothing can be recorded".to_string(),
+        FilterState::Active {
+            candidates: Some(n),
+        } => format!("on · admitting <span class=\"mono\">{n}</span> species"),
+        FilterState::Off { reason, .. } => format!(
+            "off · {}",
+            match reason {
+                FilterOff::NotConfigured =>
+                    "none is set up; every species the model knows is a candidate",
+                FilterOff::NoCoordinates => "the station has no coordinates",
+                FilterOff::ModelMissing => "its model file is missing",
+                FilterOff::ModelUnusable => "its model file will not load",
+                FilterOff::LabelsMissing => "its labels file is missing",
+                FilterOff::LabelsUnreadable => "its labels file cannot be read",
+                FilterOff::DetectorNotRunning => "the detector is not running",
+            }
+        ),
     }
 }
 
@@ -906,6 +978,7 @@ pub(super) fn format_freshness(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use birdnet_core::inference::model_state::{FilterOff, FilterState};
 
     fn snap(disk_low: bool, integrity: bool, sources: usize, queued: u64) -> Snapshot {
         Snapshot {
@@ -928,12 +1001,11 @@ mod tests {
             service_uptime: Some(3_600),
             acoustic: Vec::new(),
             acoustic_failed: false,
-            occurrence: OccurrenceFilterState {
-                active: false,
-                candidates: None,
-            },
             failing_classifiers: Vec::new(),
             models: Vec::new(),
+            model_conditions: Vec::new(),
+            install_offer: None,
+            filter: FilterState::off(FilterOff::NotConfigured, "none is configured"),
             recordings_folder: None,
         }
     }
@@ -965,8 +1037,7 @@ mod tests {
         );
         assert!(status_banner(&s).contains("All systems healthy"));
 
-        s.occurrence = OccurrenceFilterState {
-            active: true,
+        s.filter = FilterState::Active {
             candidates: Some(287),
         };
         assert!(
@@ -976,8 +1047,7 @@ mod tests {
         );
         assert!(status_banner(&s).contains("All systems healthy"));
 
-        s.occurrence = OccurrenceFilterState {
-            active: true,
+        s.filter = FilterState::Active {
             candidates: Some(0),
         };
         assert!(
