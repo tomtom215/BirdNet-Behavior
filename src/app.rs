@@ -977,13 +977,15 @@ fn start_detector(
             cli,
             config,
             state.clone(),
-            inputs.broadcast,
-            i.apprise,
-            i.birdweather,
-            i.email,
-            i.mqtt,
-            i.notification_filter,
-            i.notification_template,
+            daemon::Delivery {
+                broadcast: inputs.broadcast,
+                apprise: i.apprise,
+                birdweather: i.birdweather,
+                email: i.email,
+                mqtt: i.mqtt,
+                notification_filter: i.notification_filter,
+                notification_template: i.notification_template,
+            },
             inputs.in_flight,
         )
     };

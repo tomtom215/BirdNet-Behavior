@@ -291,27 +291,39 @@ fn split_plan(
     (primary, specs.collect(), thresholds)
 }
 
+/// Where the daemon's judged detections go: the live broadcast, and the
+/// clients that deliver and upload them.
+pub struct Delivery {
+    /// The dashboard's live detection broadcast.
+    pub broadcast: birdnet_web::routes::websocket::DetectionBroadcast,
+    /// Apprise notifications.
+    pub apprise: Option<AppriseHandle>,
+    /// `BirdWeather` uploads.
+    pub birdweather: Option<birdnet_integrations::birdweather::Client>,
+    /// Email notifications.
+    pub email: Option<EmailHandle>,
+    /// MQTT publishing.
+    pub mqtt: Option<MqttHandle>,
+    /// Which detections notify.
+    pub notification_filter: NotificationFilter,
+    /// What a notification says.
+    pub notification_template: NotificationTemplate,
+}
+
 /// Start the detection daemon in a background thread.
 ///
 /// Returns the daemon handle, or `None` if the model/labels are not configured.
 ///
-/// The body is almost entirely thread-the-arguments-through-builders glue;
-/// every non-trivial decision lives in a pure helper at the top of this
-/// file with dedicated unit-test coverage. See the module docs for the
-/// rationale.
-#[allow(clippy::too_many_arguments)]
-#[allow(clippy::too_many_lines)]
+/// Every non-trivial decision lives in a pure helper at the top of this file
+/// with dedicated unit-test coverage, and each stage of the start-up is a
+/// function of its own below: the settings the detector runs at, the
+/// classifiers this machine can run, the occurrence source the web layer
+/// reads, the daemon's configuration, and the processor that consumes it.
 pub fn start_detection_daemon(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
     state: birdnet_web::state::AppState,
-    broadcast: birdnet_web::routes::websocket::DetectionBroadcast,
-    apprise: Option<AppriseHandle>,
-    birdweather: Option<birdnet_integrations::birdweather::Client>,
-    email: Option<EmailHandle>,
-    mqtt: Option<MqttHandle>,
-    notification_filter: NotificationFilter,
-    notification_template: NotificationTemplate,
+    delivery: Delivery,
     in_flight: birdnet_core::detection::daemon::InFlight,
 ) -> Option<birdnet_core::detection::daemon::DaemonHandle> {
     // Told to the web layer before anything can stop the daemon from starting:
@@ -358,56 +370,183 @@ pub fn start_detection_daemon(
         );
     }
 
-    let sensitivity = resolve_sensitivity(config);
-    let confidence = resolve_confidence(config);
+    let settings = Settings::resolve(cli, config, &state);
+    let planned = plan_classifiers(config, &state, &model_path, &labels_path);
+    let paths = Paths {
+        watch_dir,
+        model_path,
+        labels_path,
+    };
+    let extraction = extraction_config(cli, config, &state, &settings);
+    let model_thresholds = planned.model_thresholds.clone();
+    let daemon_config = daemon_config(
+        cli,
+        &state,
+        paths,
+        &settings,
+        planned,
+        in_flight,
+        extraction.clip_reach(),
+    );
+    run_and_process(
+        state,
+        daemon_config,
+        settings,
+        delivery,
+        Processing {
+            extractor: Extractor::new(extraction),
+            model_thresholds,
+        },
+    )
+}
 
-    // The classifier applies its own threshold before the pipeline sees a
-    // detection, so a lowered per-species threshold reaches nothing unless the
-    // model is told to run at the floor. Getting this wrong is silent: the
-    // feature would be on, configured, and reach zero detections, because the
-    // ones it exists to recover were discarded inside the model.
-    let dynamic_config = crate::daemon::config::resolve_dynamic_threshold(config);
-    let (load_confidence, model_confidence) = classifier_thresholds(dynamic_config, confidence);
-    if is_enabled_but_inert(dynamic_config, confidence) {
-        tracing::warn!(
-            floor = dynamic_config.min,
-            global = confidence,
-            "dynamic thresholds are enabled but the floor is at or above the global \
-             threshold, so no species can be adjusted. Lower BIRDNET_DYNAMIC_THRESHOLD_MIN \
-             or raise the global confidence."
+/// Where the daemon reads from: the watch folder, and the primary
+/// classifier's model and labels.
+struct Paths {
+    watch_dir: PathBuf,
+    model_path: PathBuf,
+    labels_path: PathBuf,
+}
+
+/// The settings the detector runs at, each resolved once from the command
+/// line, the configuration file and the settings table.
+struct Settings {
+    sensitivity: f32,
+    /// The station's confidence threshold.
+    confidence: f32,
+    dynamic: birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig,
+    /// The threshold the classifiers are loaded with ([`classifier_thresholds`]).
+    load_confidence: f32,
+    /// The floor they run at.
+    model_confidence: f32,
+    metadata_model_path: Option<PathBuf>,
+    metadata_labels_path: Option<PathBuf>,
+    species_aliases_path: Option<PathBuf>,
+    sf_thresh: f32,
+    privacy_threshold: f32,
+    privacy_rank: usize,
+    duplicate_interval_secs: i64,
+    noise_threshold: f32,
+    noise_classes: Vec<String>,
+    noise_remember_secs: f32,
+    confirmation: birdnet_core::detection::corroboration::ConfirmationLevel,
+    overlap: f32,
+    species_thresholds: std::collections::HashMap<String, f64>,
+    species_lists: birdnet_core::inference::species_filter::SpeciesLists,
+    species_lists_provider: birdnet_core::inference::species_filter::SpeciesListsProvider,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
+    daylight: crate::daemon::daylight::DaylightFilter,
+}
+
+impl Settings {
+    /// Resolve every setting, logging what an operator should know about.
+    fn resolve(
+        cli: &Cli,
+        config: Option<&birdnet_core::config::Config>,
+        state: &birdnet_web::state::AppState,
+    ) -> Self {
+        let confidence = resolve_confidence(config);
+        // The classifier applies its own threshold before the pipeline sees a
+        // detection, so a lowered per-species threshold reaches nothing unless
+        // the model is told to run at the floor. Getting this wrong is silent:
+        // the feature would be on, configured, and reach zero detections,
+        // because the ones it exists to recover were discarded inside the model.
+        let dynamic = crate::daemon::config::resolve_dynamic_threshold(config);
+        let (load_confidence, model_confidence) = classifier_thresholds(dynamic, confidence);
+        if is_enabled_but_inert(dynamic, confidence) {
+            tracing::warn!(
+                floor = dynamic.min,
+                global = confidence,
+                "dynamic thresholds are enabled but the floor is at or above the global \
+                 threshold, so no species can be adjusted. Lower BIRDNET_DYNAMIC_THRESHOLD_MIN \
+                 or raise the global confidence."
+            );
+        }
+        let (confirmation, confirmation_warning) = resolve_confirmation_level(
+            &cli.confirmation_level,
+            "off",
+            config.and_then(|c| c.get("CONFIRMATION_LEVEL")),
         );
+        if let Some(warning) = confirmation_warning {
+            tracing::warn!("{warning}");
+        }
+        let (species_thresholds, species_lists, species_lists_provider) = species_settings(state);
+        let (latitude, longitude) = resolve_station_coords(cli, config);
+        Self {
+            sensitivity: resolve_sensitivity(config),
+            confidence,
+            dynamic,
+            load_confidence,
+            model_confidence,
+            metadata_model_path: cli
+                .metadata_model
+                .clone()
+                .or_else(|| config.and_then(|c| c.get("METADATA_MODEL_PATH").map(PathBuf::from))),
+            metadata_labels_path: cli
+                .metadata_labels
+                .clone()
+                .or_else(|| config.and_then(|c| c.get("METADATA_LABELS_PATH").map(PathBuf::from))),
+            // No CLI flag: this is a file an operator curates over months, not
+            // something worth typing at a one-off invocation.
+            species_aliases_path: config
+                .and_then(|c| c.get("SPECIES_ALIASES_PATH").map(PathBuf::from)),
+            sf_thresh: resolve_f32_with_default(
+                cli.sf_thresh,
+                0.03,
+                config.and_then(|c| c.get_parsed::<f32>("SF_THRESH").ok()),
+            ),
+            privacy_threshold: resolve_f32_with_default(
+                cli.privacy_threshold,
+                0.0,
+                config.and_then(|c| c.get_parsed::<f32>("PRIVACY_THRESHOLD").ok()),
+            ),
+            privacy_rank: privacy_rank(cli, config),
+            // `0` is both the flag default and a meaningful value ("disabled"),
+            // so the config key is consulted only when the flag was left alone.
+            // Passing the default in rather than comparing here keeps the one
+            // comparison in `resolve_i64_with_default`, where a unit test can
+            // reach it.
+            duplicate_interval_secs: crate::daemon::config::resolve_i64_with_default(
+                cli.duplicate_interval_secs,
+                0,
+                config.and_then(|c| c.get_parsed::<i64>("DUPLICATE_INTERVAL_SECS").ok()),
+            ),
+            noise_threshold: resolve_f32_with_default(
+                cli.noise_threshold,
+                0.0,
+                config.and_then(|c| c.get_parsed::<f32>("NOISE_THRESHOLD").ok()),
+            ),
+            noise_classes: crate::daemon::config::resolve_noise_classes(
+                cli.noise_classes.as_deref(),
+                config.and_then(|c| c.get("NOISE_CLASSES")),
+            ),
+            // Off unless asked for: the window removes real detections whenever
+            // a real bird happens to be the species a dog resembles, and that is
+            // a trade an operator should make knowingly.
+            noise_remember_secs: config
+                .and_then(|c| c.get_parsed::<f32>("NOISE_REMEMBER_SECS").ok())
+                .unwrap_or(0.0),
+            confirmation,
+            overlap: resolve_f32_with_default(
+                cli.overlap,
+                0.0,
+                config.and_then(|c| c.get_parsed::<f32>("OVERLAP").ok()),
+            ),
+            species_thresholds,
+            species_lists,
+            species_lists_provider,
+            latitude,
+            longitude,
+            daylight: config::build_daylight_filter(cli, config, latitude, longitude),
+        }
     }
+}
 
-    let metadata_model_path = cli
-        .metadata_model
-        .clone()
-        .or_else(|| config.and_then(|c| c.get("METADATA_MODEL_PATH").map(PathBuf::from)));
-
-    let metadata_labels_path = cli
-        .metadata_labels
-        .clone()
-        .or_else(|| config.and_then(|c| c.get("METADATA_LABELS_PATH").map(PathBuf::from)));
-
-    // No CLI flag: this is a file an operator curates over months, not
-    // something worth typing at a one-off invocation.
-    let species_aliases_path =
-        config.and_then(|c| c.get("SPECIES_ALIASES_PATH").map(PathBuf::from));
-
-    let sf_thresh = resolve_f32_with_default(
-        cli.sf_thresh,
-        0.03,
-        config.and_then(|c| c.get_parsed::<f32>("SF_THRESH").ok()),
-    );
-
-    let privacy_threshold = resolve_f32_with_default(
-        cli.privacy_threshold,
-        0.0,
-        config.and_then(|c| c.get_parsed::<f32>("PRIVACY_THRESHOLD").ok()),
-    );
-
-    // `10` is the flag default and `0` ("off") is a meaningful value, so the
-    // config key is consulted only when the flag was left alone.
-    let privacy_rank = usize::try_from(
+/// `PRIVACY_RANK`: `10` is the flag default and `0` ("off") is a meaningful
+/// value, so the config key is consulted only when the flag was left alone.
+fn privacy_rank(cli: &Cli, config: Option<&birdnet_core::config::Config>) -> usize {
+    usize::try_from(
         crate::daemon::config::resolve_i64_with_default(
             i64::from(cli.privacy_rank),
             i64::try_from(birdnet_core::config::DEFAULT_PRIVACY_RANK).unwrap_or(10),
@@ -415,63 +554,30 @@ pub fn start_detection_daemon(
         )
         .max(0),
     )
-    .unwrap_or(birdnet_core::config::DEFAULT_PRIVACY_RANK);
+    .unwrap_or(birdnet_core::config::DEFAULT_PRIVACY_RANK)
+}
 
-    // `0` is both the flag default and a meaningful value ("disabled"), so
-    // the config key is consulted only when the flag was left alone. Passing
-    // the default in rather than comparing here keeps the one comparison in
-    // `resolve_i64_with_default`, where a unit test can reach it.
-    let duplicate_interval_secs = crate::daemon::config::resolve_i64_with_default(
-        cli.duplicate_interval_secs,
-        0,
-        config.and_then(|c| c.get_parsed::<i64>("DUPLICATE_INTERVAL_SECS").ok()),
-    );
-
-    let noise_threshold = resolve_f32_with_default(
-        cli.noise_threshold,
-        0.0,
-        config.and_then(|c| c.get_parsed::<f32>("NOISE_THRESHOLD").ok()),
-    );
-    let noise_classes = crate::daemon::config::resolve_noise_classes(
-        cli.noise_classes.as_deref(),
-        config.and_then(|c| c.get("NOISE_CLASSES")),
-    );
-    // Off unless asked for: the window removes real detections whenever a real
-    // bird happens to be the species a dog resembles, and that is a trade an
-    // operator should make knowingly.
-    let noise_remember_secs = config
-        .and_then(|c| c.get_parsed::<f32>("NOISE_REMEMBER_SECS").ok())
-        .unwrap_or(0.0);
-
-    let (confirmation, confirmation_warning) = resolve_confirmation_level(
-        &cli.confirmation_level,
-        "off",
-        config.and_then(|c| c.get("CONFIRMATION_LEVEL")),
-    );
-    if let Some(warning) = confirmation_warning {
-        tracing::warn!("{warning}");
-    }
-
-    let overlap = resolve_f32_with_default(
-        cli.overlap,
-        0.0,
-        config.and_then(|c| c.get_parsed::<f32>("OVERLAP").ok()),
-    );
-
+/// The per-species thresholds, the operator's include/exclude lists, and the
+/// provider the daemon re-reads those lists through.
+fn species_settings(
+    state: &birdnet_web::state::AppState,
+) -> (
+    std::collections::HashMap<String, f64>,
+    birdnet_core::inference::species_filter::SpeciesLists,
+    birdnet_core::inference::species_filter::SpeciesListsProvider,
+) {
     let (species_thresholds, thresholds_warning) =
         startup_species_thresholds(state.with_db(birdnet_db::sqlite::get_species_threshold_map));
     if let Some(warning) = thresholds_warning {
         tracing::warn!("{warning}");
     }
-
     if let Some(count) = species_thresholds_log_count(&species_thresholds) {
         tracing::info!(count, "loaded per-species confidence thresholds");
     }
-
     // The operator's include/exclude lists, read through the same function the
     // /admin/species page uses so the two cannot drift.
     let species_lists =
-        birdnet_web::routes::admin::species::handler::configured_species_lists(&state);
+        birdnet_web::routes::admin::species::handler::configured_species_lists(state);
     if let Some((include, exclude, whitelist)) = species_lists_log_counts(&species_lists) {
         tracing::info!(
             include,
@@ -480,29 +586,41 @@ pub fn start_detection_daemon(
             "loaded operator species filter lists"
         );
     }
-
     // Re-read on a TTL inside the daemon loop so excluding a species takes
     // effect on the next processed file rather than the next restart.
-    let species_lists_provider = {
+    let provider = {
         let state = state.clone();
         birdnet_core::inference::species_filter::SpeciesListsProvider::new(move || {
             birdnet_web::routes::admin::species::handler::configured_species_lists(&state)
         })
     };
+    (species_thresholds, species_lists, provider)
+}
 
-    let (latitude, longitude) = resolve_station_coords(cli, config);
+/// The classifiers this machine can run, split for the daemon.
+struct Planned {
+    primary: ModelSpec,
+    extra_models: Vec<ModelSpec>,
+    model_thresholds: std::collections::HashMap<String, f32>,
+    routes: std::collections::HashMap<String, Vec<String>>,
+    observer: birdnet_core::detection::daemon::ModelStateObserver,
+}
 
-    let daylight = config::build_daylight_filter(cli, config, latitude, longitude);
-
-    // Which classifiers this machine can actually afford (`G-10` Stage 2).
-    // The primary is always in the plan; extras are admitted only while they
-    // demonstrably fit, and every refusal is logged with its arithmetic —
-    // an unattended station must say why it is running one model, not just
-    // quietly run one.
+/// Which classifiers this machine can actually afford (`G-10` Stage 2). The
+/// primary is always in the plan; extras are admitted only while they
+/// demonstrably fit, and every refusal is logged with its arithmetic — an
+/// unattended station must say why it is running one model, not just quietly
+/// run one.
+fn plan_classifiers(
+    config: Option<&birdnet_core::config::Config>,
+    state: &birdnet_web::state::AppState,
+    model_path: &std::path::Path,
+    labels_path: &std::path::Path,
+) -> Planned {
     let model_plan = crate::helpers::models::plan(
         config,
-        model_path.clone(),
-        labels_path.clone(),
+        model_path.to_path_buf(),
+        labels_path.to_path_buf(),
         birdnet_behavioral::memory::detect_ceiling().map(|(mib, _)| mib),
     );
     for note in &model_plan.notes {
@@ -513,67 +631,52 @@ pub fn start_detection_daemon(
     for left in &model_plan.left_out {
         tracing::warn!(classifier = %left.id, "{}", left.message());
     }
-    let model_state = model_state_observer(&state, model_plan.left_out, model_plan.declared);
+    let observer = model_state_observer(state, model_plan.left_out, model_plan.declared);
     let (primary, extra_models, model_thresholds) =
-        split_plan(model_plan.specs, &model_path, &labels_path);
+        split_plan(model_plan.specs, model_path, labels_path);
+    Planned {
+        primary,
+        extra_models,
+        model_thresholds,
+        routes: model_plan.routes,
+        observer,
+    }
+}
 
+/// The daemon's configuration, and the occurrence source the web layer reads
+/// published on the way.
+fn daemon_config(
+    cli: &Cli,
+    state: &birdnet_web::state::AppState,
+    paths: Paths,
+    settings: &Settings,
+    planned: Planned,
+    in_flight: birdnet_core::detection::daemon::InFlight,
+    privacy_clip_reach: birdnet_core::detection::privacy::ClipReach,
+) -> birdnet_core::detection::daemon::DaemonConfig {
     // The floor the inference loop runs every classifier at or below: the
     // model confidence, lowered to any per-species threshold under it, and kept
-    // current by the processor as the operator changes thresholds.
-    // Seeded from the thresholds already loaded, so the first files — analysed
-    // before the processor thread is up to publish — are not judged by the
-    // model alone.
+    // current by the processor as the operator changes thresholds. Seeded from
+    // the thresholds already loaded, so the first files — analysed before the
+    // processor thread is up to publish — are not judged by the model alone.
     let threshold_floor =
         std::sync::Arc::new(birdnet_core::detection::daemon::ThresholdFloor::new(
-            processor::lowest_threshold(model_confidence, &species_thresholds),
+            processor::lowest_threshold(settings.model_confidence, &settings.species_thresholds),
         ));
-    // Extract clips into the SAME dir the web serves recordings from
-    // (AppState::recording_dir) — one source of truth — so clips persist on the
-    // data disk and are found by the Recordings page and playback. They used to
-    // land in watch_dir.parent()/Extracted (the transient tmpfs), which vanished
-    // on every restart and never matched where the app reads (Bug B).
-    let recordings_dir = state.recording_dir();
-    let mut extraction_config = build_extraction_config(cli, config, &recordings_dir);
-    // With the privacy filter on, a clip stays inside its own segment, and the
-    // filter is told how far a clip reaches so it can clear the whole of it
-    // (PIPE7). Both are fixed for the daemon's life, as the settings they come
-    // from are read once at start. "On" is the filter's own rule, so clips
-    // are kept in their segment exactly when the filter runs.
-    extraction_config.own_segment_only =
-        birdnet_core::detection::privacy::PrivacyFilter::new(privacy_threshold)
-            .with_rank_cutoff(privacy_rank)
-            .is_enabled();
-    let privacy_clip_reach = extraction_config.clip_reach();
-
-    // The web crate cannot reach the daemon's own occurrence filter: it lives on
-    // the detection thread, behind an ONNX session that needs `&mut` to run. It
-    // is given a source that builds the same filter, lazily, from the same
-    // files, threshold and lists, so the Species page and the API can say why a
-    // bird is or is not admitted. Nothing is loaded until somebody asks.
-    state.set_occurrence_source(std::sync::Arc::new(
-        occurrence::DaemonOccurrence::new(
-            latitude.zip(longitude),
-            metadata_model_path
-                .clone()
-                .map(|model| occurrence::RangeModelFiles {
-                    model,
-                    labels: metadata_labels_path.clone(),
-                    aliases: species_aliases_path.clone(),
-                }),
-            labels_path.clone(),
-            build_species_filter_config(sf_thresh, species_lists.clone()),
-            species_lists_provider.clone(),
-        )
-        .with_classifiers(
-            &primary.id,
-            extra_models
-                .iter()
-                .map(|m| (m.id.clone(), m.labels_path.clone()))
-                .collect(),
-        ),
-    ));
-
-    let daemon_config = birdnet_core::detection::daemon::DaemonConfig {
+    publish_occurrence_source(state, settings, &paths.labels_path, &planned);
+    let Paths {
+        watch_dir,
+        model_path,
+        labels_path,
+    } = paths;
+    let Planned {
+        primary,
+        extra_models,
+        routes,
+        observer,
+        ..
+    } = planned;
+    birdnet_core::detection::daemon::DaemonConfig {
         watch_dir: watch_dir.clone(),
         model_path,
         labels_path,
@@ -584,16 +687,16 @@ pub fn start_detection_daemon(
         primary_threshold: primary.threshold,
         primary_sample_rate: primary.sample_rate,
         primary_output_scale: primary.output_scale,
-        model_routes: model_plan.routes,
-        pipeline: build_pipeline_config(watch_dir, overlap),
-        model: build_model_config(sensitivity, load_confidence),
+        model_routes: routes,
+        pipeline: build_pipeline_config(watch_dir, settings.overlap),
+        model: build_model_config(settings.sensitivity, settings.load_confidence),
         process_existing: cli.process_existing,
-        metadata_model_path,
-        metadata_labels_path,
-        species_aliases_path,
+        metadata_model_path: settings.metadata_model_path.clone(),
+        metadata_labels_path: settings.metadata_labels_path.clone(),
+        species_aliases_path: settings.species_aliases_path.clone(),
         // What became of each classifier and of the occurrence filter, into
         // the station's published model state (MDL-01 to MDL-16).
-        on_model_state: Some(model_state),
+        on_model_state: Some(observer),
         // Count what the pipeline actually gets through. Nothing did, and
         // without it a station whose model answers nothing is indistinguishable
         // from one whose pipeline is not running: every other series is
@@ -601,70 +704,112 @@ pub fn start_detection_daemon(
         // empty. The label is derived here rather than in `birdnet-core`
         // because `derive_source_label` is the one place that knows the
         // convention.
-        on_file_analysed: Some(throughput_observer(&state)),
+        on_file_analysed: Some(throughput_observer(state)),
         // The stream directory's purge honours these claims (PR-1 / S-3).
         in_flight: Some(in_flight),
         // One segment in two while the queue is deep or the board is at its
         // thermal limit (PR-2); the thermal condition and this read the same
         // sensor and the same line, so the notification and the shed agree.
         shed: Some(shed_policy()),
-        species_filter: build_species_filter_config(sf_thresh, species_lists),
-        species_lists_provider: Some(species_lists_provider),
-        privacy_threshold,
-        privacy_rank,
+        species_filter: build_species_filter_config(
+            settings.sf_thresh,
+            settings.species_lists.clone(),
+        ),
+        species_lists_provider: Some(settings.species_lists_provider.clone()),
+        privacy_threshold: settings.privacy_threshold,
+        privacy_rank: settings.privacy_rank,
         privacy_clip_reach,
-        noise_threshold,
-        noise_classes,
-        noise_remember_secs,
-        confirmation,
-        latitude,
-        longitude,
-        species_thresholds,
-        threshold_floor: Some(std::sync::Arc::clone(&threshold_floor)),
-    };
+        noise_threshold: settings.noise_threshold,
+        noise_classes: settings.noise_classes.clone(),
+        noise_remember_secs: settings.noise_remember_secs,
+        confirmation: settings.confirmation,
+        latitude: settings.latitude,
+        longitude: settings.longitude,
+        species_thresholds: settings.species_thresholds.clone(),
+        threshold_floor: Some(threshold_floor),
+    }
+}
 
+/// How clips are cut. Extracted into the SAME dir the web serves recordings
+/// from (`AppState::recording_dir`) — one source of truth — so clips persist on
+/// the data disk and are found by the Recordings page and playback (Bug B).
+/// With the privacy filter on, a clip stays inside its own segment, and the
+/// filter is told how far a clip reaches so it can clear the whole of it
+/// (PIPE7); "on" is the filter's own rule, so clips are kept in their segment
+/// exactly when the filter runs.
+fn extraction_config(
+    cli: &Cli,
+    config: Option<&birdnet_core::config::Config>,
+    state: &birdnet_web::state::AppState,
+    settings: &Settings,
+) -> birdnet_core::audio::extraction::ExtractionConfig {
+    let mut extraction = build_extraction_config(cli, config, &state.recording_dir());
+    extraction.own_segment_only =
+        birdnet_core::detection::privacy::PrivacyFilter::new(settings.privacy_threshold)
+            .with_rank_cutoff(settings.privacy_rank)
+            .is_enabled();
+    extraction
+}
+
+/// The web crate cannot reach the daemon's own occurrence filter: it lives on
+/// the detection thread, behind an ONNX session that needs `&mut` to run. It
+/// is given a source that builds the same filter, lazily, from the same
+/// files, threshold and lists, so the Species page and the API can say why a
+/// bird is or is not admitted. Nothing is loaded until somebody asks.
+fn publish_occurrence_source(
+    state: &birdnet_web::state::AppState,
+    settings: &Settings,
+    labels_path: &std::path::Path,
+    planned: &Planned,
+) {
+    state.set_occurrence_source(std::sync::Arc::new(
+        occurrence::DaemonOccurrence::new(
+            settings.latitude.zip(settings.longitude),
+            settings
+                .metadata_model_path
+                .clone()
+                .map(|model| occurrence::RangeModelFiles {
+                    model,
+                    labels: settings.metadata_labels_path.clone(),
+                    aliases: settings.species_aliases_path.clone(),
+                }),
+            labels_path.to_path_buf(),
+            build_species_filter_config(settings.sf_thresh, settings.species_lists.clone()),
+            settings.species_lists_provider.clone(),
+        )
+        .with_classifiers(
+            &planned.primary.id,
+            planned
+                .extra_models
+                .iter()
+                .map(|m| (m.id.clone(), m.labels_path.clone()))
+                .collect(),
+        ),
+    ));
+}
+
+/// Start the daemon on `daemon_config` and, once it runs, the event processor
+/// that consumes what it detects; publish which happened.
+fn run_and_process(
+    state: birdnet_web::state::AppState,
+    daemon_config: birdnet_core::detection::daemon::DaemonConfig,
+    settings: Settings,
+    delivery: Delivery,
+    processing: Processing,
+) -> Option<birdnet_core::detection::daemon::DaemonHandle> {
     let (event_tx, event_rx) = mpsc::sync_channel(DETECTION_EVENT_CHANNEL_CAP);
-
-    let thresholds_for_processor = daemon_config.species_thresholds.clone();
-    let global_confidence = confidence;
-    // What every row this run writes will say about the station, the settings
-    // (R-2 / UP-1) and the model (R-1) that produced it. The settings are the
-    // same resolved values the model and the daylight filter use, so the row
-    // and the run cannot disagree; the model is hashed and written to
-    // `analysis_runs` on the processor thread before it consumes an event —
-    // paths only here, because the hashing reads 541 MB and does not belong
-    // on the async runtime.
-    let mut manifest = run::RunManifest {
-        model_path: daemon_config.model_path.clone(),
-        labels_path: daemon_config.labels_path.clone(),
-        // Decided once the daemon has said whether the filter runs: see below.
-        geomodel_path: None,
-        app_version: env!("CARGO_PKG_VERSION"),
-        confidence: f64::from(confidence),
-        sensitivity: f64::from(sensitivity),
-        overlap: f64::from(overlap),
-        sf_thresh: f64::from(sf_thresh),
-        lat: latitude,
-        lon: longitude,
-        model_thresholds,
-    };
-
-    let extractor = Extractor::new(extraction_config);
-
     match birdnet_core::detection::daemon::run_daemon(&daemon_config, event_tx) {
         Ok(handle) => {
             tracing::info!("detection daemon started");
             state.metrics().set_detector_state(DetectorState::Running);
-            // The run records the geomodel it filters with, and only that one:
-            // a filter that is off — its model missing or damaged, its labels
-            // missing, the station without a position — filters nothing, and a
-            // missing file made the run impossible to register, which stopped every
-            // detection being recorded (MDL-05).
-            if state.models_state().occurrence_filter.is_active() {
-                manifest
-                    .geomodel_path
-                    .clone_from(&daemon_config.metadata_model_path);
-            }
+            let manifest = run_manifest(
+                &state,
+                &daemon_config,
+                &settings,
+                processing.model_thresholds,
+            );
+            let floor = daemon_config.threshold_floor.clone();
+            let extractor = processing.extractor;
             let rt_handle = tokio::runtime::Handle::current();
             tokio::task::spawn_blocking(move || {
                 // No run, no rows: returning here drops the receiver, the
@@ -675,27 +820,27 @@ pub fn start_detection_daemon(
                 event_processor(
                     event_rx,
                     state,
-                    broadcast,
-                    apprise,
-                    birdweather,
-                    email,
-                    mqtt,
-                    notification_filter,
-                    notification_template,
+                    delivery.broadcast,
+                    delivery.apprise,
+                    delivery.birdweather,
+                    delivery.email,
+                    delivery.mqtt,
+                    delivery.notification_filter,
+                    delivery.notification_template,
                     rt_handle,
-                    thresholds_for_processor,
-                    global_confidence,
+                    daemon_config.species_thresholds,
+                    settings.confidence,
                     extractor,
-                    duplicate_interval_secs,
-                    daylight,
+                    settings.duplicate_interval_secs,
+                    settings.daylight,
                     birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
-                        dynamic_config,
+                        settings.dynamic,
                     ),
                     provenance,
-                    Some(processor::PublishedFloor {
-                        floor: threshold_floor,
-                        model: model_confidence,
-                        station: global_confidence,
+                    floor.map(|floor| processor::PublishedFloor {
+                        floor,
+                        model: settings.model_confidence,
+                        station: settings.confidence,
                     }),
                 );
             });
@@ -708,6 +853,52 @@ pub fn start_detection_daemon(
                 .set_detector_state(DetectorState::Failed { why: e.to_string() });
             None
         }
+    }
+}
+
+/// What the processor needs besides the daemon's configuration: how it cuts
+/// clips, and each classifier's own threshold for the run record.
+struct Processing {
+    extractor: Extractor,
+    model_thresholds: std::collections::HashMap<String, f32>,
+}
+
+/// What every row this run writes will say about the station, the settings
+/// (R-2 / UP-1) and the model (R-1) that produced it. The settings are the
+/// same resolved values the model and the daylight filter use, so the row and
+/// the run cannot disagree; the model is hashed and written to
+/// `analysis_runs` on the processor thread before it consumes an event —
+/// paths only here, because the hashing reads 541 MB and does not belong on
+/// the async runtime.
+///
+/// The run records the geomodel it filters with, and only that one: a filter
+/// that is off — its model missing or damaged, its labels missing, the station
+/// without a position — filters nothing, and a missing file made the run
+/// impossible to register, which stopped every detection being recorded
+/// (MDL-05). So it is read after the daemon has said whether the filter runs.
+fn run_manifest(
+    state: &birdnet_web::state::AppState,
+    daemon_config: &birdnet_core::detection::daemon::DaemonConfig,
+    settings: &Settings,
+    model_thresholds: std::collections::HashMap<String, f32>,
+) -> run::RunManifest {
+    run::RunManifest {
+        model_path: daemon_config.model_path.clone(),
+        labels_path: daemon_config.labels_path.clone(),
+        geomodel_path: state
+            .models_state()
+            .occurrence_filter
+            .is_active()
+            .then(|| daemon_config.metadata_model_path.clone())
+            .flatten(),
+        app_version: env!("CARGO_PKG_VERSION"),
+        confidence: f64::from(settings.confidence),
+        sensitivity: f64::from(settings.sensitivity),
+        overlap: f64::from(settings.overlap),
+        sf_thresh: f64::from(settings.sf_thresh),
+        lat: settings.latitude,
+        lon: settings.longitude,
+        model_thresholds,
     }
 }
 
@@ -1243,13 +1434,15 @@ mod tests {
             &cli,
             None,
             state,
-            broadcast,
-            None,
-            None,
-            None,
-            None,
-            filter,
-            template,
+            Delivery {
+                broadcast,
+                apprise: None,
+                birdweather: None,
+                email: None,
+                mqtt: None,
+                notification_filter: filter,
+                notification_template: template,
+            },
             birdnet_core::detection::daemon::InFlight::new(),
         );
 
@@ -1305,13 +1498,15 @@ mod tests {
             &cli,
             None,
             state,
-            broadcast,
-            None,
-            None,
-            None,
-            None,
-            filter,
-            template,
+            Delivery {
+                broadcast,
+                apprise: None,
+                birdweather: None,
+                email: None,
+                mqtt: None,
+                notification_filter: filter,
+                notification_template: template,
+            },
             birdnet_core::detection::daemon::InFlight::new(),
         );
 
@@ -1349,13 +1544,15 @@ mod tests {
             &cli,
             None,
             state,
-            broadcast,
-            None,
-            None,
-            None,
-            None,
-            filter,
-            template,
+            Delivery {
+                broadcast,
+                apprise: None,
+                birdweather: None,
+                email: None,
+                mqtt: None,
+                notification_filter: filter,
+                notification_template: template,
+            },
             birdnet_core::detection::daemon::InFlight::new(),
         );
         assert!(
