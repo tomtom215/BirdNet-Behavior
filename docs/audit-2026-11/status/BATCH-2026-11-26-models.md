@@ -112,7 +112,8 @@ only at its hyphens, and the card was 525 px wide in a 390 px viewport (12 layou
 text column may shrink and a path may break anywhere) and gated: `a11y.yml` has a new step that starts the
 `left-out` fixture in a deep data directory and runs layout and axe on the dashboard, Station and admin routes.
 On the fixed build those six runs exit 0 (150 page states graded by layout, 0 axe violations); on the build
-before the fix the same command reports the findings. The `not-detecting` fixture's gates were not read.
+before the fix the same command reports the findings. On the `not-detecting` fixture, on the fixed build, layout
+and axe on the same three routes and focus exit 0.
 Screenshots at 1280x900 and 390x844, light and dark, of Today, Station Health and Capture on the three
 fixtures. Looked at: Today on `left-out` at 1280 light and 390 dark, before and after the repair notice was
 reworded (it was bold from end to end); Capture at 1280 light and Station Health at 390 dark, full page, for
@@ -120,6 +121,14 @@ layout only. The session's own overflow measurement on those screenshots read 0 
 emulated phone widens its viewport to the page, so `scrollWidth - innerWidth` cannot see this. The layout gate
 could. Seen and left: on a phone the repair notice's text column is narrow beside its "Open Station health"
 button, as the clock notice's already was.
+
+**Mutation, `src/daemon`**: the pull request's gate failed on `1f91a9c` (run 45765250035; 56 survivors in the
+new repair, queue and start-up code). `b534cf3` adds a unit test for each or restructures the code so the
+mutant is observable, and fixes a defect the work found: a file where the `clip-queue` directory belongs made
+a stop search for a batch name for ever. Lane run, counts re-read by the session from each shard's
+`outcomes.json`: the workflow's command, shards 0 to 11 of 12, 154 mutants, 116 caught, 38 unviable, 0 missed.
+`Station::restart` now returns `RepairRestart`; the branch in which the station really restarts itself is not
+unit-tested (it would stop the test process).
 
 ## Not verified
 
