@@ -2313,7 +2313,9 @@ mod operational_metrics_tests {
                     primary: true,
                     model_path: "/m/a.onnx".into(),
                     labels_path: None,
-                    status: birdnet_core::inference::model_state::ClassifierStatus::Unrouted,
+                    status: birdnet_core::inference::model_state::ClassifierStatus::Unrouted {
+                        primary: "birdnet".to_owned(),
+                    },
                 },
             ]);
             r.inc_detection_dropped("quality");

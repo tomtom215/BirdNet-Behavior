@@ -477,7 +477,9 @@ impl ClassifierRegistry {
                     unrouted_sources: primary,
                 }
             } else {
-                ClassifierStatus::Unrouted
+                ClassifierStatus::Unrouted {
+                    primary: self.models[0].id.clone(),
+                }
             };
             ClassifierState {
                 id: m.id.clone(),
@@ -1130,7 +1132,12 @@ mod tests {
         let reg =
             ClassifierRegistry::load(&specs, &no_routes(), &ModelConfig::default()).expect("loads");
         assert_eq!(reg.route_for(None), vec![0], "no route: the primary alone");
-        assert_eq!(reg.states()[1].status, ClassifierStatus::Unrouted);
+        assert_eq!(
+            reg.states()[1].status,
+            ClassifierStatus::Unrouted {
+                primary: reg.states()[0].id.clone()
+            }
+        );
     }
 
     /// The single-model station — every station today — loads exactly as it

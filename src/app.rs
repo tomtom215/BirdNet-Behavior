@@ -1007,11 +1007,15 @@ fn start_detector(
                 .model
                 .clone()
                 .or_else(|| config?.get("MODEL_PATH").map(std::path::PathBuf::from)),
-            range_filter: cli.metadata_model.clone().or_else(|| {
-                config?
-                    .get("METADATA_MODEL_PATH")
-                    .map(std::path::PathBuf::from)
-            }),
+            range_filter: cli
+                .metadata_model
+                .clone()
+                .or_else(|| {
+                    config?
+                        .get("METADATA_MODEL_PATH")
+                        .map(std::path::PathBuf::from)
+                })
+                .filter(|m| !birdnet_core::inference::model_state::occurrence_filter_turned_off(m)),
             started: daemon_handle.is_some(),
             web_only: cli.web_only,
         });

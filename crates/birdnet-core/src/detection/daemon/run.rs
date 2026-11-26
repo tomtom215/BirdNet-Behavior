@@ -246,6 +246,20 @@ fn load_occurrence_filter(
             ),
         );
     };
+    if crate::inference::model_state::occurrence_filter_turned_off(mdata_path) {
+        tracing::info!(
+            setting = %mdata_path.display(),
+            "species occurrence filtering is turned off in the configuration \
+             (METADATA_MODEL_PATH); every species the classifiers know stays a candidate"
+        );
+        return (
+            passthrough(),
+            FilterState::off(
+                FilterOff::NotConfigured,
+                "it is turned off in the configuration (METADATA_MODEL_PATH)",
+            ),
+        );
+    }
     if let Err((reason, why)) =
         occurrence_files_present(mdata_path, config.metadata_labels_path.as_deref())
     {

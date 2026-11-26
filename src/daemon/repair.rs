@@ -819,7 +819,9 @@ mod tests {
             DetectorState::Failed {
                 why: "labels".into(),
             },
-            ClassifierStatus::Unrouted,
+            ClassifierStatus::Unrouted {
+                primary: "birdnet".to_owned(),
+            },
             FilterState::Active { candidates: None },
         );
         let mut repair = repair_of(&labels, Reader::Primary, &station);
@@ -850,7 +852,9 @@ mod tests {
         let station = Recorder::default();
         *station.models.lock().unwrap() = models(
             DetectorState::Running,
-            ClassifierStatus::Unrouted,
+            ClassifierStatus::Unrouted {
+                primary: "birdnet".to_owned(),
+            },
             FilterState::Active { candidates: None },
         );
         let mut repair = repair_of(&labels, Reader::Primary, &station);
@@ -878,7 +882,9 @@ mod tests {
         let station = Recorder::default();
         *station.models.lock().unwrap() = models(
             DetectorState::Running,
-            ClassifierStatus::Unrouted,
+            ClassifierStatus::Unrouted {
+                primary: "birdnet".to_owned(),
+            },
             FilterState::Active { candidates: None },
         );
         let mut repair = repair_of(&labels, Reader::Primary, &station);
@@ -888,7 +894,9 @@ mod tests {
         let station = Recorder::default();
         *station.models.lock().unwrap() = models(
             DetectorState::Running,
-            ClassifierStatus::Unrouted,
+            ClassifierStatus::Unrouted {
+                primary: "birdnet".to_owned(),
+            },
             FilterState::Active { candidates: None },
         );
         let mut repair = repair_of(&labels, Reader::Primary, &station);

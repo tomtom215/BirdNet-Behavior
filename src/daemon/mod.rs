@@ -768,6 +768,7 @@ fn publish_occurrence_source(
             settings
                 .metadata_model_path
                 .clone()
+                .filter(|m| !birdnet_core::inference::model_state::occurrence_filter_turned_off(m))
                 .map(|model| occurrence::RangeModelFiles {
                     model,
                     labels: settings.metadata_labels_path.clone(),
@@ -924,10 +925,15 @@ fn not_configured_why(cli: &Cli, config: Option<&birdnet_core::config::Config>) 
     .into_iter()
     .filter_map(|(present, what)| (!present).then_some(what))
     .collect();
+    let (list, verb) = match missing.as_slice() {
+        [one] => ((*one).to_owned(), "is"),
+        [rest @ .., last] => (format!("{} and {last}", rest.join(", ")), "are"),
+        // Not reached: this is asked only when one of them is missing.
+        [] => ("one of them".to_owned(), "is"),
+    };
     format!(
-        "no {} is configured. Install the classifier from the setup page (Settings → \
-         Capture) and restart from there, or set them in the configuration file",
-        missing.join(", ")
+        "{list} {verb} not configured. Install the classifier from the setup page (Settings → \
+         Capture) and restart from there, or set them in the configuration file"
     )
 }
 
@@ -1009,6 +1015,41 @@ pub fn mirror_liveness(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod not_configured_tests {
+    use super::not_configured_why;
+    use clap::Parser as _;
+
+    /// What a station with nothing configured is told reads as a sentence,
+    /// and names each missing setting; one with only the folder missing
+    /// names that alone.
+    #[test]
+    fn the_reason_names_what_is_missing_in_a_sentence() {
+        let bare = crate::cli::Cli::parse_from(["birdnet-behavior"]);
+        let why = not_configured_why(&bare, None);
+        assert!(!why.contains("no the"), "{why}");
+        assert!(
+            why.starts_with(
+                "the classifier (MODEL_PATH), its labels (LABELS_PATH) and the recordings \
+                 folder (RECS_DIR) are not configured."
+            ),
+            "{why}"
+        );
+        let some = crate::cli::Cli::parse_from([
+            "birdnet-behavior",
+            "--model",
+            "/m/a.onnx",
+            "--labels",
+            "/m/a.txt",
+        ]);
+        let why = not_configured_why(&some, None);
+        assert!(
+            why.starts_with("the recordings folder (RECS_DIR) is not configured."),
+            "{why}"
+        );
+    }
 }
 
 #[cfg(test)]

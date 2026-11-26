@@ -201,7 +201,11 @@ pub enum ClassifierStatus {
     /// nothing. Not refused — an operator may load one before routing a
     /// source to it — but never to be mistaken for one that has heard
     /// nothing yet.
-    Unrouted,
+    Unrouted {
+        /// The primary classifier's id, which the route that would reach
+        /// this one starts with.
+        primary: String,
+    },
     /// Not running.
     LeftOut {
         /// Why, as a kind.
@@ -276,7 +280,7 @@ impl ClassifierStatus {
     pub const fn code(&self) -> &'static str {
         match self {
             Self::Judging { .. } => "judging",
-            Self::Unrouted => "unrouted",
+            Self::Unrouted { .. } => "unrouted",
             Self::LeftOut { fault, .. } => match fault {
                 ClassifierFault::FileMissing => "left_out_file_missing",
                 ClassifierFault::WillNotLoad => "left_out_will_not_load",
@@ -321,10 +325,10 @@ impl ClassifierState {
                     format!("classifier `{}` is judging {}", self.id, sources.join(", "))
                 }
             },
-            ClassifierStatus::Unrouted => format!(
+            ClassifierStatus::Unrouted { primary } => format!(
                 "classifier `{id}` is loaded and judging nothing: no MODEL_ROUTES entry names \
                  it, and a source without a route gets the primary alone. Add it to a route \
-                 (`{LOCAL_SOURCE}:<primary>+{id}` for a microphone set in the configuration \
+                 (`{LOCAL_SOURCE}:{primary}+{id}` for a microphone set in the configuration \
                  file), or remove it to free its memory",
                 id = self.id
             ),
@@ -595,6 +599,20 @@ impl ModelFile {
     }
 }
 
+/// Whether an occurrence model setting turns the filter off on purpose.
+///
+/// The setting is `METADATA_MODEL_PATH`, `BIRDNET_METADATA_MODEL` or
+/// `--metadata-model`, and off is `off` or `none`, in any case. An owner who runs unfiltered says so
+/// with it, and the filter is then not configured, not a file to look for.
+/// THE predicate for that, for the daemon and the station's defaults alike.
+#[must_use]
+pub fn occurrence_filter_turned_off(setting: &std::path::Path) -> bool {
+    setting.to_str().is_some_and(|s| {
+        let s = s.trim();
+        s.eq_ignore_ascii_case("off") || s.eq_ignore_ascii_case("none")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,7 +652,9 @@ mod tests {
                 sources: Vec::new(),
                 unrouted_sources: true,
             },
-            ClassifierStatus::Unrouted,
+            ClassifierStatus::Unrouted {
+                primary: String::new(),
+            },
         ];
         classifier.extend(faults.iter().map(|f| ClassifierStatus::left_out(*f, "")));
         assert_eq!(
@@ -769,10 +789,17 @@ mod tests {
             primary: false,
             model_path: PathBuf::from("/m/perch.onnx"),
             labels_path: Some(PathBuf::from("/m/perch.csv")),
-            status: ClassifierStatus::Unrouted,
+            status: ClassifierStatus::Unrouted {
+                primary: "birdnet".to_owned(),
+            },
         };
         assert!(
-            state.message().contains("local:<primary>+perch"),
+            state.message().contains("`local:birdnet+perch`"),
+            "{}",
+            state.message()
+        );
+        assert!(
+            !state.message().contains("<primary>"),
             "{}",
             state.message()
         );
@@ -833,5 +860,23 @@ mod tests {
             "{}",
             file.message()
         );
+    }
+
+    /// `off` and `none`, in any case and with spaces around, turn the filter
+    /// off; a path, even one ending in either word, does not.
+    #[test]
+    fn off_and_none_turn_the_filter_off_and_a_path_does_not() {
+        use std::path::Path;
+        for off in ["off", "OFF", " none ", "None"] {
+            assert!(occurrence_filter_turned_off(Path::new(off)), "{off}");
+        }
+        for path in [
+            "/m/off",
+            "off.onnx",
+            "/data/model/birdnet-v24-range-v2.onnx",
+            "",
+        ] {
+            assert!(!occurrence_filter_turned_off(Path::new(path)), "{path}");
+        }
     }
 }

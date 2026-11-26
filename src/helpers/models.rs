@@ -198,6 +198,20 @@ pub fn configured_extra_files(config: Option<&Config>) -> Vec<(PathBuf, Option<P
         .collect()
 }
 
+/// The command that installs the model file at `path`: the catalogue id
+/// when the file has the name `--install-model` gives one of its models,
+/// else how to list them.
+fn install_hint(path: &std::path::Path) -> String {
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    birdnet_integrations::model_catalog::CATALOG
+        .iter()
+        .find(|e| birdnet_integrations::model_catalog::part_at(e, dir, path).is_some())
+        .map_or_else(
+            || "`birdnet-behavior --install-model list` names what can be installed".to_owned(),
+            |e| format!("`birdnet-behavior --install-model {}`", e.id),
+        )
+}
+
 /// One classifier setting as [`plan`] reads it: `BIRDNET_<key>` from the
 /// environment, else `<key>` from the configuration file, trimmed, and absent
 /// when empty.
@@ -303,26 +317,29 @@ pub fn plan_with(
             continue;
         };
         let Some(size) = model_size_mib(&path) else {
-            let fault = if path.exists() {
-                ClassifierFault::WillNotLoad
+            if path.exists() {
+                leave_out(
+                    ClassifierFault::WillNotLoad,
+                    format!(
+                        "its model file {} cannot be read; install it again ({}) or correct \
+                         {}. A model whose size is unknown is treated as unaffordable rather \
+                         than free",
+                        path.display(),
+                        install_hint(&path),
+                        keys.path_key
+                    ),
+                );
             } else {
-                ClassifierFault::FileMissing
-            };
-            leave_out(
-                fault,
-                format!(
-                    "its model file {} cannot be read{}; install it (`birdnet-behavior \
-                     --install-model <id>`) or correct {}. A model whose size is unknown is \
-                     treated as unaffordable rather than free",
-                    path.display(),
-                    if path.exists() {
-                        ""
-                    } else {
-                        " (it is not there)"
-                    },
-                    keys.path_key
-                ),
-            );
+                leave_out(
+                    ClassifierFault::FileMissing,
+                    format!(
+                        "its model file {} is not there; install it ({}) or correct {}",
+                        path.display(),
+                        install_hint(&path),
+                        keys.path_key
+                    ),
+                );
+            }
             continue;
         };
         let want = size + PER_MODEL_WORKING_SET_MIB;
@@ -1184,12 +1201,38 @@ mod tests {
         );
         assert_eq!(p.specs.len(), 1);
         assert_eq!(left_out_code(&p), "left_out_file_missing");
+        // A file that is not there is told so, with what installs it, not
+        // the sentence about an unknown size.
+        let message = p.left_out[0].message();
         assert!(
-            said(&p)
-                .iter()
-                .any(|n| n.contains("unaffordable rather than free")),
-            "{:?}",
-            said(&p)
+            message.contains("/nonexistent/perch.onnx is not there"),
+            "{message}"
+        );
+        assert!(message.contains("--install-model"), "{message}");
+        assert!(!message.contains("unaffordable"), "{message}");
+    }
+
+    /// A missing file under a catalogue model's installed name is told the
+    /// id that installs it.
+    #[test]
+    fn a_missing_catalogue_model_is_told_the_id_that_installs_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let primary = model_of(dir.path(), "p.onnx", 1);
+        let perch = dir.path().join("perch-v2.onnx");
+        let s = settings(&[
+            ("MODEL_2_PATH", perch.display().to_string()),
+            ("MODEL_2_LABELS", "s.txt".to_owned()),
+        ]);
+        let p = plan_with(
+            &|k| s.get(k).cloned(),
+            primary,
+            PathBuf::from("p.txt"),
+            Some(8192),
+        );
+        let message = p.left_out[0].message();
+        assert!(
+            message.contains("`birdnet-behavior --install-model perch-v2`"),
+            "{message}"
         );
     }
 
