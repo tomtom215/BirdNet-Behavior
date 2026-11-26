@@ -456,7 +456,9 @@ impl Staging {
     /// Make the verified staging file the installed one.
     fn finish(self, dest: &Path) -> Result<(), InstallError> {
         self.file.sync_all()?;
-        fs::rename(&self.path, dest)?;
+        // Renamed and the directory synced, so "installed" survives a power
+        // cut (F21).
+        birdnet_core::atomic_file::commit(&self.path, dest)?;
         Ok(())
     }
 }
