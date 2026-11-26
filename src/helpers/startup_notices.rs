@@ -76,14 +76,17 @@ pub fn keep_overridden_by_watch_dir(
 /// Probed 2026-11-25 (N25-11) with one locked and one unlocked clip: with the two
 /// directories equal, both were deleted once an hour old with the disk not full,
 /// and the locked one was deleted on a full disk; with separate directories the
-/// locked clip survived both. Neither installer sets the directories equal.
+/// locked clip survived both. Neither installer sets the directories equal. Since
+/// then the stream manager protects the clips the database keeps back when its
+/// directory is the recordings directory (`system::stream_protected`); every
+/// other clip is still drained, which is what this says.
 #[must_use]
 pub fn clips_drained_by_watch_dir(watch_dir_is_recordings_dir: bool) -> Option<String> {
     watch_dir_is_recordings_dir.then(|| {
-        "EVERY SAVED CLIP WILL BE DELETED: --watch-dir is the recordings directory, and a watch \
+        "SAVED CLIPS WILL BE DELETED: --watch-dir is the recordings directory, and a watch \
          directory is emptied of anything older than STREAM_RETENTION_SECS (10 minutes unless \
-         set), locked, reviewed or not. Point --watch-dir at a different directory (a RAM disk \
-         is usual) to keep clips"
+         set). Only locked clips, and reviewed ones unless --retain-reviewed-audio is off, are kept. \
+         Point --watch-dir at a different directory (a RAM disk is usual) to keep clips"
             .to_owned()
     })
 }
