@@ -57,7 +57,63 @@ not repeat it; "session run" means this session ran it on the integrated tree.
 
 ## Verification
 
-VERIFICATION_PLACEHOLDER
+All of this is the session's own run on the integrated tree unless it says "lane run".
+
+**Static gates** (`scripts/preflight.sh --msrv` on `296175c`, then the three that failed rerun after their fix):
+fmt, typos 1.52.0, cargo-machete, installer drift, cargo-deny, cargo-audit, OSV, rustdoc with `-D warnings`, both
+builds, CLI help, the manual's link check, licence notices and doc tests passed on the first run. Clippy at the
+default and all-features sets failed on one doc comment of the integration's own (`too_long_first_doc_paragraph`),
+and MSRV failed because the 1.99 toolchain was not installed. After the fix and the install: clippy at all three
+feature sets, rustdoc and `cargo check` on 1.99 exit 0. The last commit changes sentence punctuation in one file
+and the fixture; on it fmt, typos, the module's tests and clippy for `birdnet-web` at all features were rerun.
+
+**Unit tests**: `cargo test --workspace --all-features --lib --bins --no-fail-fast` on `296175c` plus the doc
+comment fix: exit 0, 12 `test result:` lines, 5,329 passed, 0 failed, 1 ignored.
+
+**Integration tests**: `cargo test --workspace --all-features --tests` did not fit the disk (42 GB of test
+binaries; "linking with `cc` failed" at 8 MB free). They were restarted a package at a time, 16 test files a
+batch, and had not finished when this file was written; the pull request's description has the result, and its
+CI run is the complete one. Lane runs on the lanes' own branches, before integration: `birdnet-web` 2,395 passed
+(pages lane) and 2,375 passed (repair lane), root crate 1,687 passed, `birdnet-integrations` 590 passed,
+`birdnet-core` 1,196 passed and 1 failed on a test variable the lane had pointed at the wrong labels file.
+
+**Real models, the built binary** (`/home/user/lanes/model-e2e/`, not in the repository; V2.4, its range
+filter, V3.0, the geomodel and Perch, with `tests/testdata/Pica_pica_30s.wav`):
+
+| Situation | Result |
+|---|---|
+| V2.4 with its range filter, London | 3 *Pica pica*; detector running, filter active; strict 200 |
+| V3.0 with the geomodel, Kansas | 0 detections; filter active |
+| V3.0, geomodel labels missing | 4 detections; `off_labels_missing` |
+| V3.0, geomodel, no coordinates | 4 detections; `off_no_coordinates` |
+| V2.4 with a truncated Perch | 3 detections from `birdnet`; perch `left_out_will_not_load`; strict 200 |
+| V2.4 with Perch routed (`MODEL_ROUTES=local:birdnet+perch`) | 6 detections recorded under `perch`; both judging |
+| V2.4 with Perch's labels | detector `failed`, `left_out_labels_wrong_length`; strict 503 |
+| birdnet-go's V2.4 labels at install | kept (sha256 `487937b6…`); a same-size stranger replaced (`3773334c…`) |
+| Geomodel under its old names, no network | adopted: same inode, pinned sha256 |
+| Range filter truncated, a loopback mirror, 5 s interval | `off_model_unusable` and a `fetching` condition, then filter active and all three files `verified`; the file's sha256 is the good one; then 3 *Pica pica* |
+| `METADATA_MODEL_PATH=off`, the filter's file beside the classifier | `off_not_configured`, 3 detections, no condition |
+| No `METADATA_MODEL_PATH`, the filter's file beside the classifier | adopted: filter active, 3 detections |
+
+Every station stopped in 0 or 1 s. One consequence of the adoption rule showed here: a V2.4 station with the
+range filter beside it and no coordinates now reads `off_no_coordinates`, where phase 1 read
+`off_not_configured`.
+
+**Real install under systemd** (lane run, not repeated): `installer/test/model-e2e.sh` in a private systemd
+with real downloads printed "model-e2e PASSED".
+
+**Browser**: the fixture built as `a11y.yml` builds it, on a new fixture directory. All 17 gates of that workflow
+exit 0 on the default fixture (axe at both viewports, interactions, legibility, the two self-tests, layout,
+tokens, chart-ramps, surface-layers, token-doc, motion, focus, figures, dom-sinks, base-path on its own fixture,
+qa with `STRICT=1`, species-colours). On the `left-out` fixture, which now also carries a file under repair, axe
+exits 0; layout, focus and qa on it and on `not-detecting` had not finished when this file was written (the pages
+lane ran all four on both, before the repair condition existed). Screenshots at 1280x900 and 390x844, light and
+dark, of Today, Station Health and Capture on the three fixtures: 36 page states, none wider than its viewport
+(`scrollWidth - innerWidth` is 0 for each). Looked at: Today on `left-out` at 1280 light and 390 dark, before and
+after the notice was reworded; Capture at 1280 light and Station Health at 390 dark, full page, for layout only
+(too small to read the words). Seen and left: on a phone the repair notice's text column is narrow beside its
+"Open Station health" button, as the clock notice's already was; Station Health's banner prints full paths where
+Today prints file names.
 
 ## Not verified
 
@@ -66,7 +122,7 @@ VERIFICATION_PLACEHOLDER
 - The repair against a slow or unreachable internet. The "down" origin in the tests is a closed local port.
 - The loss of queued detections on the old code. Only the stop time was reproduced (29 s against the unit's 30).
 - `model-e2e.yml` and the `perch-v2` publish job as GitHub runs them, before this pull request's own run.
-- The lanes' browser screenshots other than those listed above.
+- The integration tests on the integrated tree, complete, on this machine: see above.
 
 ## Open, from this batch
 

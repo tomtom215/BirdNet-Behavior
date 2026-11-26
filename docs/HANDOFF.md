@@ -21,7 +21,11 @@ json.load(open('docs/audit-2026-11/checklist.json'))['items']))"`).
 
 *The fourth batch* made the station's models hold to one promise: it identifies birds with the models its
 configuration names, keeps identifying with the rest when one cannot be used, says so on every health surface, and
-fetches a missing or damaged file again itself. HANDOFF_VERIFIED_PLACEHOLDER
+fetches a missing or damaged file again itself. What the session ran on the integrated tree, and
+what it did not, is in the status file's "Verification" and "Not verified" sections: the static gates, the unit
+tests (5,329 passed), twelve situations on the built binary with the real model files, and the browser gates on
+the default fixture were run; Docker, macOS, a Raspberry Pi and the complete integration suite on this machine
+were not.
 
 *How the batches are run, and what to keep.* One promise at a time, in this order of method: write down what the
 station promises its owner; break each promise on a real install (the built binary, real model files, a real
