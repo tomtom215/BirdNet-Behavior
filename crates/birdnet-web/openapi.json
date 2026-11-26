@@ -7238,7 +7238,7 @@
           "export"
         ],
         "summary": "Export one species' detection history",
-        "description": "One row per hour or day of the range (`Date`, `Hour`, `Seconds_Analysed`, `Detections`, `Detected`), as CSV. `Detected` is `1` when the species was detected, `0` when the station listened and did not detect it, and `NA` when no single source analysed at least `min_seconds` of the occasion: an occasion without effort is not an absence. Reads the reviewed set. Hours before the hourly ledger existed are `NA`; days read the daily ledger, which counted capture uptime before migration 63. The range is at most 366 days.",
+        "description": "One row per hour or day of the range (`Date`, `Hour`, `Seconds_Analysed`, `Detections`, `Detected`), as CSV. `Detected` is `1` when a source that analysed at least `min_seconds` of the occasion detected the species, `0` when one listened and none of those detected it, and `NA` when no single source analysed at least `min_seconds` of the occasion: an occasion without effort is not an absence. `Detections` counts every detection, including one on a source that did not survey the occasion; a detection with no recorded source counts as one on a surveyed source. Reads the reviewed set. Hours before the hourly ledger existed are `NA`; days read the daily ledger, which counted capture uptime before migration 63. The range is at most 366 days.",
         "operationId": "exportDetectionHistory",
         "parameters": [
           {
@@ -7290,6 +7290,15 @@
             "description": "Audio analysed below which an occasion is `NA`; default half the occasion (1800 for an hour, 43200 for a day).",
             "schema": {
               "type": "number"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "One source's history, its effort and its detections only, as the `Source` the detections and the effort ledger name it. Absent: the station, where an occasion is `1` only when a source that itself listened for `min_seconds` detected the species.",
+            "schema": {
+              "type": "string"
             }
           }
         ],

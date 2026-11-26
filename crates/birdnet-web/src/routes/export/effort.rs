@@ -9,7 +9,9 @@
 //! station listened and did not detect it, and `NA` when it did not listen for at
 //! least `min_seconds` of the occasion (default: half of it, 1800 s an hour or
 //! 43 200 s a day). A day without effort is not a day without birds, and an export
-//! that wrote it as `0` would tell a model so.
+//! that wrote it as `0` would tell a model so. Each source is its own site: an
+//! occasion is `1` only when a source that itself listened for `min_seconds`
+//! detected the species (review F14), and `&source=` gives one source's history.
 
 use axum::extract::{Query, State};
 use axum::http::{StatusCode, header};
@@ -40,6 +42,9 @@ pub(super) struct HistoryQuery {
     grain: Option<String>,
     /// Audio analysed below which an occasion is `NA`.
     min_seconds: Option<f64>,
+    /// One source's history (each source is its own site); absent for the
+    /// station.
+    source: Option<String>,
 }
 
 fn bad_request(message: &str) -> Response {
@@ -151,6 +156,7 @@ pub(super) async fn export_history(
                     &q.to,
                     hourly,
                     min_seconds,
+                    q.source.as_deref().map(str::trim).filter(|s| !s.is_empty()),
                 )
             })
         })

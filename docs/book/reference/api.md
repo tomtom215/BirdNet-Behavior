@@ -441,9 +441,13 @@ of audio the detection pipeline analysed and the seconds the source's capture wa
 the upgrade that added this ledger on. `GET /api/v2/detections/export/history?sci_name=&from=&to=&grain=hour|day&min_seconds=`
 is one species' detection history, as `detection-history.csv`, one row per hour or
 day (`Date`, `Hour`, `Seconds_Analysed`, `Detections`, `Detected`). `Detected` is `1`
-when the species was detected, `0` when the station listened and did not detect it,
-and `NA` when no single source analysed at least `min_seconds` of the occasion (by
-default half of it). An hour or a day without effort is `NA`, not `0`. Hours before
+when a source that analysed at least `min_seconds` of the occasion (by default half
+of it) detected the species, `0` when one did and none of those detected it, and
+`NA` when no single source analysed that much. Each source is its own site: a
+detection by a microphone that listened ten seconds does not make a day another
+microphone surveyed a `1`, though `Detections` still counts it. A detection with no
+recorded source (imported history) counts as one on a surveyed source. Add
+`&source=` for one source's history. An hour or a day without effort is `NA`, not `0`. Hours before
 the hourly ledger existed are `NA`. Days read the daily ledger, which counted capture
 uptime until that upgrade. Both take a range of at most 366 days, and read the reviewed set.
 

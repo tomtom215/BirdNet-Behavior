@@ -137,6 +137,18 @@ pub struct Occasion {
 /// is all not-surveyed; a daily one reads `recording_effort`, which held capture
 /// uptime before migration 63. Ranges are capped at 366 days by the caller.
 ///
+/// Each source is its own site (decision 2 of 2026-11-25), so a surveyed
+/// occasion is detected only when a source that itself surveyed it detected
+/// the species (review F14): one source listening all day and hearing nothing,
+/// and another listening ten seconds and hearing it, is a day surveyed and not
+/// detected, not a detection on the first source's effort. `detections` still
+/// counts every detection. A row with no recorded source (imported history,
+/// rows from before sources were recorded) cannot be placed on a source and is
+/// read as before: a detection on a surveyed occasion.
+///
+/// `source` scopes the history to one source's effort and detections; `None`
+/// is the station.
+///
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
@@ -147,6 +159,7 @@ pub fn detection_history(
     to: &str,
     hourly: bool,
     min_seconds: f64,
+    source: Option<&str>,
 ) -> Result<Vec<Occasion>, DbError> {
     let sql = if hourly {
         "WITH RECURSIVE days(d) AS (
@@ -155,33 +168,52 @@ pub fn detection_history(
          hours(h) AS (SELECT 0 UNION ALL SELECT h + 1 FROM hours WHERE h < 23)
          SELECT d, h,
                 COALESCE((SELECT MAX(seconds_analysed) FROM recording_effort_hourly e
-                           WHERE e.date = d AND e.hour = h), 0),
+                           WHERE e.date = d AND e.hour = h
+                             AND (?5 IS NULL OR e.source = ?5)), 0),
                 (SELECT COUNT(*) FROM detections_analytic x
                   WHERE x.Date = d AND CAST(substr(x.Time, 1, 2) AS INTEGER) = h
-                    AND x.Sci_Name = ?1)
+                    AND x.Sci_Name = ?1 AND (?5 IS NULL OR x.Source = ?5)),
+                (SELECT COUNT(*) FROM detections_analytic x
+                  WHERE x.Date = d AND CAST(substr(x.Time, 1, 2) AS INTEGER) = h
+                    AND x.Sci_Name = ?1 AND (?5 IS NULL OR x.Source = ?5)
+                    AND (x.Source IS NULL OR EXISTS (
+                         SELECT 1 FROM recording_effort_hourly e
+                          WHERE e.date = d AND e.hour = h AND e.source = x.Source
+                            AND e.seconds_analysed >= ?4)))
            FROM days, hours ORDER BY d, h"
     } else {
         "WITH RECURSIVE days(d) AS (
              SELECT date(?2) UNION ALL SELECT date(d, '+1 day') FROM days WHERE d < date(?3)
          )
          SELECT d, NULL,
-                COALESCE((SELECT MAX(seconds) FROM recording_effort e WHERE e.date = d), 0),
-                (SELECT COUNT(*) FROM detections_analytic x WHERE x.Date = d AND x.Sci_Name = ?1)
+                COALESCE((SELECT MAX(seconds) FROM recording_effort e
+                           WHERE e.date = d AND (?5 IS NULL OR e.source = ?5)), 0),
+                (SELECT COUNT(*) FROM detections_analytic x
+                  WHERE x.Date = d AND x.Sci_Name = ?1 AND (?5 IS NULL OR x.Source = ?5)),
+                (SELECT COUNT(*) FROM detections_analytic x
+                  WHERE x.Date = d AND x.Sci_Name = ?1 AND (?5 IS NULL OR x.Source = ?5)
+                    AND (x.Source IS NULL OR EXISTS (
+                         SELECT 1 FROM recording_effort e
+                          WHERE e.date = d AND e.source = x.Source AND e.seconds >= ?4)))
            FROM days ORDER BY d"
     };
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt
-        .query_map(rusqlite::params![sci_name, from, to], |r| {
-            let seconds_analysed: f64 = r.get(2)?;
-            let detections: i64 = r.get(3)?;
-            Ok(Occasion {
-                date: r.get(0)?,
-                hour: r.get(1)?,
-                seconds_analysed,
-                detections,
-                detected: (seconds_analysed >= min_seconds).then_some(detections > 0),
-            })
-        })?
+        .query_map(
+            rusqlite::params![sci_name, from, to, min_seconds, source],
+            |r| {
+                let seconds_analysed: f64 = r.get(2)?;
+                let detections: i64 = r.get(3)?;
+                let on_surveyed: i64 = r.get(4)?;
+                Ok(Occasion {
+                    date: r.get(0)?,
+                    hour: r.get(1)?,
+                    seconds_analysed,
+                    detections,
+                    detected: (seconds_analysed >= min_seconds).then_some(on_surveyed > 0),
+                })
+            },
+        )?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -277,6 +309,7 @@ mod tests {
             "2026-05-01",
             true,
             1800.0,
+            None,
         )
         .expect("query");
         assert_eq!(h.len(), 24);
@@ -291,6 +324,84 @@ mod tests {
         assert_eq!(at(6), None, "the source was down");
         assert_eq!(at(7), Some(false), "listened, nothing heard");
         assert_eq!(at(3), None, "no ledger row at all");
+    }
+
+    /// Review F14. Each source is its own site (decision 2): source A listened
+    /// all day and heard nothing, source B listened ten seconds and heard the
+    /// species. The day is surveyed (by A) and the species was not detected by
+    /// any source that surveyed it, so it is 0, not a 1 made of A's effort and
+    /// B's detection. The detection still counts in `detections`.
+    #[test]
+    fn a_detection_on_a_source_that_did_not_survey_the_day_is_not_a_surveyed_one() {
+        let conn = conn();
+        for (source, seconds) in [("mic-a", 86_400.0), ("mic-b", 10.0)] {
+            conn.execute(
+                "INSERT INTO recording_effort (date, source, seconds) VALUES ('2026-05-01', ?1, ?2)",
+                rusqlite::params![source, seconds],
+            )
+            .expect("seed");
+        }
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, Source)
+             VALUES ('2026-05-01', '04:10:00', 'Turdus merula', 'Eurasian Blackbird', 0.9, 'b.wav', 'mic-b')",
+            [],
+        )
+        .expect("seed");
+        let h = detection_history(
+            &conn,
+            "Turdus merula",
+            "2026-05-01",
+            "2026-05-01",
+            false,
+            43_200.0,
+            None,
+        )
+        .expect("query");
+        assert_eq!(h[0].detections, 1, "the detection is still counted");
+        assert_eq!(
+            h[0].detected,
+            Some(false),
+            "a 10 s source's detection made a surveyed positive of another source's day"
+        );
+        let of = |source| {
+            detection_history(
+                &conn,
+                "Turdus merula",
+                "2026-05-01",
+                "2026-05-01",
+                false,
+                43_200.0,
+                Some(source),
+            )
+            .expect("query")
+            .remove(0)
+        };
+        let a = of("mic-a");
+        assert_eq!((a.detections, a.detected), (0, Some(false)), "{a:?}");
+        let b = of("mic-b");
+        assert_eq!(
+            (b.detections, b.detected),
+            (1, None),
+            "B did not survey it: {b:?}"
+        );
+        // Counterpart: a row with no recorded source reads as it always did.
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-05-01', '05:00:00', 'Turdus merula', 'Eurasian Blackbird', 0.9, 'old.wav')",
+            [],
+        )
+        .expect("seed");
+        let h = detection_history(
+            &conn,
+            "Turdus merula",
+            "2026-05-01",
+            "2026-05-01",
+            false,
+            43_200.0,
+            None,
+        )
+        .expect("query");
+        assert_eq!((h[0].detections, h[0].detected), (2, Some(true)), "{h:?}");
     }
 
     #[test]
