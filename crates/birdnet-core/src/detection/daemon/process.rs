@@ -399,6 +399,43 @@ fn attach_answers(
     }
 }
 
+/// Every window's prediction, by `infer`, and how many failed (review F18).
+///
+/// A window no routed classifier answered is kept as an empty prediction, so
+/// the windows around it keep theirs, and counted; when the station can hear
+/// people (`can_hear_people`) it is marked unassessed for speech, so a privacy
+/// filter masks it. Only when every window failed is the file an error, as a
+/// file the pipeline could not analyse at all.
+fn infer_windows<F>(
+    chunks: &[crate::detection::pipeline::PreparedChunk],
+    can_hear_people: bool,
+    mut infer: F,
+) -> Result<(Vec<ChunkPrediction>, u64), DaemonError>
+where
+    F: FnMut(&crate::detection::pipeline::PreparedChunk) -> Result<ChunkPrediction, DaemonError>,
+{
+    let mut out = Vec::with_capacity(chunks.len());
+    let mut failed = 0_u64;
+    let mut first_error = None;
+    for chunk in chunks {
+        match infer(chunk) {
+            Ok(prediction) => out.push(prediction),
+            Err(e) => {
+                failed += 1;
+                first_error.get_or_insert(e);
+                out.push(ChunkPrediction {
+                    privacy_unassessed: can_hear_people,
+                    ..ChunkPrediction::default()
+                });
+            }
+        }
+    }
+    match first_error {
+        Some(e) if failed == chunks.len() as u64 => Err(e),
+        _ => Ok((out, failed)),
+    }
+}
+
 /// Process a single audio file with privacy and species occurrence filters.
 ///
 /// After running inference, applies the whole-chunk filters (suppressing
@@ -445,9 +482,15 @@ pub fn process_and_infer_filtered(
     // Run inference on all chunks first to collect raw predictions
     let mut all_predictions: Vec<ChunkPrediction> = Vec::with_capacity(chunks.len());
 
-    for chunk in &chunks {
-        all_predictions.push(infer_chunk(registry, route, chunk, week)?);
-    }
+    let can_hear_people = route.iter().any(|&idx| {
+        registry
+            .model(idx)
+            .is_some_and(|m| m.model.has_human_labels())
+    });
+    let (predictions, failed_windows) = infer_windows(&chunks, can_hear_people, |chunk| {
+        infer_chunk(registry, route, chunk, week)
+    })?;
+    all_predictions.extend(predictions);
 
     // Apply the whole-chunk filters: human speech, then non-bird noise, then
     // corroboration — which needs to know where each chunk sits in the
@@ -455,6 +498,17 @@ pub fn process_and_infer_filtered(
     let starts: Vec<f32> = chunks.iter().map(|c| c.start_secs).collect();
     let (filtered_predictions, mut tally) = chunk_filters.apply_tallied(&starts, &all_predictions);
     tally.date = chunks.first().map_or_default(|c| c.recording.date.clone());
+    tally.failed_windows = failed_windows;
+    if failed_windows > 0 {
+        tracing::warn!(
+            correlation_id,
+            file = %path.display(),
+            failed_windows,
+            windows = chunks.len(),
+            "no classifier answered some of this file's windows; the rest are kept, and the \
+             failed windows are not counted as listening"
+        );
+    }
 
     // Build the allowed species set from the species filter.
     //
@@ -1328,6 +1382,77 @@ mod tests {
             PrivacyFilter::new(0.03).masked_windows(&[out]),
             [false],
             "a failure that cost no privacy coverage masked the window"
+        );
+    }
+
+    /// Review F18: a window no classifier answered costs that window, not the
+    /// file. The two before it and the one after are kept, the failed one is
+    /// counted and, on a station that can hear people, unassessed for speech;
+    /// a file whose every window failed is still an error.
+    #[test]
+    fn windows_answered_around_a_failed_one_are_kept() {
+        use crate::detection::types::Detection;
+        let chunks: Vec<PreparedChunk> = (0..4).map(|_| chunk_of(10)).collect();
+        let answered = |i: usize| ChunkPrediction {
+            detections: vec![Detection {
+                date: "2026-05-19".into(),
+                time: "09:00:00".into(),
+                scientific_name: format!("Species{i}"),
+                common_name: format!("Bird {i}"),
+                confidence: 0.9,
+                start: 0.0,
+                stop: 3.0,
+                week: 20,
+                file_name_extr: None,
+                model_id: None,
+                agreeing_models: None,
+                model_scores: Vec::new(),
+            }],
+            ..ChunkPrediction::default()
+        };
+        let mut n = 0;
+        let (out, failed) = infer_windows(&chunks, true, |_| {
+            n += 1;
+            if n == 3 {
+                Err(DaemonError::Inference(
+                    crate::inference::model::InferenceError::Shape("refused".into()),
+                ))
+            } else {
+                Ok(answered(n))
+            }
+        })
+        .expect("three windows answered");
+        assert_eq!(failed, 1);
+        assert_eq!(out.len(), 4);
+        let names: Vec<&str> = out
+            .iter()
+            .flat_map(|p| p.detections.iter().map(|d| d.scientific_name.as_str()))
+            .collect();
+        assert_eq!(names, ["Species1", "Species2", "Species4"]);
+        assert!(out[2].privacy_unassessed && !out[0].privacy_unassessed);
+        let (deaf, _) = infer_windows(&chunks[..2], false, |_| {
+            Err(DaemonError::Inference(
+                crate::inference::model::InferenceError::Shape("refused".into()),
+            ))
+        })
+        .map_or((None, ()), |r| (Some(r), ()));
+        assert!(deaf.is_none(), "every window failed: the file is an error");
+        let mut m = 0;
+        let (out, failed) = infer_windows(&chunks[..2], false, |_| {
+            m += 1;
+            if m == 1 {
+                Ok(answered(1))
+            } else {
+                Err(DaemonError::Inference(
+                    crate::inference::model::InferenceError::Shape("refused".into()),
+                ))
+            }
+        })
+        .unwrap();
+        assert_eq!(failed, 1);
+        assert!(
+            !out[1].privacy_unassessed,
+            "nothing could hear people to miss"
         );
     }
 

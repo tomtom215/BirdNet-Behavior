@@ -140,9 +140,6 @@ fn throughput_observer(
                     // still claimed here, and this is the data rate.
                     if let Some(secs) = birdnet_core::audio::decode::probe_duration_secs(path) {
                         metrics.add_audio_analysed(&source, secs);
-                        // And the effort ledger's numerator's denominator:
-                        // only audio analysed is listening (RES-01).
-                        crate::integrations::effort::note_analysed(&state, path, secs);
                     }
                 }
             })
@@ -182,8 +179,34 @@ fn throughput_observer(
             // counters, and the day's tally per source in `filter_discards`.
             .with_filtered({
                 let state = state.clone();
-                move |path, tally| record_discards(&state, path, tally)
+                move |path, tally| {
+                    // The effort ledger's denominator: only audio analysed is
+                    // listening (RES-01), and a window no classifier answered
+                    // was not analysed (review F18).
+                    if let Some(secs) = birdnet_core::audio::decode::probe_duration_secs(path) {
+                        crate::integrations::effort::note_analysed(
+                            &state,
+                            path,
+                            secs * answered_share(tally),
+                        );
+                    }
+                    record_discards(&state, path, tally);
+                }
             })
+}
+
+/// The share of a file's windows some classifier answered: `1.0` for a file
+/// with none failed or no windows counted, which is every file the daemon
+/// analysed before failed windows were kept (review F18).
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "window counts are far below 2^52"
+)]
+fn answered_share(tally: &birdnet_core::detection::FilterTally) -> f64 {
+    if tally.windows == 0 || tally.failed_windows == 0 {
+        return 1.0;
+    }
+    tally.windows.saturating_sub(tally.failed_windows) as f64 / tally.windows as f64
 }
 
 /// The segments whose speech the human-sound rule masked (RES-28): marked
@@ -1295,6 +1318,73 @@ mod tests {
     /// Twenty 15 s segments, half shed under a thermal limit, in one five-minute
     /// tick with the source up the whole time: 150 s of effort, not 300.
     #[test]
+    fn a_file_whose_windows_partly_failed_is_credited_the_share_answered() {
+        // Review F18: a file of five windows, two of which no classifier
+        // answered, is 9 s of listening of its 15, not 15.
+        use birdnet_db::audio_sources::{AudioSourceStore as _, NewAudioSource, SourceKind};
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        // The ledger credits a source the station has.
+        state
+            .with_db(|c| {
+                c.insert(&NewAudioSource::defaults(
+                    "src_a",
+                    SourceKind::UsbAlsa,
+                    "hw:1,0",
+                ))
+            })
+            .unwrap();
+        let observer = super::throughput_observer(&state);
+        let path = tmp.path().join("2026-05-19-birdnet-src_a-09:00:00.wav");
+        write_segment(&path);
+        observer.analysed(&path);
+        observer.filtered(
+            &path,
+            &birdnet_core::detection::FilterTally {
+                windows: 5,
+                failed_windows: 2,
+                ..birdnet_core::detection::FilterTally::default()
+            },
+        );
+        // Credits are held until the ledger's tick writes them.
+        crate::integrations::effort::tick(&state, 0.0);
+        let total: f64 = state.with_db(|c| {
+            c.query_row(
+                "SELECT COALESCE(SUM(seconds), 0) FROM recording_effort WHERE source = 'src_a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert!((total - 9.0).abs() < 1e-6, "credited {total} s, not 9 s");
+        // Counterpart: a file with none failed is credited whole.
+        let whole = tmp.path().join("2026-05-19-birdnet-src_a-09:00:15.wav");
+        write_segment(&whole);
+        observer.analysed(&whole);
+        observer.filtered(
+            &whole,
+            &birdnet_core::detection::FilterTally {
+                windows: 5,
+                ..birdnet_core::detection::FilterTally::default()
+            },
+        );
+        // Credits are held until the ledger's tick writes them.
+        crate::integrations::effort::tick(&state, 0.0);
+        let total: f64 = state.with_db(|c| {
+            c.query_row(
+                "SELECT COALESCE(SUM(seconds), 0) FROM recording_effort WHERE source = 'src_a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert!(
+            (total - 24.0).abs() < 1e-6,
+            "credited {total} s, not 9 + 15"
+        );
+    }
+
+    #[test]
     fn effort_is_the_audio_analysed_not_the_time_a_source_was_up() {
         use birdnet_db::audio_sources::{AudioSourceStore as _, NewAudioSource, SourceKind};
         let tmp = tempfile::tempdir().unwrap();
@@ -1318,7 +1408,10 @@ mod tests {
             ));
             write_segment(&path);
             if i % 2 == 0 {
+                // As `run.rs` reports an analysed file: analysed, then what its
+                // filters did.
                 observer.analysed(&path);
+                observer.filtered(&path, &birdnet_core::detection::FilterTally::default());
             } else {
                 observer.shed(&path, birdnet_core::detection::daemon::ShedReason::Thermal);
             }

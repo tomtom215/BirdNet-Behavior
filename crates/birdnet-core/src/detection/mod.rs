@@ -72,6 +72,9 @@ pub struct FilterTally {
     pub occurrence_detections: u64,
     /// Species detections the operator's include or exclude list removed.
     pub species_list_detections: u64,
+    /// Windows no routed classifier answered (review F18): not listening, and
+    /// not counted as effort.
+    pub failed_windows: u64,
 }
 
 impl FilterTally {
