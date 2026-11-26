@@ -26,6 +26,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **The station says what its models are doing (MDL-01, MDL-03, MDL-06 of the 2026-11 audit).** The detector, each
+  classifier and the occurrence filter publish a state with a reason: `birdnet_detector_state{state}`,
+  `birdnet_classifier_state{classifier,state}`, `birdnet_occurrence_filter_state{state}` and
+  `birdnet_occurrence_filter_active` on `/api/v2/metrics`; `models` and `model_conditions` in `/api/v2/health`;
+  a `models` check in the station-health notifier. A detector that did not start, a classifier left out or that
+  no route reaches, and a filter that is off for a reason other than "none configured" are on the header badge,
+  Station Health, Today and the Models board, each with what to do.
+- **One install path for every model file (MDL-07, MDL-08, MDL-09, MDL-11, MDL-13).** `install.sh`, the container
+  entrypoint and the macOS installer call `birdnet-behavior --install-model`; the shell downloaders are gone.
+  Every catalogue file is held to a pinned size and sha256, resumed after a cut connection, retried, and
+  recorded as verified beside the file so a later start can tell a damaged file from a good one without
+  hashing 541 MB on every request. `BIRDNET_MODEL_MIRROR`, `BIRDNET_MODEL_CONNECT_TIMEOUT` and
+  `BIRDNET_MODEL_STALL_TIMEOUT` join `BIRDNET_MODEL_RETRY_WAITS`. The geomodel and the V3.0 files are catalogue
+  entries (`birdnet-v3`, `birdnet-v3-geomodel`); files under their old names are adopted without a download.
+- **The install panel lists what this station is set up for (MDL-15).** Settings → Capture shows each catalogue
+  file the configuration calls for (V3.0 and the geomodel on a V3.0 station, never V2.4; a Perch second
+  classifier; the filter that belongs to the primary) as In use, Installed — restart, Not installed, Damaged or
+  Not used with the reason, and one button installs or repairs what needs it.
 - **A classifier that will not download no longer stops the install (OOB-20).** The download is tried three
   times, 30 and then 90 seconds apart (`BIRDNET_MODEL_RETRY_WAITS`). If it still fails the install finishes, ends
   on a boxed warning that the station is not detecting birds and how to fix it, and exits with status **75**.
@@ -184,6 +202,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A station starts on the models that load (MDL-02, MDL-04, MDL-05).** A second classifier whose file is
+  missing, damaged or the wrong shape is left out and named, and the primary keeps detecting; it used to stop
+  all detection. An occurrence filter that cannot be used (file unusable, labels missing, no coordinates) is
+  off with a reason, where the pages used to say "on" from the configuration.
+- **`/api/v2/health?strict=1` answers 503 when nothing is identifying birds**, read from the published model
+  state as well as the daemon flag. A left-out second classifier or an off filter stays 200 with the reason in
+  the body: the station is still identifying birds with its primary. The image's `HEALTHCHECK` and
+  `docker-compose.yml` poll the strict form.
+- **A filter installed beside the station's classifier is used at the next start when nothing names one
+  (MDL-14).** The service cannot write its configuration file, so this is how a filter installed from the
+  browser reaches the detector: V2.4's range filter for V2.4, the geomodel and its labels for V3.0.
+- **A V2.4 station keeps birdnet-go's label file.** Stations installed before 0.18.0 hold that file; rewriting
+  it would have split 460 species under two names. Any other file under that name is replaced.
 - **One rule for a listened day (RES-26).** A day counts as listened when the station recorded at least half its
   typical day, on every page. Some pages used 60 seconds, so the same station could show two different counts
   of listened days. Totals that divide by listened days can move by a day or two.
@@ -305,6 +336,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A V2.4 station was offered "Repair" for a labels file that belonged to another model**, which no install
+  could fix. Repair is offered only where an install changes the file at fault.
+- **A failed filter step after a successful classifier step was reported as success** by the install panel.
+- **An unrouted classifier read "Waiting for audio" forever on the Models board.** It reads "Judging nothing",
+  with the route to add.
+- **The "Publish model release" workflow read pins from a shell file that no longer holds them.** It reads the
+  catalogue.
 - **A station whose classifier download failed is offered the install button (OOB-20).** The installers always
   write `MODEL_PATH`, and the page read a configured path with no file as the operator's own model: no button,
   and advice to put the file there by hand.
