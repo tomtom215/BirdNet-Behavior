@@ -1,0 +1,119 @@
+# Real-install model test (MDL-18).
+#
+# Installs this tree's binary with install.sh on a real systemd host, lets the
+# binary download the real default models from their real origins, hands the
+# station the magpie recording and requires a Pica pica detection with the
+# healthy model state; then damages each model file in turn, while the station
+# runs and before a start, and requires the station to say so and fetch it
+# again (MDL-10). Nothing is stubbed. See installer/test/model-e2e.sh.
+#
+# Also runs the station-harness tests that need the real V2.4 files (the
+# repair against a loopback mirror), which ci.yml's model job does not list.
+#
+# On a schedule, because the origins can change or vanish under a tree that
+# did not, and on changes to what decides how a model reaches a station.
+
+name: Model e2e
+
+on:
+  schedule:
+    - cron: "17 3 * * 2"
+  push:
+    branches: ["main", "master"]
+    paths:
+      - "crates/birdnet-integrations/src/model_catalog.rs"
+      - "crates/birdnet-integrations/src/model_catalog/**"
+      - "install.sh"
+      - "installer/lib/**"
+      - "installer/test/model-e2e.sh"
+      - "docker/entrypoint.sh"
+      - "src/main.rs"
+      - "src/app.rs"
+      - "src/daemon/**"
+      - "src/helpers/models.rs"
+      - ".github/workflows/model-e2e.yml"
+  pull_request:
+    branches: ["main", "master"]
+    paths:
+      - "crates/birdnet-integrations/src/model_catalog.rs"
+      - "crates/birdnet-integrations/src/model_catalog/**"
+      - "install.sh"
+      - "installer/lib/**"
+      - "installer/test/model-e2e.sh"
+      - "docker/entrypoint.sh"
+      - "src/main.rs"
+      - "src/app.rs"
+      - "src/daemon/**"
+      - "src/helpers/models.rs"
+      - ".github/workflows/model-e2e.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  systemd:
+    name: Install, detect and repair under systemd
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # master, 2026-10-15
+        with:
+          toolchain: stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          shared-key: model-e2e
+
+      - name: Verify install.sh is in sync with installer/lib
+        run: bash installer/build.sh --check
+
+      - name: Build the release binary
+        run: cargo build --release --locked --features analytics --bin birdnet-behavior
+
+      - name: Package the tarball
+        id: pkg
+        shell: bash
+        run: |
+          set -eu
+          VER="$(awk '/^\[workspace\.package\]/{f=1;next} /^\[/{f=0} f&&/^version = /{gsub(/[" ]/,"",$3);print $3;exit}' Cargo.toml)"
+          NAME="birdnet-behavior-${VER}-x86_64-unknown-linux-gnu"
+          mkdir -p "dist/${NAME}"
+          strip -o "dist/${NAME}/birdnet-behavior" target/release/birdnet-behavior
+          tar -C dist -czf "dist/${NAME}.tar.gz" "${NAME}"
+          echo "tarball=$PWD/dist/${NAME}.tar.gz" >> "$GITHUB_OUTPUT"
+
+      - name: Install, detect, damage and repair (real models, real systemd)
+        run: |
+          sudo env PATH="$PATH" \
+            CANDIDATE_TARBALL="${{ steps.pkg.outputs.tarball }}" \
+            bash installer/test/model-e2e.sh
+
+      - name: The repair tests against a loopback mirror, with the real V2.4 files
+        # The files the e2e just installed, each verified against the pins.
+        shell: bash
+        run: |
+          set -eu
+          models="$(getent passwd bnbmodels | cut -d: -f6)/BirdNet-Behavior/models"
+          sudo cp "$models/birdnet-v24.onnx" "$models/birdnet-v24-range-v2.onnx" \
+            "$models/birdnet-v24_labels.txt" "$RUNNER_TEMP/"
+          sudo chmod a+r "$RUNNER_TEMP"/birdnet-v24*
+          BIRDNET_TEST_V24_MODEL="$RUNNER_TEMP/birdnet-v24.onnx" \
+          BIRDNET_TEST_V24_LABELS="$RUNNER_TEMP/birdnet-v24_labels.txt" \
+          BIRDNET_TEST_V24_MDATA="$RUNNER_TEMP/birdnet-v24-range-v2.onnx" \
+          BIRDNET_REQUIRE_V24_MODEL=1 \
+            cargo test --release --locked --test a_station_fetches_its_damaged_models_again \
+              --test a_stop_keeps_the_detections_it_has_not_processed -- --nocapture

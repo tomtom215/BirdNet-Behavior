@@ -58,6 +58,7 @@ CI_TESTS=(
 # quietly becoming permanent.
 EXCLUDED=(
     "pkg-manager.sh|needs docker and four distro mirror networks; run it by hand when touching 30-platform.sh"
+    "model-e2e.sh|needs root, systemd as PID 1, a release tarball and the internet; model-e2e.yml runs it"
     "run-ci.sh|this runner"
     "upgrade-e2e.sh|needs root, systemd as PID 1 and a release tarball; upgrade.yml and release.yml run it"
 )
