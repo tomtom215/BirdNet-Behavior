@@ -158,9 +158,10 @@ pub fn file_key(file: &ModelFile) -> String {
     )
 }
 
-/// Every condition of the station's models: [`conditions`], then one for each
-/// model file the station is repairing or could not repair ([`file_conditions`]).
-/// This is what every surface calls.
+/// Every condition of the station's models; what every surface calls.
+///
+/// [`conditions`], then one for each model file the station is repairing or
+/// could not repair ([`file_conditions`]).
 #[must_use]
 pub fn of_station(models: &ModelsState, files: &[ModelFile], now_unix: u64) -> Vec<ModelCondition> {
     let mut out = conditions(models);
@@ -168,10 +169,11 @@ pub fn of_station(models: &ModelsState, files: &[ModelFile], now_unix: u64) -> V
     out
 }
 
-/// One condition per model file the station found missing or damaged and has
-/// not finished putting right (MDL-10). A file that is being checked, that
-/// verifies, that was repaired and is in use, or that the station is
-/// restarting to load right now, is not one.
+/// One condition per model file the station has not finished putting right.
+///
+/// MDL-10: the file was found missing or damaged. A file that is being
+/// checked, that verifies, that was repaired and is in use, or that the
+/// station is restarting to load right now, is not one.
 #[must_use]
 pub fn file_conditions(files: &[ModelFile], now_unix: u64) -> Vec<ModelCondition> {
     files

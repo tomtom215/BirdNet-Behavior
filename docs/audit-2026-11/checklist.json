@@ -3258,8 +3258,8 @@
    "work_package": "models",
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
-   "status": "in_progress",
-   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). V3.0 with METADATA_LABELS_PATH naming no file: 'failed to start detection daemon error=model: metadata labels', 0 files analysed, /api/v2/health 200, strict 503. || Phase 1 (2026-11-26): f91f96a, b64965a. Geomodel labels missing: 4 detections, filter off_labels_missing. Remaining: the pages do not show the reason (phase 2)."
+   "status": "done",
+   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). V3.0 with METADATA_LABELS_PATH naming no file: 'failed to start detection daemon error=model: metadata labels', 0 files analysed, /api/v2/health 200, strict 503. || Phase 1 (2026-11-26): f91f96a, b64965a. Geomodel labels missing: 4 detections, filter off_labels_missing. Remaining: the pages do not show the reason (phase 2). || Phase 2 (2026-11-26): 0a1432b: the reason is on the badge, Station Health, Today and /api/v2/health (model_conditions); station test tests/the_owner_is_told_what_became_of_the_models.rs."
   },
   {
    "id": "MDL-03",
@@ -3270,8 +3270,8 @@
    "work_package": "models",
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
-   "status": "open",
-   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). In both cases above the plain health endpoint answered 200. From the read-only map; not yet reproduced. for the badge, the issue list and the Docker HEALTHCHECK."
+   "status": "done",
+   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). In both cases above the plain health endpoint answered 200. From the read-only map; not yet reproduced. for the badge, the issue list and the Docker HEALTHCHECK. || Phase 2 (2026-11-26): 0a1432b: crates/birdnet-web/src/model_conditions.rs is the one decision; badge, Station Health, Today, the notifier and /api/v2/health read it; ?strict=1 is 503 when nothing is identifying; the image HEALTHCHECK and compose poll strict. A left-out second classifier or an off filter is 200 with the reason in the body (decision, in docs/book/reference/api.md). Red: \"the detector failed: the Health page says healthy\". Docker itself was not run."
   },
   {
    "id": "MDL-04",
@@ -3282,8 +3282,8 @@
    "work_package": "models",
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
-   "status": "in_progress",
-   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). V3.0 with the geomodel and no LATITUDE/LONGITUDE: 4 magpie detections, Health page 'Species filter: on · admitting'. || Phase 1 (2026-11-26): f91f96a. No coordinates: filter off_no_coordinates, birdnet_occurrence_filter_active 0. Remaining: the Capture panel still reads the configuration (phase 2)."
+   "status": "done",
+   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). V3.0 with the geomodel and no LATITUDE/LONGITUDE: 4 magpie detections, Health page 'Species filter: on · admitting'. || Phase 1 (2026-11-26): f91f96a. No coordinates: filter off_no_coordinates, birdnet_occurrence_filter_active 0. Remaining: the Capture panel still reads the configuration (phase 2). || Phase 2 (2026-11-26): 0a1432b: the Capture panel and the Health filter cell read the published state with the reason."
   },
   {
    "id": "MDL-05",
@@ -3294,8 +3294,8 @@
    "work_package": "models",
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
-   "status": "in_progress",
-   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). V3.0 in Kansas with a truncated geomodel: 4 magpie detections (0 with the real file); the Health page says off; Today shows no problem. From the read-only map; not yet reproduced. for the Capture panel saying 'on'. || Phase 1 (2026-11-26): f91f96a. A truncated geomodel is off_model_unusable (lane's run; not rerun by the session). Remaining: nothing on Today (phase 2)."
+   "status": "done",
+   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). V3.0 in Kansas with a truncated geomodel: 4 magpie detections (0 with the real file); the Health page says off; Today shows no problem. From the read-only map; not yet reproduced. for the Capture panel saying 'on'. || Phase 1 (2026-11-26): f91f96a. A truncated geomodel is off_model_unusable (lane's run; not rerun by the session). Remaining: nothing on Today (phase 2). || Phase 2 (2026-11-26): 0a1432b: off_model_unusable is a Today notice with Repair."
   },
   {
    "id": "MDL-06",
@@ -3306,8 +3306,8 @@
    "work_package": "models",
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
-   "status": "in_progress",
-   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). MODEL_2_PATH naming no file: V2.4 detects, 'classifier `perch` … cannot be read; skipping it' at INFO, nothing on the dashboard. || Phase 1 (2026-11-26): f91f96a. Refusals are typed, logged at WARN and published as metrics. Remaining: the dashboard (phase 2)."
+   "status": "done",
+   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). MODEL_2_PATH naming no file: V2.4 detects, 'classifier `perch` … cannot be read; skipping it' at INFO, nothing on the dashboard. || Phase 1 (2026-11-26): f91f96a. Refusals are typed, logged at WARN and published as metrics. Remaining: the dashboard (phase 2). || Phase 2 (2026-11-26): 0a1432b: the Models board has a card per configured classifier (Not running / Judging nothing) with the reason. Red: left: [(\"birdnet\", Running), (\"bats\", Waiting)]."
   },
   {
    "id": "MDL-07",
@@ -3354,8 +3354,8 @@
    "work_package": "models",
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
-   "status": "open",
-   "evidence": "From the read-only map; not yet reproduced. Daemon start never downloads; the dashboard button installs V2.4 only."
+   "status": "done",
+   "evidence": "From the read-only map; not yet reproduced. Daemon start never downloads; the dashboard button installs V2.4 only. || Phase 2 (2026-11-26): d53199b (src/daemon/repair.rs), 296175c (pages). A configured catalogue file that is missing or damaged is fetched again, full retries once then one round per BIRDNET_MODEL_REPAIR_INTERVAL (3600 s); one restart to load a file the station started without; no restart loop (mutant red: left: 11, right: 2). tests/a_station_fetches_its_damaged_models_again.rs, 5 tests, all red with the thread not spawned. Not verified: a slow or unreachable internet (the down origin was a closed local port); files under the legacy V3.0 names are not repaired (MDL-25)."
   },
   {
    "id": "MDL-11",
@@ -3379,7 +3379,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
    "status": "in_progress",
-   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). Perch came from Hugging Face, its only origin. From the read-only map; not yet reproduced. for V3.0 (the shell paths have Zenodo as a second origin; the catalogue does not). || Phase 1 (2026-11-26): ece8963. Every download has ordered origins; V3.0 falls back to Zenodo in the binary. Remaining: Perch has no project mirror; Google's own terms on Kaggle could not be read from here, so nothing was published."
+   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). Perch came from Hugging Face, its only origin. From the read-only map; not yet reproduced. for V3.0 (the shell paths have Zenodo as a second origin; the catalogue does not). || Phase 1 (2026-11-26): ece8963. Every download has ordered origins; V3.0 falls back to Zenodo in the binary. Remaining: Perch has no project mirror; Google's own terms on Kaggle could not be read from here, so nothing was published. || Phase 2 (2026-11-26): the licence was read at Google's Kaggle page on 2026-11-26 (Apache-2.0, names the ONNX conversion) and is cited in the catalogue; the publish job (6e13605) is written and has not been run: it waits for the maintainer's go. After it runs, add the release URL as Perch's first mirror_urls entry."
   },
   {
    "id": "MDL-13",
@@ -3402,8 +3402,8 @@
    "work_package": "models",
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
-   "status": "in_progress",
-   "evidence": "From the read-only map; not yet reproduced. Bare metal and macOS leave METADATA_MODEL_PATH commented out; a Docker restart from the dashboard re-executes the binary with the old environment. || Phase 1 (2026-11-26): be35e5f: installer, update, repair and container half. Remaining: the dashboard half (phase 2)."
+   "status": "done",
+   "evidence": "From the read-only map; not yet reproduced. Bare metal and macOS leave METADATA_MODEL_PATH commented out; a Docker restart from the dashboard re-executes the binary with the old environment. || Phase 1 (2026-11-26): be35e5f: installer, update, repair and container half. Remaining: the dashboard half (phase 2). || Phase 2 (2026-11-26): 0a1432b: the service cannot write its configuration file, so the station adopts the filter that belongs to its classifier when it is installed beside it and nothing names one (src/helpers/station_defaults.rs); METADATA_MODEL_PATH=off opts out (50bec0a, 296175c). Lane run with real files: install from the panel, restart, filter active, 3 Pica pica."
   },
   {
    "id": "MDL-15",
@@ -3414,8 +3414,8 @@
    "work_package": "models",
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
-   "status": "open",
-   "evidence": "From the read-only map; not yet reproduced."
+   "status": "done",
+   "evidence": "From the read-only map; not yet reproduced. || Phase 2 (2026-11-26): 0a1432b, ef9630d: the panel lists what the station is set up for, shows damaged as damaged, reports a failed second step, and offers repair only where an install changes the file at fault (red: left: Damaged right: NotUsed)."
   },
   {
    "id": "MDL-16",
@@ -3451,7 +3451,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
    "status": "in_progress",
-   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). The session's own scripts did both; none of it is in the repository. src/app.rs is at 4% line coverage in the pull request's coverage report. || Phase 1 (2026-11-26): f91f96a: tests/station starts the real binary (15 tests, 14 red on the old binary). Remaining: a real install under systemd and in the container with real models, in CI (phase 2)."
+   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). The session's own scripts did both; none of it is in the repository. src/app.rs is at 4% line coverage in the pull request's coverage report. || Phase 1 (2026-11-26): f91f96a: tests/station starts the real binary (15 tests, 14 red on the old binary). Remaining: a real install under systemd and in the container with real models, in CI (phase 2). || Phase 2 (2026-11-26): 0f9c5a9: installer/test/model-e2e.sh and .github/workflows/model-e2e.yml. The systemd half ran in this container against the real origins and passed (lane run). Remaining: the container half is not written; the workflow has not run on GitHub before this pull request."
   },
   {
    "id": "MDL-19",
@@ -3462,8 +3462,8 @@
    "work_package": "models",
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
-   "status": "in_progress",
-   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). Measured with a rough parser of the session's own; 24 allow(clippy::too_many_lines) attributes in the tree. || Phase 1 (2026-11-26): f91f96a, 0b3e753. run_daemon 568 lines to 46, serve 1,051 to 96, their allows removed. Remaining: start_detection_daemon keeps its two allows (phase 2)."
+   "status": "done",
+   "evidence": "Run 2026-11-25 on a station started from the built binary with the real files (see the file's last section). Measured with a rough parser of the session's own; 24 allow(clippy::too_many_lines) attributes in the tree. || Phase 1 (2026-11-26): f91f96a, 0b3e753. run_daemon 568 lines to 46, serve 1,051 to 96, their allows removed. Remaining: start_detection_daemon keeps its two allows (phase 2). || Phase 2 (2026-11-26): ab0b1d0: start_detection_daemon is split and has no allows; tests/every_clippy_allow_says_why.rs holds reasonless allows per file and the too_many_lines count (26) to numbers that only go down. The 26 that remain are MDL-24."
   },
   {
    "id": "MDL-20",
@@ -3486,8 +3486,8 @@
    "work_package": "models",
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
-   "status": "open",
-   "evidence": "Found by the start-up lane 2026-11-26: after SIGTERM with about 300 clips queued the process lives about 52 s (src/daemon/processor.rs); the unit's TimeoutStopSec is 30, so systemd kills it. Same on the binary before the batch. Not reproduced by the integrating session."
+   "status": "done",
+   "evidence": "Found by the start-up lane 2026-11-26: after SIGTERM with about 300 clips queued the process lives about 52 s (src/daemon/processor.rs); the unit's TimeoutStopSec is 30, so systemd kills it. Same on the binary before the batch. Not reproduced by the integrating session. || Phase 2 (2026-11-26): 3100422: on shutdown the processor writes what it has not processed to clip-queue/ beside the database with the recordings and replays it at the next start (src/daemon/spool.rs). tests/a_stop_keeps_the_detections_it_has_not_processed.rs red: \"took Some(29.019367465s) to exit, against the unit's 30 s\"; 0.45 to 0.50 s after. The loss itself was not reproduced, only the stop time."
   },
   {
    "id": "MDL-22",
@@ -3512,6 +3512,66 @@
    "source": "docs/audit-2026-11/10-model-delivery.md",
    "status": "open",
    "evidence": "tests/database_work_stays_off_the_async_runtime.rs now lists the synchronous start-up steps serve was split into; a new blocking call added inside one of them is no longer caught by name (lane report 2026-11-26)."
+  },
+  {
+   "id": "MDL-24",
+   "title": "26 functions still carry allow(clippy::too_many_lines), and 395 clippy allows give no reason",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "models",
+   "phase": null,
+   "source": "docs/audit-2026-11/10-model-delivery.md",
+   "status": "open",
+   "evidence": "Counted by tests/every_clippy_allow_says_why.rs on 2026-11-26 (tests/data/clippy_allows.tsv); 162 of the reasonless ones are in crates/birdnet-web/src/routes. The gate only stops the numbers rising. Named in earlier sessions: event_processor and start_disk_manager."
+  },
+  {
+   "id": "MDL-25",
+   "title": "A station configured with the legacy V3.0 file names is not repaired by the station itself",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "models",
+   "phase": null,
+   "source": "docs/audit-2026-11/10-model-delivery.md",
+   "status": "open",
+   "evidence": "Lane R report, 2026-11-26: the repair thread matches the name --install-model gives; an install adopts legacy names, a running station does not fetch under them. Not reproduced by the session."
+  },
+  {
+   "id": "MDL-26",
+   "title": "No per-file coverage floor for the start-up code",
+   "severity": "medium",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "models",
+   "phase": null,
+   "source": "docs/audit-2026-11/10-model-delivery.md",
+   "status": "open",
+   "evidence": "Owed since phase 1 (src/app.rs was at 4% line coverage before the station harness). Not started: a cargo llvm-cov job over the station-harness tests with a floor file that only goes up, for src/app.rs, src/main.rs, src/daemon/**, src/helpers/models.rs."
+  },
+  {
+   "id": "MDL-27",
+   "title": "A station installed with BIRDNET_SKIP_MODEL now downloads its models itself",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "models",
+   "phase": null,
+   "source": "docs/audit-2026-11/10-model-delivery.md",
+   "status": "open",
+   "evidence": "Decision for the maintainer. Since d53199b a configured catalogue file that is missing is fetched, one round an hour; --offline (mirror only) is the opt-out. The installer cannot opt a station out."
+  },
+  {
+   "id": "MDL-28",
+   "title": "Journal lines under systemd carry ANSI colour codes, and each service start logs \"starting BirdNet-Behavior\" twice",
+   "severity": "low",
+   "already_tracked": false,
+   "mentions_conjecture": false,
+   "work_package": "models",
+   "phase": null,
+   "source": "docs/audit-2026-11/10-model-delivery.md",
+   "status": "open",
+   "evidence": "Lane R report from the model-e2e run, 2026-11-26: the unit's preflight doctor logs the same start-up line as the service. Not reproduced by the session."
   }
  ]
 }
