@@ -60,6 +60,8 @@ mod run;
 mod spool;
 
 #[cfg(test)]
+mod replay_tests;
+#[cfg(test)]
 mod test_support;
 
 /// Bound on the detection-event channel between the daemon's detection loop

@@ -135,11 +135,17 @@ pub fn insert_model_scores(
     key: &DetectionKey<'_>,
     scores: &[ModelScore],
 ) -> Result<(), DbError> {
-    let tx = conn.unchecked_transaction()?;
+    // A savepoint rather than a transaction, so the same all-or-none holds
+    // inside a caller's own transaction: the processor writes the row and its
+    // answers as one (review F15), and `BEGIN` inside a transaction fails.
+    conn.execute_batch("SAVEPOINT model_scores")?;
     for score in scores {
-        insert_model_score(&tx, key, score)?;
+        if let Err(e) = insert_model_score(conn, key, score) {
+            let _ = conn.execute_batch("ROLLBACK TO model_scores; RELEASE model_scores");
+            return Err(e);
+        }
     }
-    tx.commit()?;
+    conn.execute_batch("RELEASE model_scores")?;
     Ok(())
 }
 

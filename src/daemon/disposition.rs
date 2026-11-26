@@ -188,16 +188,59 @@ pub(super) fn decide_disposition(
     dynamic: Option<&DynamicThresholds>,
     now_ms: i64,
 ) -> DispositionDecision {
-    // The adjustment is applied in `f64` and to the *stored* value, not to an
-    // `f32` round-trip of it. Taking the threshold through `f32` and back turns
-    // a stored 0.8 into 0.800000011920929, which then appears on the quarantine
-    // row an operator reads — the same single-precision rounding this
-    // function's `f64` comparison exists to avoid.
+    decide_at_bars(
+        confidence,
+        bars(
+            sci_name,
+            per_species_thresholds,
+            global_confidence,
+            dynamic,
+            now_ms,
+        ),
+    )
+}
+
+/// The two numbers [`decide_disposition`] judges a detection against, once
+/// every input has been applied: the species' own bar if it has one, and the
+/// station's floor, each lowered by the species' learned adjustment.
+///
+/// Kept with a detection a stop leaves unprocessed, so the next start judges
+/// it by the bars in force when it was analysed (review F01), whatever the
+/// thresholds or the learned levels have become in between.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct Bars {
+    /// The species' own threshold, adjusted; `None` when it has none.
+    pub species_bar: Option<f64>,
+    /// The station's floor for the detection's classifier, adjusted.
+    pub global_bar: f64,
+}
+
+/// [`Bars`] for one species now.
+///
+/// The adjustment is applied in `f64` and to the *stored* value, not to an
+/// `f32` round-trip of it. Taking the threshold through `f32` and back turns
+/// a stored 0.8 into 0.800000011920929, which then appears on the quarantine
+/// row an operator reads — the same single-precision rounding this
+/// function's `f64` comparison exists to avoid.
+pub(super) fn bars(
+    sci_name: &str,
+    per_species_thresholds: &HashMap<String, f64>,
+    global_confidence: f32,
+    dynamic: Option<&DynamicThresholds>,
+    now_ms: i64,
+) -> Bars {
     let adjustment = dynamic.and_then(|d| d.adjustment(sci_name, now_ms));
     let adjust = |base: f64| -> f64 { adjustment.map_or(base, |a| a.apply(base)) };
+    Bars {
+        species_bar: per_species_thresholds.get(sci_name).map(|&t| adjust(t)),
+        global_bar: adjust(f64::from(global_confidence)),
+    }
+}
 
-    if let Some(&threshold) = per_species_thresholds.get(sci_name) {
-        let effective = adjust(threshold);
+/// The decision at `bars`: [`decide_disposition`]'s rule, for bars already
+/// worked out.
+pub(super) fn decide_at_bars(confidence: f32, bars: Bars) -> DispositionDecision {
+    if let Some(effective) = bars.species_bar {
         if f64::from(confidence) < effective {
             return DispositionDecision::Quarantine {
                 threshold: effective,
@@ -207,11 +250,12 @@ pub(super) fn decide_disposition(
             threshold: effective,
         };
     }
-    let floor = adjust(f64::from(global_confidence));
-    if f64::from(confidence) < floor {
+    if f64::from(confidence) < bars.global_bar {
         return DispositionDecision::DropBelowGlobal;
     }
-    DispositionDecision::Accept { threshold: floor }
+    DispositionDecision::Accept {
+        threshold: bars.global_bar,
+    }
 }
 
 /// The confidence bar in force for a detection, whatever else is decided

@@ -579,10 +579,171 @@ impl RunProvenance {
     /// The confidence floor for a detection made by `model_id`: that
     /// classifier's own threshold where it has one, else `station`.
     fn floor_for(&self, model_id: Option<&str>, station: f32) -> f32 {
-        model_id
-            .and_then(|id| self.model_thresholds.get(id))
-            .copied()
-            .unwrap_or(station)
+        floor_in(&self.model_thresholds, model_id, station)
+    }
+
+    /// This run as a kept detection records it (`spool`).
+    fn kept(&self) -> crate::daemon::spool::KeptRun {
+        crate::daemon::spool::KeptRun {
+            run_id: self.run_id,
+            algorithm: self.algorithm.map(str::to_owned),
+            lat: self.lat,
+            lon: self.lon,
+            sensitivity: self.sensitivity,
+            overlap: self.overlap,
+            model_thresholds: self.model_thresholds.clone(),
+        }
+    }
+}
+
+/// `model_id`'s own threshold in `thresholds`, else `station`.
+fn floor_in(
+    thresholds: &std::collections::HashMap<String, f32>,
+    model_id: Option<&str>,
+    station: f32,
+) -> f32 {
+    model_id
+        .and_then(|id| thresholds.get(id))
+        .copied()
+        .unwrap_or(station)
+}
+
+/// What one detection's rows are stored under: the run that analysed it.
+///
+/// For a live detection that is this processor's run. For one an earlier stop
+/// kept, it is the run the batch recorded, and for a batch from before
+/// batches recorded one it is **unknown**: the run, the coordinates and the
+/// settings are left NULL rather than filled in from the run that happens to
+/// replay it, which did not analyse it (review F01).
+#[derive(Debug, Clone)]
+struct Attribution<'a> {
+    run_id: Option<i64>,
+    algorithm: Option<&'a str>,
+    lat: Option<f64>,
+    lon: Option<f64>,
+    sensitivity: Option<f64>,
+    overlap: Option<f64>,
+    model_thresholds: &'a std::collections::HashMap<String, f32>,
+}
+
+impl<'a> Attribution<'a> {
+    /// A live detection's: this processor's run.
+    fn live(p: &'a RunProvenance) -> Self {
+        Self {
+            run_id: Some(p.run_id),
+            algorithm: p.algorithm,
+            lat: p.lat,
+            lon: p.lon,
+            sensitivity: Some(p.sensitivity),
+            overlap: Some(p.overlap),
+            model_thresholds: &p.model_thresholds,
+        }
+    }
+
+    /// A kept detection's: the run its batch recorded, or none known. With
+    /// none known, the classifiers' own floors are this run's, the only ones
+    /// there are; the cutoff the row records says what it was admitted at.
+    fn replayed(
+        run: Option<&'a crate::daemon::spool::KeptRun>,
+        current: &'a RunProvenance,
+    ) -> Self {
+        run.map_or(
+            Self {
+                run_id: None,
+                algorithm: None,
+                lat: None,
+                lon: None,
+                sensitivity: None,
+                overlap: None,
+                model_thresholds: &current.model_thresholds,
+            },
+            |r| Self {
+                run_id: Some(r.run_id),
+                algorithm: r.algorithm.as_deref(),
+                lat: r.lat,
+                lon: r.lon,
+                sensitivity: Some(r.sensitivity),
+                overlap: Some(r.overlap),
+                model_thresholds: &r.model_thresholds,
+            },
+        )
+    }
+
+    fn floor_for(&self, model_id: Option<&str>, station: f32) -> f32 {
+        floor_in(self.model_thresholds, model_id, station)
+    }
+}
+
+/// A detection a stopping processor hands to the queue, judged as the next
+/// turn of the loop would have judged it: the classifier that accepts it
+/// chosen, and the bars it is held to worked out, under this run.
+fn freeze_for_queue(
+    event: birdnet_core::detection::daemon::DetectionEvent,
+    species_thresholds: &std::collections::HashMap<String, f64>,
+    provenance: &RunProvenance,
+    station: f32,
+    dynamic: Option<&birdnet_core::detection::dynamic_threshold::DynamicThresholds>,
+) -> crate::daemon::spool::Kept {
+    let now_ms = crate::daemon::disposition::epoch_ms();
+    let event = judged_by_an_accepting_classifier(
+        event,
+        species_thresholds,
+        provenance,
+        station,
+        dynamic,
+        now_ms,
+    );
+    let floor = provenance.floor_for(event.detection.model_id.as_deref(), station);
+    let bars = crate::daemon::disposition::bars(
+        &event.detection.scientific_name,
+        species_thresholds,
+        floor,
+        dynamic,
+        now_ms,
+    );
+    crate::daemon::spool::Kept {
+        event,
+        run: Some(provenance.kept()),
+        bars: Some(bars),
+    }
+}
+
+/// Mark the replayed detection in hand, if there is one, as finished with.
+fn settled(pending: &mut Option<(crate::daemon::spool::Ticket, crate::daemon::spool::Outcome)>) {
+    if let Some((_, outcome)) = pending {
+        *outcome = crate::daemon::spool::Outcome::Settled;
+    }
+}
+
+/// Whether the row a replayed detection would write is already there: a
+/// start killed after writing it and before recording that in its batch
+/// replays it (review F02). Matched on what names one detection of one
+/// analysis: its date, time, species, source, window and the analysis's
+/// correlation id. An unreadable answer is "not known to be there", and the
+/// detection is written.
+fn already_recorded(
+    state: &birdnet_web::state::AppState,
+    event: &birdnet_core::detection::daemon::DetectionEvent,
+    source: &str,
+) -> bool {
+    if event.correlation_id.is_empty() {
+        return false;
+    }
+    let d = &event.detection;
+    let key = birdnet_db::sqlite::RecordedDetection {
+        date: &d.date,
+        time: &d.time,
+        sci_name: &d.scientific_name,
+        source,
+        chunk_offset_secs: f64::from(d.start),
+        correlation_id: &event.correlation_id,
+    };
+    match state.with_read_db(|conn| birdnet_db::sqlite::detection_recorded(conn, &key)) {
+        Ok(found) => found,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not tell whether a kept detection was already recorded; recording it");
+            false
+        }
     }
 }
 
@@ -806,9 +967,22 @@ pub(super) fn event_processor(
     // What the last stop kept is processed first; once this station stops,
     // what is left is kept for the next start rather than worked through
     // past the unit's stop timeout (`spool`).
-    let mut inbox = crate::daemon::spool::Inbox::new(state.db_path(), state.subscribe_shutdown());
+    let mut inbox = crate::daemon::spool::Inbox::new(
+        state.db_path(),
+        crate::daemon::spool::ClipWindow::of(extractor.config()),
+        state.subscribe_shutdown(),
+    );
+    // The replayed detection handed out last and what became of it, settled
+    // at the top of the next turn so that every `continue` below reaches it.
+    // It starts as `Retry`; only a path that has finished with the detection
+    // says otherwise, so a path that forgets leaves it to be offered again
+    // rather than lost (review F02).
+    let mut unsettled: Option<(crate::daemon::spool::Ticket, crate::daemon::spool::Outcome)> = None;
     loop {
-        let event = match inbox.next(&event_rx, RESET_POLL, &mut || {
+        if let Some((ticket, outcome)) = unsettled.take() {
+            inbox.settle(ticket, outcome);
+        }
+        let (event, origin) = match inbox.next(&event_rx, RESET_POLL, &mut || {
             dynamic.apply_resets(&state);
         }) {
             crate::daemon::spool::Next::Event(event) => *event,
@@ -816,10 +990,32 @@ pub(super) fn event_processor(
                 tracing::info!("event channel closed, stopping event processor");
                 break;
             }
-            crate::daemon::spool::Next::Kept(n) => {
+            crate::daemon::spool::Next::Stopping => {
+                let species = threshold_cache.current(&state).clone();
+                let n = inbox.keep_the_rest(&event_rx, &mut |event| {
+                    freeze_for_queue(
+                        event,
+                        &species,
+                        &provenance,
+                        global_confidence,
+                        dynamic.tracker(),
+                    )
+                });
                 tracing::info!(kept = n, "stopping event processor");
                 break;
             }
+        };
+        let (replayed, kept_run, kept_bars) = match origin {
+            crate::daemon::spool::Origin::Live => (false, None, None),
+            crate::daemon::spool::Origin::Replayed { run, bars, ticket } => {
+                unsettled = Some((ticket, crate::daemon::spool::Outcome::Retry));
+                (true, run, bars)
+            }
+        };
+        let attribution = if replayed {
+            Attribution::replayed(kept_run.as_ref(), &provenance)
+        } else {
+            Attribution::live(&provenance)
         };
         dynamic.apply_resets(&state);
         let now_ms = crate::daemon::disposition::epoch_ms();
@@ -828,16 +1024,32 @@ pub(super) fn event_processor(
         }
         let species_thresholds = threshold_cache.current(&state);
 
-        let event = judged_by_an_accepting_classifier(
-            event,
-            species_thresholds,
-            &provenance,
-            global_confidence,
-            dynamic.tracker(),
-            now_ms,
-        );
+        // A detection kept with its bars was judged when it was kept, under
+        // the run that analysed it; judging it again here would choose its
+        // classifier by thresholds set since (review F01).
+        let event = if kept_bars.is_some() {
+            event
+        } else {
+            judged_by_an_accepting_classifier(
+                event,
+                species_thresholds,
+                &provenance,
+                global_confidence,
+                dynamic.tracker(),
+                now_ms,
+            )
+        };
         let detection = &event.detection;
         let correlation_id = event.correlation_id.as_str();
+        if replayed && already_recorded(&state, &event, &derive_source_label(&event.source_file)) {
+            tracing::info!(
+                correlation_id,
+                species = %detection.scientific_name,
+                "a kept detection was already recorded before the last stop; not recorded again"
+            );
+            settled(&mut unsettled);
+            continue;
+        }
         // The floor for this detection: its classifier's own threshold where
         // one is set, the station's otherwise. Every classifier's threshold was
         // compared to the station's alone, so `MODEL_2_THRESHOLD=0.35` under a
@@ -845,7 +1057,7 @@ pub(super) fn event_processor(
         // one of them here — and a stricter classifier, run at the station
         // floor so a lowered species can reach it, was held only to that.
         let global_confidence =
-            provenance.floor_for(detection.model_id.as_deref(), global_confidence);
+            attribution.floor_for(detection.model_id.as_deref(), global_confidence);
 
         // Decided once, before the clock and hour gates: a detection the
         // global threshold drops is dropped, whatever the hour. The classifier
@@ -855,14 +1067,24 @@ pub(super) fn event_processor(
         // daylight would never have recorded. A per-species miss still goes
         // on to the gates, so an implausible hour stays the reason it is filed
         // under.
-        let disposition = decide_disposition(
-            detection.confidence,
-            &detection.scientific_name,
-            species_thresholds,
-            global_confidence,
-            dynamic.tracker(),
-            now_ms,
-        );
+        let disposition = match kept_bars {
+            Some(bars) => crate::daemon::disposition::decide_at_bars(detection.confidence, bars),
+            None => decide_disposition(
+                detection.confidence,
+                &detection.scientific_name,
+                species_thresholds,
+                global_confidence,
+                dynamic.tracker(),
+                now_ms,
+            ),
+        };
+        // The bar in force, whatever else is decided (DD-9): what the decision
+        // admitted or quarantined it at, `None` for a drop.
+        let applicable = match disposition {
+            DispositionDecision::Accept { threshold }
+            | DispositionDecision::Quarantine { threshold } => Some(threshold),
+            DispositionDecision::DropBelowGlobal => None,
+        };
         // Out of range here this week (ACC-01): the occurrence model held it
         // back, and the daemon has already counted it under "occurrence". One
         // the station's own bar would have dropped anyway is dropped; the rest
@@ -887,42 +1109,43 @@ pub(super) fn event_processor(
                     } else {
                         Some(file_str.as_ref())
                     },
-                    lat: provenance.lat,
-                    lon: provenance.lon,
+                    lat: attribution.lat,
+                    lon: attribution.lon,
                     week: week_str.parse::<i32>().ok(),
-                    run_id: Some(provenance.run_id),
+                    run_id: attribution.run_id,
                     // The bar it would have been judged against, and the run's
                     // settings (DD-9): approval copies them onto the detection.
-                    cutoff: crate::daemon::disposition::applicable_threshold(
-                        detection.confidence,
-                        &detection.scientific_name,
-                        species_thresholds,
-                        global_confidence,
-                        dynamic.tracker(),
-                        now_ms,
-                    ),
-                    sensitivity: Some(provenance.sensitivity),
-                    overlap: Some(provenance.overlap),
+                    cutoff: applicable,
+                    sensitivity: attribution.sensitivity,
+                    overlap: attribution.overlap,
                     // The source that heard it (MSC-04): approval copies it onto
                     // the detection, and it is part of what tells two sources'
                     // rows for one bird in one second apart.
                     source: Some(&source_label),
                 };
-                if let Some(Err(e)) = state
+                match state
                     .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
                 {
-                    tracing::warn!(
-                        correlation_id,
-                        error = %e,
-                        species = %detection.scientific_name,
-                        "failed to quarantine a detection out of range here this week"
-                    );
+                    Some(Ok(())) => settled(&mut unsettled),
+                    Some(Err(e)) => {
+                        tracing::warn!(
+                            correlation_id,
+                            error = %e,
+                            species = %detection.scientific_name,
+                            "failed to quarantine a detection out of range here this week"
+                        );
+                    }
+                    // Halted: the database failed its integrity check. Not settled.
+                    None => {}
                 }
+            } else {
+                settled(&mut unsettled);
             }
             continue;
         }
 
         if matches!(disposition, DispositionDecision::DropBelowGlobal) {
+            settled(&mut unsettled);
             // Counted, not silent. "The station is detecting nothing" and
             // "the station is discarding everything" look identical from
             // outside, and the reason label is what tells them apart.
@@ -977,33 +1200,31 @@ pub(super) fn event_processor(
                 lat: None,
                 lon: None,
                 week: week_str.parse::<i32>().ok(),
-                run_id: Some(provenance.run_id),
+                run_id: attribution.run_id,
                 // The bar it would have been judged against, and the run's
                 // settings (DD-9): approval copies them onto the detection.
-                cutoff: crate::daemon::disposition::applicable_threshold(
-                    detection.confidence,
-                    &detection.scientific_name,
-                    species_thresholds,
-                    global_confidence,
-                    dynamic.tracker(),
-                    now_ms,
-                ),
-                sensitivity: Some(provenance.sensitivity),
-                overlap: Some(provenance.overlap),
+                cutoff: applicable,
+                sensitivity: attribution.sensitivity,
+                overlap: attribution.overlap,
                 // The source that heard it (MSC-04): approval copies it onto
                 // the detection, and it is part of what tells two sources'
                 // rows for one bird in one second apart.
                 source: Some(&source_label),
             };
-            if let Some(Err(e)) =
-                state.with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
+            match state
+                .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
             {
-                tracing::warn!(
-                    correlation_id,
-                    error = %e,
-                    species = %detection.scientific_name,
-                    "failed to quarantine a detection with an unset clock"
-                );
+                Some(Ok(())) => settled(&mut unsettled),
+                Some(Err(e)) => {
+                    tracing::warn!(
+                        correlation_id,
+                        error = %e,
+                        species = %detection.scientific_name,
+                        "failed to quarantine a detection with an unset clock"
+                    );
+                }
+                // Halted: the database failed its integrity check. Not settled.
+                None => {}
             }
             state.metrics().inc_detection_dropped("implausible_clock");
             continue;
@@ -1042,33 +1263,31 @@ pub(super) fn event_processor(
                 lat: None,
                 lon: None,
                 week: week_str.parse::<i32>().ok(),
-                run_id: Some(provenance.run_id),
+                run_id: attribution.run_id,
                 // The bar it would have been judged against, and the run's
                 // settings (DD-9): approval copies them onto the detection.
-                cutoff: crate::daemon::disposition::applicable_threshold(
-                    detection.confidence,
-                    &detection.scientific_name,
-                    species_thresholds,
-                    global_confidence,
-                    dynamic.tracker(),
-                    now_ms,
-                ),
-                sensitivity: Some(provenance.sensitivity),
-                overlap: Some(provenance.overlap),
+                cutoff: applicable,
+                sensitivity: attribution.sensitivity,
+                overlap: attribution.overlap,
                 // The source that heard it (MSC-04): approval copies it onto
                 // the detection, and it is part of what tells two sources'
                 // rows for one bird in one second apart.
                 source: Some(&source_label),
             };
-            if let Some(Err(e)) =
-                state.with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
+            match state
+                .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
             {
-                tracing::warn!(
-                    correlation_id,
-                    error = %e,
-                    species = %detection.scientific_name,
-                    "failed to quarantine a night-time detection"
-                );
+                Some(Ok(())) => settled(&mut unsettled),
+                Some(Err(e)) => {
+                    tracing::warn!(
+                        correlation_id,
+                        error = %e,
+                        species = %detection.scientific_name,
+                        "failed to quarantine a night-time detection"
+                    );
+                }
+                // Halted: the database failed its integrity check. Not settled.
+                None => {}
             }
             state.metrics().inc_detection_dropped("implausible_hour");
             continue;
@@ -1103,35 +1322,43 @@ pub(super) fn event_processor(
                     } else {
                         Some(file_str.as_ref())
                     },
-                    lat: provenance.lat,
-                    lon: provenance.lon,
+                    lat: attribution.lat,
+                    lon: attribution.lon,
                     week: week_str.parse::<i32>().ok(),
-                    run_id: Some(provenance.run_id),
+                    run_id: attribution.run_id,
                     // The per-species bar it failed, and the run's settings
                     // (DD-9): approval copies them onto the detection.
                     cutoff: Some(threshold),
-                    sensitivity: Some(provenance.sensitivity),
-                    overlap: Some(provenance.overlap),
+                    sensitivity: attribution.sensitivity,
+                    overlap: attribution.overlap,
                     // The source that heard it (MSC-04): approval copies it onto
                     // the detection, and it is part of what tells two sources'
                     // rows for one bird in one second apart.
                     source: Some(&source_label),
                 };
-                if let Some(Err(e)) = state
+                match state
                     .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
                 {
-                    tracing::warn!(
-                        correlation_id,
-                        error = %e,
-                        species = %detection.scientific_name,
-                        "failed to quarantine detection"
-                    );
+                    Some(Ok(())) => settled(&mut unsettled),
+                    Some(Err(e)) => {
+                        tracing::warn!(
+                            correlation_id,
+                            error = %e,
+                            species = %detection.scientific_name,
+                            "failed to quarantine detection"
+                        );
+                    }
+                    // Halted: the database failed its integrity check. Not settled.
+                    None => {}
                 }
                 state.metrics().inc_detection_dropped("quarantine");
                 continue;
             }
             // Dropped above, before the clock and hour gates.
-            DispositionDecision::DropBelowGlobal => continue,
+            DispositionDecision::DropBelowGlobal => {
+                settled(&mut unsettled);
+                continue;
+            }
             DispositionDecision::Accept { threshold } => threshold,
         };
 
@@ -1144,16 +1371,22 @@ pub(super) fn event_processor(
         // A detection whose own timestamp cannot be read is admitted rather
         // than gated: `Date`/`Time` are free-form text, and the alternative is
         // dropping a real detection because its filename was odd.
-        if let Some(at_secs) =
-            crate::daemon::duplicate::detection_secs(&detection.date, &detection.time)
+        //
+        // Checked here and recorded only once the row is stored: a detection
+        // the database refuses must not open an interval that suppresses the
+        // next real one (review F07).
+        let duplicate_at =
+            crate::daemon::duplicate::detection_secs(&detection.date, &detection.time);
+        if let Some(at_secs) = duplicate_at
             && let crate::daemon::duplicate::DuplicateVerdict::Suppress { since_last_secs } =
-                duplicates.admit_from(
+                duplicates.check(
                     &derive_source_label(&event.source_file),
                     &detection.scientific_name,
                     at_secs,
                     species_intervals.get(&state, &detection.scientific_name),
                 )
         {
+            settled(&mut unsettled);
             tracing::debug!(
                 correlation_id,
                 species = %detection.scientific_name,
@@ -1244,12 +1477,12 @@ pub(super) fn event_processor(
             // station resolved at start (NULL when it has none — never 0,0),
             // the threshold this row actually cleared, and the inference
             // settings of the run. BirdNET-Pi filled these on every row.
-            lat: provenance.lat,
-            lon: provenance.lon,
+            lat: attribution.lat,
+            lon: attribution.lon,
             cutoff: Some(admitted_at),
             week: Some(i64::from(detection.week)),
-            sensitivity: Some(provenance.sensitivity),
-            overlap: Some(provenance.overlap),
+            sensitivity: attribution.sensitivity,
+            overlap: attribution.overlap,
             file_name: &file_str,
             // Without this, every chunk of one recording shares the same
             // UNIQUE key (Date, Time, Sci_Name, File_Name) and only the
@@ -1295,7 +1528,7 @@ pub(super) fn event_processor(
             ),
             // Which model made it (R-1): the run registered before this
             // processor consumed its first event.
-            run_id: Some(provenance.run_id),
+            run_id: attribution.run_id,
             // Where the detection sits inside the clip just written (FR-1):
             // the lead-in as extracted, not as configured, and the window's
             // own length. NULL when no clip was written.
@@ -1310,13 +1543,15 @@ pub(super) fn event_processor(
         };
 
         let metrics = state.metrics();
-        // Liveness signal: a detection here proves the source produced a
-        // file the watcher picked up. Stamp the audio-source label
-        // accordingly. We parse the source label from the filename
-        // because the source supervisor doesn't currently feed liveness
-        // updates upstream; the filename's RTSP prefix is the only
-        // per-event tag the daemon sees (derived once above for the record).
-        metrics.set_source_up(&source_label, true);
+        // Liveness signal: a live detection proves the source produced a file
+        // the watcher picked up. The capture supervisor writes the same gauge
+        // on every tick and is the authority on whether a source is capturing;
+        // this stamp covers a source no supervisor watches. A detection an
+        // earlier stop kept proves only that a recording existed then, so it
+        // stamps nothing (review F16).
+        if !replayed {
+            metrics.set_source_up(&source_label, true);
+        }
 
         let db_start = std::time::Instant::now();
         // `with_ingest_db`, not `with_db`: PS-5. A database that has failed its
@@ -1324,6 +1559,16 @@ pub(super) fn event_processor(
         // the three writes that stop.
         let model_scores = db_model_scores(&detection.model_scores);
         let Some(insert_result) = state.with_ingest_db(|conn| {
+            // The row and its answers are one transaction, so a crash or a
+            // power cut between the two cannot leave a row without the answers
+            // it was stored with (review F15). A failure of the answers alone
+            // is rolled back to their savepoint and the row still commits, as
+            // before: the detail is lost, not the detection.
+            let tx = match conn.unchecked_transaction() {
+                Ok(tx) => tx,
+                Err(e) => return Err(birdnet_db::sqlite::DbError::from(e)),
+            };
+            let conn: &rusqlite::Connection = &tx;
             let inserted = birdnet_db::sqlite::insert_detection(conn, &record);
             // What each classifier said, kept beside the row so a page can show
             // it (migrations 57 and 58). Only for a row that was stored: an
@@ -1355,7 +1600,9 @@ pub(super) fn event_processor(
                      (or were already); the detection itself was"
                 );
             }
-            inserted
+            let rowid = inserted?;
+            tx.commit().map_err(birdnet_db::sqlite::DbError::from)?;
+            Ok(rowid)
         }) else {
             // Not a database failure — a refusal. Counted through the same
             // metric anyway, because that metric's contract is "a classified
@@ -1407,6 +1654,10 @@ pub(super) fn event_processor(
             }
             metrics.observe_inference_seconds(latency_ms_to_seconds(event.latency_ms));
             continue;
+        }
+        settled(&mut unsettled);
+        if let Some(at_secs) = duplicate_at {
+            duplicates.record(&source_label, &detection.scientific_name, at_secs);
         }
         metrics.inc_detection(&detection.scientific_name, detection.start);
         // The one place a species can confirm itself, and it is after the
@@ -1672,12 +1923,12 @@ pub(super) fn event_processor(
             date: detection.date.clone(),
             time: detection.time.clone(),
             week: detection.week,
-            latitude: provenance.lat,
-            longitude: provenance.lon,
+            latitude: attribution.lat,
+            longitude: attribution.lon,
             reason: notify_reason.unwrap_or_default(),
             cutoff: Some(admitted_at),
-            sensitivity: Some(provenance.sensitivity),
-            overlap: Some(provenance.overlap),
+            sensitivity: attribution.sensitivity,
+            overlap: attribution.overlap,
             listen_url: None,
             image_url: None,
             station_url: None,
@@ -1818,7 +2069,7 @@ pub(super) fn event_processor(
                 lat: bw_position.0,
                 lon: bw_position.1,
                 soundscape: None,
-                algorithm: provenance.algorithm.map(str::to_owned),
+                algorithm: attribution.algorithm.map(str::to_owned),
             };
             let client = bw.clone();
             let queue_state = state.clone();
@@ -2339,6 +2590,7 @@ mod tests {
         let waiter = std::thread::spawn(move || {
             let mut inbox = crate::daemon::spool::Inbox::new(
                 waiting_state.db_path(),
+                crate::daemon::spool::ClipWindow::of(&ExtractionConfig::default()),
                 waiting_state.subscribe_shutdown(),
             );
             let got = inbox.next(&rx, RESET_POLL, &mut || {

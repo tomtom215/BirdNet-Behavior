@@ -41,6 +41,6 @@ pub use read::{
 pub use search::{SearchTerm, like_contains, parse_search_term};
 pub(crate) use write::KEY_WHERE;
 pub use write::{
-    DetectionKey, delete_detection, delete_detection_at, insert_detection, relabel_detection,
-    relabel_detection_at, set_birdweather_soundscape,
+    DetectionKey, RecordedDetection, delete_detection, delete_detection_at, detection_recorded,
+    insert_detection, relabel_detection, relabel_detection_at, set_birdweather_soundscape,
 };

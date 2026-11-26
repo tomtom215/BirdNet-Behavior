@@ -57,6 +57,53 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
     Ok(conn.last_insert_rowid())
 }
 
+/// What names one detection of one analysis, whatever clip it was written
+/// with: a start that replays a detection an earlier stop kept asks for this
+/// before writing it, because a start killed between writing the row and
+/// recording that it had leaves the detection to be replayed (review F02).
+///
+/// The clip's name cannot be part of it: a replay cuts its clip again and
+/// gets a name of its own. The analysis's correlation id and the window's
+/// offset are what tell this detection from a second one of the same species
+/// in the same second on the same source.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RecordedDetection<'a> {
+    /// Detection date (`YYYY-MM-DD`).
+    pub date: &'a str,
+    /// Detection time (`HH:MM:SS`).
+    pub time: &'a str,
+    /// Scientific name.
+    pub sci_name: &'a str,
+    /// The source that heard it (`Source`).
+    pub source: &'a str,
+    /// The window's offset in its recording (`chunk_offset_secs`).
+    pub chunk_offset_secs: f64,
+    /// The analysis's correlation id.
+    pub correlation_id: &'a str,
+}
+
+/// Whether the detection `key` names is already a row.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detection_recorded(conn: &Connection, key: &RecordedDetection<'_>) -> Result<bool, DbError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM detections \
+          WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3 AND COALESCE(Source, '') = ?4 \
+            AND chunk_offset_secs = ?5 AND correlation_id = ?6)",
+        params![
+            key.date,
+            key.time,
+            key.sci_name,
+            key.source,
+            key.chunk_offset_secs,
+            key.correlation_id
+        ],
+        |r| r.get(0),
+    )?)
+}
+
 /// Record the `BirdWeather` soundscape id a detection was posted with
 /// (migration 45). Returns `false` if no row has that rowid.
 ///
