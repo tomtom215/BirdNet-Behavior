@@ -499,6 +499,16 @@ pub fn process_and_infer_filtered(
     let (filtered_predictions, mut tally) = chunk_filters.apply_tallied(&starts, &all_predictions);
     tally.date = chunks.first().map_or_default(|c| c.recording.date.clone());
     tally.failed_windows = failed_windows;
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a window's end is a non-negative number of seconds far below u64's range"
+    )]
+    {
+        tally.decoded_ms = chunks.last().map_or(0, |c| {
+            (f64::from(c.end_secs.max(0.0)) * 1000.0).round() as u64
+        });
+    }
     if failed_windows > 0 {
         tracing::warn!(
             correlation_id,
@@ -1454,6 +1464,22 @@ mod tests {
             !out[1].privacy_unassessed,
             "nothing could hear people to miss"
         );
+    }
+
+    /// Review F10: the tally says how much audio decoded, which the effort
+    /// ledger credits instead of the header's claim; here a whole 3 s file,
+    /// every window answered.
+    #[test]
+    fn a_files_tally_says_how_much_audio_decoded() {
+        let file = analysed_with(
+            &[],
+            &SECOND_ONLY,
+            None,
+            crate::inference::species_filter::SpeciesFilterConfig::default(),
+            crate::detection::noise::NoiseFilter::new(0.0, Vec::new()),
+        );
+        assert_eq!(file.tally.decoded_ms, 3000, "{:?}", file.tally);
+        assert_eq!(file.tally.failed_windows, 0);
     }
 
     /// The counterpart: when no routed classifier answers, the window is still

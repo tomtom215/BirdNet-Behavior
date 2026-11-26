@@ -183,7 +183,14 @@ fn throughput_observer(
                     // The effort ledger's denominator: only audio analysed is
                     // listening (RES-01), and a window no classifier answered
                     // was not analysed (review F18).
-                    if let Some(secs) = birdnet_core::audio::decode::probe_duration_secs(path) {
+                    // The audio that decoded, not what the header claims
+                    // (review F10); the header only where that is not known.
+                    let secs = if tally.decoded_ms > 0 {
+                        Some(decoded_secs(tally))
+                    } else {
+                        birdnet_core::audio::decode::probe_duration_secs(path)
+                    };
+                    if let Some(secs) = secs {
                         crate::integrations::effort::note_analysed(
                             &state,
                             path,
@@ -207,6 +214,15 @@ fn answered_share(tally: &birdnet_core::detection::FilterTally) -> f64 {
         return 1.0;
     }
     tally.windows.saturating_sub(tally.failed_windows) as f64 / tally.windows as f64
+}
+
+/// [`birdnet_core::detection::FilterTally::decoded_ms`] in seconds.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "milliseconds of one recording are far below 2^52"
+)]
+fn decoded_secs(tally: &birdnet_core::detection::FilterTally) -> f64 {
+    tally.decoded_ms as f64 / 1000.0
 }
 
 /// The segments whose speech the human-sound rule masked (RES-28): marked
@@ -1381,6 +1397,32 @@ mod tests {
         assert!(
             (total - 24.0).abs() < 1e-6,
             "credited {total} s, not 9 + 15"
+        );
+        // Review F10: a file whose header claims 15 s and of which 1 s decoded
+        // (a WAV cut short) is 1 s of listening.
+        let cut = tmp.path().join("2026-05-19-birdnet-src_a-09:00:30.wav");
+        write_segment(&cut);
+        observer.analysed(&cut);
+        observer.filtered(
+            &cut,
+            &birdnet_core::detection::FilterTally {
+                windows: 1,
+                decoded_ms: 1000,
+                ..birdnet_core::detection::FilterTally::default()
+            },
+        );
+        crate::integrations::effort::tick(&state, 0.0);
+        let total: f64 = state.with_db(|c| {
+            c.query_row(
+                "SELECT COALESCE(SUM(seconds), 0) FROM recording_effort WHERE source = 'src_a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert!(
+            (total - 25.0).abs() < 1e-6,
+            "credited {total} s: the header's 15 s, not the 1 s that decoded"
         );
     }
 

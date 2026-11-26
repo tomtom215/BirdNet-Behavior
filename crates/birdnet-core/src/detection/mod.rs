@@ -75,6 +75,11 @@ pub struct FilterTally {
     /// Windows no routed classifier answered (review F18): not listening, and
     /// not counted as effort.
     pub failed_windows: u64,
+    /// Milliseconds of audio that decoded, to the end of the last window
+    /// (review F10); `0` when not known. A truncated file's header can claim
+    /// more: a WAV cut short by a crash says 15 s and holds 1 s, and ffmpeg's
+    /// placeholder header says nothing at all.
+    pub decoded_ms: u64,
 }
 
 impl FilterTally {
