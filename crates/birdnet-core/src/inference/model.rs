@@ -679,6 +679,7 @@ impl BirdNetModel {
             detections,
             human_score,
             human_rank,
+            privacy_unassessed: false,
             loudest_noise,
         })
     }

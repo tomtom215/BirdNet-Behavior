@@ -219,6 +219,8 @@ fn infer_chunk(
     let mut human_score = 0.0_f32;
     let mut human_rank: Option<usize> = None;
     let mut loudest_noise = None;
+    // Whether a classifier able to hear people failed this window (F08).
+    let mut privacy_unassessed = false;
     // The first classifier error, returned only if no routed classifier
     // answered: one model failing must not silence the others (`e853776`).
     let mut first_error = None;
@@ -253,6 +255,7 @@ fn infer_chunk(
                 "no audio was prepared at {rate} Hz for classifier `{model_id}`"
             ));
             record_window(registered, Err((ErrorClass::Inference, Some(&e))), now);
+            privacy_unassessed |= registered.model.has_human_labels();
             first_error.get_or_insert(e);
             windows.push((idx, false));
             continue;
@@ -280,6 +283,7 @@ fn infer_chunk(
             }
             Err(e) => {
                 record_window(registered, Err((ErrorClass::Inference, Some(&e))), now);
+                privacy_unassessed |= registered.model.has_human_labels();
                 first_error.get_or_insert(e);
                 windows.push((idx, false));
                 continue;
@@ -331,6 +335,7 @@ fn infer_chunk(
         detections,
         human_score,
         human_rank,
+        privacy_unassessed,
         loudest_noise,
     })
 }
@@ -747,6 +752,17 @@ mod tests {
         bars: (Option<f32>, Option<f32>),
         shared: usize,
     ) -> ClassifierRegistry {
+        two_classifiers_naming(dir, bars, shared, None)
+    }
+
+    /// As [`two_classifiers_with`], the primary's first class named
+    /// `primary_first` when given (a human class, for the privacy tests).
+    fn two_classifiers_naming(
+        dir: &Path,
+        bars: (Option<f32>, Option<f32>),
+        shared: usize,
+        primary_first: Option<&str>,
+    ) -> ClassifierRegistry {
         use crate::inference::model::ModelConfig;
         use crate::inference::registry::ModelSpec;
         const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
@@ -758,7 +774,16 @@ mod tests {
                 .join("\n")
         };
         let labels = dir.join("labels.txt");
-        std::fs::write(&labels, names(11)).unwrap();
+        let primary_names = primary_first.map_or_else(
+            || names(11),
+            |first| {
+                std::iter::once(first.to_owned())
+                    .chain((1..11).map(|i| format!("Species{i} bird_Bird {i}")))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            },
+        );
+        std::fs::write(&labels, primary_names).unwrap();
         // The second classifier shares the primary's first `shared` species;
         // its other classes are species the primary does not have. Always one
         // name per class it scores: a labels file of another length is
@@ -1256,6 +1281,54 @@ mod tests {
         infer_chunk(&mut registry, &[0], &chunk_of(144_000), 20).unwrap();
         assert_eq!(registry.primary().model.last_non_finite_scores(), 0);
         assert_eq!(registry.health()[0].1.consecutive_failures, 0);
+    }
+
+    /// Review F08: a window that a classifier able to hear people failed has
+    /// not been judged for speech, whatever the others said, and a privacy
+    /// filter masks it rather than keep audio nobody assessed. The primary
+    /// here names a human class and fails the window (V2.4 refuses a 60 000
+    /// value chunk); the second, which names none, answers it.
+    ///
+    /// Counterparts: with the privacy filter off nothing is masked, and the
+    /// same failure of a primary that cannot hear people masks nothing.
+    #[test]
+    fn a_window_a_classifier_that_hears_people_failed_is_masked() {
+        use crate::detection::privacy::PrivacyFilter;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers_naming(
+            tmp.path(),
+            (None, None),
+            11,
+            Some("Human vocal_Human vocal"),
+        );
+        assert!(
+            registry.primary().model.has_human_labels(),
+            "precondition: the primary can hear people"
+        );
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk_of(60_000), 20)
+            .expect("the second classifier answers");
+        assert_eq!(
+            registry.health()[0].1.consecutive_failures,
+            1,
+            "precondition: the primary failed the window"
+        );
+        assert_eq!(
+            PrivacyFilter::new(0.03).masked_windows(std::slice::from_ref(&out)),
+            [true],
+            "a window no classifier able to hear people judged was kept"
+        );
+        assert_eq!(PrivacyFilter::new(0.0).masked_windows(&[out]), [false]);
+
+        let other = tempfile::tempdir().unwrap();
+        let mut deaf = two_classifiers(other.path());
+        assert!(!deaf.primary().model.has_human_labels(), "precondition");
+        let out = infer_chunk(&mut deaf, &[0, 1], &chunk_of(60_000), 20).unwrap();
+        assert_eq!(deaf.health()[0].1.consecutive_failures, 1, "precondition");
+        assert_eq!(
+            PrivacyFilter::new(0.03).masked_windows(&[out]),
+            [false],
+            "a failure that cost no privacy coverage masked the window"
+        );
     }
 
     /// The counterpart: when no routed classifier answers, the window is still

@@ -125,6 +125,11 @@ pub struct ChunkPrediction {
     /// output), taken, like [`Self::human_score`], before the detection
     /// threshold and the top-N cut. A non-finite human score ranks `0`.
     pub human_rank: Option<usize>,
+    /// A routed classifier whose labels name a human class failed this
+    /// chunk, so [`Self::human_score`] and [`Self::human_rank`] are what the
+    /// others said and nobody judged it for speech (review F08). A privacy
+    /// filter that is on masks such a chunk rather than keep its audio.
+    pub privacy_unassessed: bool,
     /// The highest-scoring watched noise class (see
     /// [`crate::inference::model::BirdNetModel::watch_noise_classes`]) in this
     /// chunk, read like [`Self::human_score`] from the model output *before*

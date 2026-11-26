@@ -116,7 +116,7 @@ impl PrivacyFilter {
     fn flags(&self, chunk: &ChunkPrediction) -> bool {
         let by_score = self.threshold > 0.0 && chunk.human_score >= self.threshold;
         let by_rank = chunk.human_rank.is_some_and(|rank| rank < self.rank_cutoff);
-        by_score || by_rank
+        by_score || by_rank || chunk.privacy_unassessed
     }
 
     /// Which chunks this filter masks: every chunk a human was heard in, and
@@ -332,6 +332,7 @@ mod tests {
             detections: vec![make_detection("Turdus merula", "Eurasian Blackbird", 0.9)],
             human_score,
             human_rank: None,
+            privacy_unassessed: false,
             loudest_noise: None,
         }
     }
@@ -373,6 +374,7 @@ mod tests {
                 }],
                 human_score: if speech.contains(&i) { 0.8 } else { 0.0 },
                 human_rank: None,
+                privacy_unassessed: false,
                 loudest_noise: None,
             })
             .collect();
@@ -462,6 +464,7 @@ mod tests {
             detections: vec![make_detection("Homo sapiens", "Human", 0.02)],
             human_score: 0.02,
             human_rank: None,
+            privacy_unassessed: false,
             loudest_noise: None,
         }];
         assert!(

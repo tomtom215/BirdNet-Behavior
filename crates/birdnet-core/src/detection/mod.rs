@@ -196,6 +196,7 @@ mod chunk_filter_tests {
             detections,
             human_score: 0.0,
             human_rank: None,
+            privacy_unassessed: false,
             loudest_noise: None,
         }
     }
@@ -206,6 +207,7 @@ mod chunk_filter_tests {
             detections,
             human_score: 0.8,
             human_rank: None,
+            privacy_unassessed: false,
             loudest_noise: None,
         }
     }
