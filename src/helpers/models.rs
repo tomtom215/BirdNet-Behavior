@@ -180,6 +180,24 @@ pub fn plan(
     )
 }
 
+/// The extra classifiers' files the configuration names, as [`plan`] reads
+/// them: each model file, with its labels file when one is set. For the
+/// station's own repair of its model files (MDL-10), which must look after the
+/// files the plan would load and no others.
+#[must_use]
+pub fn configured_extra_files(config: Option<&Config>) -> Vec<(PathBuf, Option<PathBuf>)> {
+    EXTRA_MODEL_KEYS
+        .iter()
+        .filter_map(|keys| {
+            let model = setting(config, keys.path_key)?;
+            Some((
+                PathBuf::from(model),
+                setting(config, keys.labels_key).map(PathBuf::from),
+            ))
+        })
+        .collect()
+}
+
 /// One classifier setting as [`plan`] reads it: `BIRDNET_<key>` from the
 /// environment, else `<key>` from the configuration file, trimmed, and absent
 /// when empty.

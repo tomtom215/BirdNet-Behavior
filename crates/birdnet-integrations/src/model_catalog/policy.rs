@@ -28,6 +28,12 @@ pub const STALL_TIMEOUT_ENV: &str = "BIRDNET_MODEL_STALL_TIMEOUT";
 /// a site with no internet or a metered one.
 pub const MIRROR_ENV: &str = "BIRDNET_MODEL_MIRROR";
 
+/// Seconds between a running station's looks at its model files (MDL-10).
+///
+/// Also the wait between its attempts to fetch one again while it stays
+/// unavailable. An hour by default; tests set a few seconds.
+pub const REPAIR_INTERVAL_ENV: &str = "BIRDNET_MODEL_REPAIR_INTERVAL";
+
 /// Every environment variable [`FetchPolicy::from_env`] reads, so the binary
 /// does not report them as variables nothing reads.
 pub const POLICY_ENV_KEYS: &[&str] = &[
@@ -35,6 +41,7 @@ pub const POLICY_ENV_KEYS: &[&str] = &[
     CONNECT_TIMEOUT_ENV,
     STALL_TIMEOUT_ENV,
     MIRROR_ENV,
+    REPAIR_INTERVAL_ENV,
 ];
 
 /// The default connect timeout.
@@ -43,6 +50,10 @@ const DEFAULT_CONNECT: Duration = Duration::from_secs(30);
 const DEFAULT_STALL: Duration = Duration::from_secs(60);
 /// The default waits between rounds.
 const DEFAULT_WAITS: [Duration; 2] = [Duration::from_secs(30), Duration::from_secs(90)];
+/// The default repair interval: slow, because a station that cannot reach its
+/// origins now will mostly not reach them a minute from now either, and every
+/// failed attempt is lines in the journal.
+const DEFAULT_REPAIR_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 /// The network side of an install: timeouts, retries and an operator's mirror.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -57,6 +68,13 @@ pub struct FetchPolicy {
     pub retry_waits: Vec<Duration>,
     /// An operator's mirror, tried first: `<mirror>/<installed file name>`.
     pub mirror: Option<String>,
+    /// Fetch from the operator's mirror alone, never from the catalogue's
+    /// origins: what a station started with `--offline` does on its own
+    /// (MDL-10). Never read from the environment; the caller decides.
+    pub mirror_only: bool,
+    /// How often a running station looks at its model files again, and tries
+    /// once more to fetch one that is still unavailable (MDL-10).
+    pub repair_interval: Duration,
 }
 
 impl Default for FetchPolicy {
@@ -66,6 +84,8 @@ impl Default for FetchPolicy {
             stall_timeout: DEFAULT_STALL,
             retry_waits: DEFAULT_WAITS.to_vec(),
             mirror: None,
+            mirror_only: false,
+            repair_interval: DEFAULT_REPAIR_INTERVAL,
         }
     }
 }
@@ -97,6 +117,7 @@ impl FetchPolicy {
         for (key, slot) in [
             (CONNECT_TIMEOUT_ENV, &mut policy.connect_timeout),
             (STALL_TIMEOUT_ENV, &mut policy.stall_timeout),
+            (REPAIR_INTERVAL_ENV, &mut policy.repair_interval),
         ] {
             if let Some(raw) = get(key) {
                 if let Some(d) = parse_positive_secs(&raw) {
@@ -116,14 +137,32 @@ impl FetchPolicy {
     }
 
     /// The origins for a file installed as `name`: the operator's mirror, if
-    /// any, then `catalogue` in its order.
+    /// any, then `catalogue` in its order, unless [`Self::mirror_only`].
     #[must_use]
     pub fn origins_for(&self, name: &str, catalogue: &[&str]) -> Vec<String> {
+        let catalogue: &[&str] = if self.mirror_only { &[] } else { catalogue };
         self.mirror
             .iter()
             .map(|m| format!("{m}/{name}"))
             .chain(catalogue.iter().map(|u| (*u).to_owned()))
             .collect()
+    }
+
+    /// Whether this policy has anywhere to fetch from: not a mirror-only
+    /// policy with no mirror.
+    #[must_use]
+    pub const fn can_fetch(&self) -> bool {
+        !self.mirror_only || self.mirror.is_some()
+    }
+
+    /// This policy with one round of the origins and no waits: a running
+    /// station's later attempts, each already an interval apart.
+    #[must_use]
+    pub fn one_round(&self) -> Self {
+        Self {
+            retry_waits: Vec::new(),
+            ..self.clone()
+        }
     }
 }
 
@@ -166,6 +205,8 @@ mod tests {
             vec![Duration::from_secs(30), Duration::from_secs(90)]
         );
         assert_eq!(p.mirror, None);
+        assert!(!p.mirror_only);
+        assert_eq!(p.repair_interval, Duration::from_secs(3600));
     }
 
     #[test]
@@ -175,7 +216,9 @@ mod tests {
             (CONNECT_TIMEOUT_ENV, "5"),
             (STALL_TIMEOUT_ENV, "7"),
             (MIRROR_ENV, "http://mirror.lan/models/"),
+            (REPAIR_INTERVAL_ENV, "9"),
         ]);
+        assert_eq!(p.repair_interval, Duration::from_secs(9));
         assert_eq!(p.retry_waits, vec![Duration::ZERO, Duration::ZERO]);
         assert_eq!(p.connect_timeout, Duration::from_secs(5));
         assert_eq!(p.stall_timeout, Duration::from_secs(7));
@@ -191,7 +234,35 @@ mod tests {
             (RETRY_WAITS_ENV, "soon"),
             (STALL_TIMEOUT_ENV, "0"),
             (CONNECT_TIMEOUT_ENV, "x"),
+            (REPAIR_INTERVAL_ENV, "0"),
         ]);
         assert_eq!(bad, FetchPolicy::default());
+    }
+
+    /// A mirror-only policy (an `--offline` station) asks the operator's
+    /// mirror and nothing else, and one with no mirror has nowhere to go; the
+    /// counterpart asks the catalogue's origins after the mirror.
+    #[test]
+    fn a_mirror_only_policy_never_reaches_the_catalogue() {
+        let mut p = with(&[(MIRROR_ENV, "http://mirror.lan")]);
+        assert!(p.can_fetch());
+        assert_eq!(
+            p.origins_for("m.onnx", &["https://a/x"]),
+            vec![
+                "http://mirror.lan/m.onnx".to_owned(),
+                "https://a/x".to_owned()
+            ]
+        );
+        p.mirror_only = true;
+        assert!(p.can_fetch());
+        assert_eq!(
+            p.origins_for("m.onnx", &["https://a/x"]),
+            vec!["http://mirror.lan/m.onnx".to_owned()]
+        );
+        p.mirror = None;
+        assert!(!p.can_fetch());
+        assert!(p.origins_for("m.onnx", &["https://a/x"]).is_empty());
+        assert!(FetchPolicy::default().can_fetch());
+        assert!(p.one_round().retry_waits.is_empty());
     }
 }

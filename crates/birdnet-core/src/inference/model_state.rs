@@ -450,6 +450,151 @@ impl FilterState {
     }
 }
 
+/// One model file the configuration names and the model catalogue knows, and
+/// what the station is doing to keep it the file this build pins (MDL-10).
+///
+/// Published beside [`ModelsState`], not inside it: that is what the detector
+/// made of the files at its start, and this is the station looking after the
+/// files while it runs. A file damaged or lost is fetched again in the
+/// background; once it verifies, a station whose detector, classifier or
+/// filter was left without it restarts to load it, and one that is already
+/// using it does not.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ModelFile {
+    /// The catalogue id of the model the file belongs to (`birdnet-v24`).
+    pub catalogue_id: String,
+    /// The file, as the configuration names it.
+    pub path: PathBuf,
+    /// What the station is doing about it.
+    pub repair: RepairState,
+}
+
+/// What the station is doing about one model file ([`ModelFile`]). Times are
+/// seconds since the Unix epoch.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum RepairState {
+    /// Not looked at yet: the first check hashes the whole file.
+    Checking,
+    /// The bytes are the ones this build pins.
+    Verified,
+    /// Missing or damaged, and being fetched again now.
+    Fetching {
+        /// When this attempt started.
+        since_unix: u64,
+        /// Bytes of the file on the disk so far.
+        done: u64,
+        /// Bytes it has in all.
+        total: u64,
+    },
+    /// Missing or damaged; the last attempt to fetch it failed, and the
+    /// station tries again at `at_unix`.
+    WillRetry {
+        /// When the next attempt is.
+        at_unix: u64,
+        /// Attempts made so far, each one round of every origin.
+        attempts: u32,
+        /// Why the last one failed.
+        why: String,
+    },
+    /// Missing or damaged, and this station has nowhere it may fetch it from
+    /// (started `--offline` without `BIRDNET_MODEL_MIRROR`). It looks again
+    /// at `looks_again_unix`, for a file put in place by hand.
+    NotFetched {
+        /// Why, and what to do.
+        why: String,
+        /// When it looks at the file again.
+        looks_again_unix: u64,
+    },
+    /// It was missing or damaged, and now verifies.
+    Repaired {
+        /// When it verified.
+        at_unix: u64,
+        /// What it took to use it.
+        restart: RepairRestart,
+    },
+}
+
+/// What using a repaired file took ([`RepairState::Repaired`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairRestart {
+    /// Nothing: whatever reads the file had it loaded already.
+    NotNeeded,
+    /// The station is restarting to load it.
+    Restarting,
+    /// It needs a restart, and nothing here can restart this process.
+    NeededByHand,
+}
+
+impl RepairState {
+    /// Every [`Self::code`], for an exposition that lists each state.
+    pub const CODES: &'static [&'static str] = &[
+        "checking",
+        "verified",
+        "fetching",
+        "will_retry",
+        "not_fetched",
+        "repaired",
+    ];
+
+    /// The stable identifier of this state.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Checking => "checking",
+            Self::Verified => "verified",
+            Self::Fetching { .. } => "fetching",
+            Self::WillRetry { .. } => "will_retry",
+            Self::NotFetched { .. } => "not_fetched",
+            Self::Repaired { .. } => "repaired",
+        }
+    }
+
+    /// Whether the file is the one this build pins.
+    #[must_use]
+    pub const fn is_verified(&self) -> bool {
+        matches!(self, Self::Verified | Self::Repaired { .. })
+    }
+}
+
+impl ModelFile {
+    /// What a person reads about this file. Times are given as the epoch
+    /// seconds they are; a page renders them in the station's own clock.
+    #[must_use]
+    pub fn message(&self) -> String {
+        let file = self.path.display();
+        match &self.repair {
+            RepairState::Checking => format!("{file} has not been checked yet"),
+            RepairState::Verified => format!("{file} is the file this build pins"),
+            RepairState::Fetching { done, total, .. } => format!(
+                "{file} is missing or damaged, and the station is fetching it again \
+                 ({done} of {total} bytes)"
+            ),
+            RepairState::WillRetry {
+                at_unix,
+                attempts,
+                why,
+            } => format!(
+                "{file} is missing or damaged, and {attempts} attempt(s) to fetch it again \
+                 failed ({why}); the station will retry at {at_unix} (Unix time)"
+            ),
+            RepairState::NotFetched { why, .. } => {
+                format!("{file} is missing or damaged, and is not being fetched: {why}")
+            }
+            RepairState::Repaired { restart, .. } => match restart {
+                RepairRestart::NotNeeded => format!("{file} was fetched again and verifies"),
+                RepairRestart::Restarting => format!(
+                    "{file} was fetched again and verifies; the station is restarting to use it"
+                ),
+                RepairRestart::NeededByHand => {
+                    format!("{file} was fetched again and verifies; restart the station to use it")
+                }
+            },
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -630,6 +775,63 @@ mod tests {
             state.message().contains("local:<primary>+perch"),
             "{}",
             state.message()
+        );
+    }
+
+    /// Each repair state has its code listed once, in order, and only the
+    /// two states that mean "the file is the pinned one" say so.
+    #[test]
+    fn every_repair_state_has_its_code_listed_once() {
+        let states = [
+            RepairState::Checking,
+            RepairState::Verified,
+            RepairState::Fetching {
+                since_unix: 0,
+                done: 0,
+                total: 0,
+            },
+            RepairState::WillRetry {
+                at_unix: 0,
+                attempts: 1,
+                why: String::new(),
+            },
+            RepairState::NotFetched {
+                why: String::new(),
+                looks_again_unix: 0,
+            },
+            RepairState::Repaired {
+                at_unix: 0,
+                restart: RepairRestart::NotNeeded,
+            },
+        ];
+        assert_eq!(
+            states.iter().map(RepairState::code).collect::<Vec<_>>(),
+            RepairState::CODES
+        );
+        assert_eq!(
+            states
+                .iter()
+                .filter(|s| s.is_verified())
+                .map(RepairState::code)
+                .collect::<Vec<_>>(),
+            ["verified", "repaired"]
+        );
+        let file = ModelFile {
+            catalogue_id: "birdnet-v24".to_owned(),
+            path: PathBuf::from("/m/birdnet-v24.onnx"),
+            repair: RepairState::WillRetry {
+                at_unix: 1_800_000_000,
+                attempts: 2,
+                why: "connection refused".to_owned(),
+            },
+        };
+        let json = serde_json::to_value(&file).unwrap();
+        assert_eq!(json["repair"]["state"], "will_retry");
+        assert_eq!(json["repair"]["at_unix"], 1_800_000_000_u64);
+        assert!(
+            file.message().contains("retry at 1800000000"),
+            "{}",
+            file.message()
         );
     }
 }

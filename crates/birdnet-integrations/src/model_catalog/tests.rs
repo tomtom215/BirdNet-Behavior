@@ -7,9 +7,9 @@ mod origin;
 use std::path::Path;
 
 use super::{
-    CATALOG, FREE_SPACE_MARGIN, FileSpec, FileState, InstallError, Rehash, Use, find, fits,
-    free_space_bytes, install, installed_paths, installed_state, labels_origins, model_origins,
-    record, require_digest, stage,
+    CATALOG, FREE_SPACE_MARGIN, FetchPolicy, FileSpec, FileState, InstallError, Part, Rehash, Use,
+    find, fits, free_space_bytes, install, install_part, installed_paths, installed_state,
+    labels_origins, model_origins, part_at, part_state, record, require_digest, stage,
 };
 
 /// The sha256 of `body`, leaked to the `'static` the catalogue's fields are.
@@ -137,6 +137,55 @@ fn embedded_labels_install_without_a_network_and_verify() {
     .expect_err("wrong bytes must not verify");
     assert!(matches!(err, InstallError::Integrity { .. }), "{err:?}");
     assert!(!refused.exists());
+}
+
+/// One file of an entry is installed alone (MDL-10): a damaged V2.4 labels
+/// file is written again from the binary, and the model beside it, which is
+/// not there, is neither fetched nor needed. Named by its installed name, a
+/// file is the entry's model or labels; under any other name it is neither.
+#[test]
+fn one_part_of_an_entry_is_installed_without_the_other() {
+    let entry = find("birdnet-v24").expect("in the catalogue");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (model, labels) = installed_paths(entry, dir.path());
+    let labels = labels.expect("V2.4 ships labels");
+    assert_eq!(part_at(entry, dir.path(), &model), Some(Part::Model));
+    assert_eq!(part_at(entry, dir.path(), &labels), Some(Part::Labels));
+    assert_eq!(
+        part_at(entry, dir.path(), &dir.path().join("own.onnx")),
+        None
+    );
+
+    std::fs::write(&labels, "damaged").expect("write");
+    assert_eq!(
+        part_state(entry, dir.path(), Part::Labels, Rehash::Always),
+        Some(FileState::Damaged)
+    );
+    // No origin at all: a network would be needed for anything but the
+    // embedded labels.
+    let offline = FetchPolicy {
+        mirror_only: true,
+        ..FetchPolicy::default()
+    };
+    install_part(entry.id, dir.path(), Part::Labels, &offline, &mut |_| {})
+        .expect("the embedded labels need no network");
+    assert_eq!(
+        part_state(entry, dir.path(), Part::Labels, Rehash::Always),
+        Some(FileState::Verified)
+    );
+    assert!(!model.exists(), "the model was not asked for");
+    assert_eq!(
+        part_state(entry, dir.path(), Part::Model, Rehash::Always),
+        Some(FileState::Missing)
+    );
+    let err = install_part(entry.id, dir.path(), Part::Model, &offline, &mut |_| {})
+        .expect_err("a mirror-only policy with no mirror has nowhere to fetch the model");
+    assert!(matches!(err, InstallError::Network(_)), "{err:?}");
+    let range = find("birdnet-v24-range-v2").expect("in the catalogue");
+    assert_eq!(
+        part_state(range, dir.path(), Part::Labels, Rehash::Never),
+        None
+    );
 }
 
 /// Ids are what an operator types and what the installed file is named, so

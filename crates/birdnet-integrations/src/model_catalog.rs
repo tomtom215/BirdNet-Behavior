@@ -80,8 +80,8 @@ mod record;
 mod stage;
 
 pub use policy::{
-    CONNECT_TIMEOUT_ENV, FetchPolicy, MIRROR_ENV, POLICY_ENV_KEYS, RETRY_WAITS_ENV,
-    STALL_TIMEOUT_ENV,
+    CONNECT_TIMEOUT_ENV, FetchPolicy, MIRROR_ENV, POLICY_ENV_KEYS, REPAIR_INTERVAL_ENV,
+    RETRY_WAITS_ENV, STALL_TIMEOUT_ENV,
 };
 pub use record::{FileState, InstallState, Rehash};
 
@@ -932,6 +932,83 @@ pub fn reverify_installed(dir: &Path) -> Vec<(&'static CatalogEntry, InstallStat
         .filter(|e| installed_paths(e, dir).0.exists())
         .map(|e| (e, installed_state(e, dir, Rehash::Always)))
         .collect()
+}
+
+/// One of the files an entry installs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Part {
+    /// The ONNX model.
+    Model,
+    /// Its labels file.
+    Labels,
+}
+
+/// Which of `entry`'s installed files `path` is, by the name [`install`]
+/// gives it in `dir`; `None` for any other name.
+#[must_use]
+pub fn part_at(entry: &CatalogEntry, dir: &Path, path: &Path) -> Option<Part> {
+    let (model, labels) = installed_paths(entry, dir);
+    if model == path {
+        Some(Part::Model)
+    } else if labels.as_deref() == Some(path) {
+        Some(Part::Labels)
+    } else {
+        None
+    }
+}
+
+/// [`installed_state`] for one of the entry's files; `None` for the labels
+/// of an entry that ships none.
+#[must_use]
+pub fn part_state(
+    entry: &CatalogEntry,
+    dir: &Path,
+    part: Part,
+    rehash: Rehash,
+) -> Option<FileState> {
+    match part {
+        Part::Model => Some(
+            entry
+                .model_spec(&FetchPolicy::default())
+                .state_in(dir, rehash),
+        ),
+        Part::Labels => entry
+            .labels_spec(&FetchPolicy::default())
+            .map(|spec| spec.state_in(dir, rehash)),
+    }
+}
+
+/// Install one of an entry's files and nothing else, as [`install`] does.
+///
+/// The station's repair of a file its configuration names (MDL-10), which
+/// must not download a 541 MB model that nothing configured to replace the
+/// labels file beside it.
+///
+/// # Errors
+///
+/// As [`install`]; [`InstallError::Unverifiable`] for the labels of an entry
+/// that ships none.
+pub fn install_part(
+    id: &str,
+    dest_dir: &Path,
+    part: Part,
+    policy: &FetchPolicy,
+    progress: &mut dyn FnMut(&Progress),
+) -> Result<(), InstallError> {
+    let entry = lookup(id)?;
+    let spec = match part {
+        Part::Model => entry.model_spec(policy),
+        Part::Labels => entry
+            .labels_spec(policy)
+            .ok_or_else(|| InstallError::Unverifiable {
+                id: entry.id,
+                why: "it ships no labels file".to_owned(),
+            })?,
+    };
+    require_digest(entry.id, spec.sha256)?;
+    fs::create_dir_all(dest_dir)?;
+    let mut net = download::Network::new(policy);
+    ensure_file(entry.id, &spec, dest_dir, None, &mut net, progress)
 }
 
 /// Install a model from the catalogue into `dest_dir`, with the network

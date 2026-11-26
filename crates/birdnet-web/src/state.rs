@@ -1942,6 +1942,16 @@ impl AppState {
         }
     }
 
+    /// Restart the station the way the restart control does, and say whether
+    /// a restart is under way: `false` when nothing here can bring the process
+    /// back ([`Self::restart_support`]). For the application's own model
+    /// repair (MDL-10), which needs the restart the browser's control makes.
+    #[must_use]
+    pub fn request_restart(&self) -> bool {
+        crate::routes::admin::system_controls::service::request_restart(self.restart_support())
+            == crate::routes::admin::system_controls::service::RestartOutcome::Signalled
+    }
+
     /// Shared handle to the ingest-halt latch, for the maintenance loop to set
     /// when the daily integrity check confirms the database is corrupt.
     ///

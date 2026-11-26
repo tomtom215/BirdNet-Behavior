@@ -115,6 +115,7 @@ pub const TINY_META_LABELS: &str = "Pica pica_Eurasian Magpie\nParus major_Great
 pub struct StationDir {
     dir: tempfile::TempDir,
     settings: Vec<String>,
+    env: Vec<(String, String)>,
 }
 
 impl StationDir {
@@ -132,7 +133,18 @@ impl StationDir {
             format!("RECS_DIR={}", dir.path().join("watch").display()),
             "CONFIDENCE=0.01".to_owned(),
         ];
-        Self { dir, settings }
+        Self {
+            dir,
+            settings,
+            env: Vec::new(),
+        }
+    }
+
+    /// Set an environment variable for the station's process (it starts
+    /// from an empty environment otherwise).
+    pub fn env(&mut self, key: &str, value: impl std::fmt::Display) -> &mut Self {
+        self.env.push((key.to_owned(), value.to_string()));
+        self
     }
 
     /// The directory itself.
@@ -235,6 +247,7 @@ impl StationDir {
             .env("HOME", self.dir.path().join("home"))
             .env("RUST_LOG", "info")
             .env("NO_COLOR", "1")
+            .envs(self.env.iter().map(|(k, v)| (k, v)))
             .stdin(Stdio::null())
             .stdout(log.try_clone().expect("log handle"))
             .stderr(log)
@@ -327,6 +340,48 @@ impl Station {
             .split_once("\r\n\r\n")
             .map_or_default(|(_, b)| b.to_owned());
         Some((status, dechunk(&body)))
+    }
+
+    /// How many times the process has started: a restart in place runs the
+    /// program again under the same process id and the same log.
+    pub fn starts(&self) -> usize {
+        self.log().matches("starting BirdNet-Behavior").count()
+    }
+
+    /// How many lines of the log contain `text`.
+    pub fn log_lines(&self, text: &str) -> usize {
+        self.log().lines().filter(|l| l.contains(text)).count()
+    }
+
+    /// The value of one series now, or `None` when the station does not
+    /// answer (it may be restarting) or does not export it.
+    pub fn metric_now(&self, series: &str) -> Option<f64> {
+        match self.get("/api/v2/metrics") {
+            Some((200, body)) => series_value(&body, series),
+            _ => None,
+        }
+    }
+
+    /// Wait until `series` reads 1, or `within` has passed; whether it did.
+    /// Tolerates a station that is restarting and not answering.
+    pub fn wait_for_state(&self, series: &str, within: Duration) -> bool {
+        let deadline = Instant::now() + within;
+        loop {
+            if self.metric_now(series) == Some(1.0) {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+    }
+
+    /// Whether the process has exited.
+    pub fn has_exited(&mut self) -> bool {
+        self.child
+            .as_mut()
+            .is_some_and(|c| c.try_wait().ok().flatten().is_some())
     }
 
     /// The Prometheus exposition.
@@ -479,6 +534,74 @@ impl Drop for Station {
             let _ = child.wait();
         }
     }
+}
+
+/// A loopback HTTP origin for model files: `GET /<name>` answers the file of
+/// that name in the directory it serves, whole, and 404 for anything else.
+/// Reserved first and served later, so a test can have a station retry an
+/// origin that is down and then see it come back.
+pub struct Mirror {
+    port: u16,
+}
+
+impl Mirror {
+    /// A port for the mirror, not yet listening.
+    pub fn reserve() -> Self {
+        Self { port: free_port() }
+    }
+
+    /// The base URL to set as `BIRDNET_MODEL_MIRROR`.
+    pub fn url(&self) -> String {
+        format!("http://127.0.0.1:{}", self.port)
+    }
+
+    /// Start serving `dir` on the reserved port, on a thread of its own.
+    pub fn serve(&self, dir: &Path) {
+        let listener = TcpListener::bind(("127.0.0.1", self.port)).expect("bind the mirror");
+        let dir = dir.to_path_buf();
+        std::thread::spawn(move || {
+            for conn in listener.incoming() {
+                let Ok(sock) = conn else { continue };
+                let dir = dir.clone();
+                std::thread::spawn(move || answer(sock, &dir));
+            }
+        });
+    }
+}
+
+/// Answer one request to a [`Mirror`].
+fn answer(mut sock: TcpStream, dir: &Path) {
+    let mut head = Vec::new();
+    let mut byte = [0_u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        match sock.read(&mut byte) {
+            Ok(1) => head.push(byte[0]),
+            _ => return,
+        }
+    }
+    let head = String::from_utf8_lossy(&head);
+    let name = head
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("/")
+        .trim_start_matches('/')
+        .to_owned();
+    let file = (!name.is_empty() && !name.contains('/') && !name.contains(".."))
+        .then(|| std::fs::read(dir.join(&name)).ok())
+        .flatten();
+    let _ = match file {
+        Some(bytes) => sock
+            .write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    bytes.len()
+                )
+                .as_bytes(),
+            )
+            .and_then(|()| sock.write_all(&bytes)),
+        None => sock
+            .write_all(b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"),
+    };
 }
 
 /// A port nothing is listening on, chosen by the kernel.

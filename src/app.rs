@@ -181,6 +181,12 @@ async fn serve(
     // so the hook's signal listeners are registered before this function can
     // yield. A receiver dropped early (run already returning) is fine.
     let _ = started.send(());
+    // The station fetches a missing or damaged model file again itself, and
+    // restarts to load one it went without (MDL-10). After the detector, so
+    // what it went without is already published, and after the hand-off
+    // above, so a restart it asks for is the serve loop's graceful one and
+    // never the start-up race's early exit.
+    daemon::repair::spawn(&cli, config.as_ref(), shutdown_state.clone());
     // Gate the watchdog on detection-loop progress: if the pipeline hangs, the
     // heartbeat stops advancing, the pinger withholds WATCHDOG=1, and systemd
     // restarts us instead of leaving a frozen daemon running. In web-only mode

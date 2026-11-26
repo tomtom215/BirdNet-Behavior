@@ -55,6 +55,7 @@ mod duplicate;
 mod local_offset;
 mod occurrence;
 mod processor;
+pub mod repair;
 mod run;
 
 #[cfg(test)]

@@ -353,7 +353,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             std::process::exit(code);
         }
         Action::RunServer => {
-            reverify_models_in_background(config.as_ref());
             let result = app::run(cli, config, log_broadcaster).await;
             // A restart asked for from the browser on a station nothing
             // supervises: the server has finished shutting down, so run the
@@ -363,40 +362,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             result
         }
-    }
-}
-
-/// Re-hash every model installed in the model directory, once, on a thread
-/// of its own (MDL-11).
-///
-/// A status poll answers "is it installed" from the verification record beside
-/// each file, which cannot see bytes damaged in place (a failing card keeps the
-/// size and the modification time). Reading every file once per start is what
-/// can, and it refreshes the records the dashboard reads. A plain thread, not
-/// the runtime's blocking pool: the runtime waits for those at shutdown, and a
-/// restart should not wait out 541 MB of hashing.
-fn reverify_models_in_background(config: Option<&birdnet_core::config::Config>) {
-    let dir = helpers::models::model_dir(config);
-    let spawned = std::thread::Builder::new()
-        .name("model-reverify".to_owned())
-        .spawn(move || {
-            for (entry, state) in birdnet_integrations::model_catalog::reverify_installed(&dir) {
-                if state.is_verified() {
-                    tracing::info!(id = entry.id, "installed model re-verified");
-                } else {
-                    tracing::warn!(
-                        id = entry.id,
-                        dir = %dir.display(),
-                        ?state,
-                        "an installed model is not the file this build pins; reinstall it with \
-                         `birdnet-behavior --install-model {}`",
-                        entry.id
-                    );
-                }
-            }
-        });
-    if let Err(e) = spawned {
-        tracing::warn!(error = %e, "could not start the model re-verification");
     }
 }
 

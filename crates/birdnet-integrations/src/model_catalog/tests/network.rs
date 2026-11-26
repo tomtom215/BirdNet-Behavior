@@ -41,6 +41,7 @@ fn policy(waits: &[u64]) -> FetchPolicy {
         stall_timeout: Duration::from_secs(1),
         retry_waits: waits.iter().map(|s| Duration::from_secs(*s)).collect(),
         mirror: None,
+        ..FetchPolicy::default()
     }
 }
 
