@@ -169,6 +169,7 @@ Every key `birdnet.conf` can carry (`KNOWN_CONFIG_KEYS`). A settings key bridged
 | `CUSTOM_IMAGE_DIR` | Settings → General → System & Display → Custom Species Image Directory (`custom_image_dir`) | |
 | `DATABASE_LANG` | Settings → General → System & Display → Common-name language (`database_lang`) | |
 | `DB_PATH` | — | Where the station keeps its data. Moving it means moving the files first, which a page cannot do; pointing the station at a new path from a form would start it on an empty database and look like lost history. |
+| `DB_SYNCHRONOUS` | — | A trade between the life of an SD card and the last seconds of detections before a power cut, made once with the storage in hand; a form would invite toggling it to see what happens, and it takes effect at the next start. |
 | `DEADMAN_HOURS` | Settings → Alerts → Notifications → Dead-man alert after (hours of no detections) (`deadman_hours`) | |
 | `DISK_PURGE_THRESHOLD` | Settings → General → System & Display → Disk Purge Threshold (%) (`purge_threshold`) | |
 | `DUPLICATE_INTERVAL_SECS` | Settings → Capture → Detection filters → Ignore repeats of the same bird for (seconds) (`duplicate_interval_secs`) | |

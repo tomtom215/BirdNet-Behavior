@@ -491,6 +491,10 @@ fn build_state(
             .map_err(|e| format!("database error: {e}"))?
     };
 
+    // Commit durability, from DB_SYNCHRONOUS, on the one connection that
+    // writes detections (review F17).
+    helpers::apply_db_durability(&state, config);
+
     // Thread the active config path so the in-UI diagnostics page can re-read
     // and validate it, and the broadcaster the `tracing` layer installed in
     // `main` is already writing to — without this the state holds the empty

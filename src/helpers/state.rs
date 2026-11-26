@@ -646,9 +646,59 @@ pub fn run_refresh_extension(
     )
 }
 
+/// Make the live writer's commits survive a power cut when the operator asked
+/// for it (`DB_SYNCHRONOUS=full`), and say in the journal which it is (review
+/// F17).
+///
+/// Every writer runs `journal_mode=WAL` with `synchronous=NORMAL`: a commit is
+/// safe from the process crashing, and SQLite documents that the last commits
+/// before a power loss or an operating-system crash may roll back. That is the
+/// right trade for an SD card, and the default stays. `full` syncs the WAL at
+/// every commit, so a detection the station recorded is on the disk before it
+/// is announced, at the cost of a write per commit. No setting makes a storage
+/// device that lies about its cache keep what it was told.
+///
+/// Anything but `full` or `normal` is logged and read as `normal`.
+pub fn apply_db_durability(
+    state: &birdnet_web::state::AppState,
+    config: Option<&birdnet_core::config::Config>,
+) {
+    let asked = config
+        .and_then(|c| c.get("DB_SYNCHRONOUS"))
+        .map(|v| v.trim().to_ascii_lowercase());
+    let full = match asked.as_deref() {
+        None | Some("" | "normal") => false,
+        Some("full") => true,
+        Some(other) => {
+            tracing::warn!(
+                value = other,
+                "DB_SYNCHRONOUS is neither normal nor full; commits are synced as with normal"
+            );
+            false
+        }
+    };
+    if full && let Err(e) = state.with_db(|c| c.execute_batch("PRAGMA synchronous=FULL")) {
+        tracing::error!(error = %e, "DB_SYNCHRONOUS=full could not be applied");
+    }
+    match state.with_db(|c| c.query_row("PRAGMA synchronous", [], |r| r.get::<_, i64>(0))) {
+        Ok(2) => tracing::info!(
+            "database commits are synced to the disk at every commit (DB_SYNCHRONOUS=full)"
+        ),
+        Ok(level) => tracing::info!(
+            level,
+            "database commits survive the process stopping; the last few before a power cut \
+             can be lost (DB_SYNCHRONOUS=normal, the default)"
+        ),
+        Err(e) => tracing::warn!(error = %e, "could not read the database's commit durability"),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{init_i18n, init_image_cache, init_site_name, init_species_codes, observed_names};
+    use super::{
+        apply_db_durability, init_i18n, init_image_cache, init_site_name, init_species_codes,
+        observed_names,
+    };
     use crate::helpers::test_support::{config_with, default_cli, test_state};
 
     /// `/admin/settings` writes `info_site`, which the overlay turns into
@@ -1004,5 +1054,26 @@ mod tests {
             std::path::Path::new(":memory:"),
         );
         assert!(state.image_cache().is_some());
+    }
+
+    /// Review F17: `DB_SYNCHRONOUS=full` makes the writer sync at every
+    /// commit; unset, or `normal`, or a typo, leaves it as it always was.
+    #[test]
+    fn db_synchronous_full_is_applied_to_the_writer_and_nothing_else_changes_it() {
+        let level = |state: &birdnet_web::state::AppState| -> i64 {
+            state.with_db(|c| c.query_row("PRAGMA synchronous", [], |r| r.get(0)).unwrap())
+        };
+        // A database on disk, opened as a station opens it: `test_state`'s
+        // in-memory connection never had the writer's PRAGMAs.
+        let dir = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(dir.path().join("birds.db")).unwrap();
+        apply_db_durability(&state, None);
+        assert_eq!(level(&state), 1, "NORMAL by default");
+        apply_db_durability(&state, Some(&config_with(&[("DB_SYNCHRONOUS", "normal")])));
+        assert_eq!(level(&state), 1);
+        apply_db_durability(&state, Some(&config_with(&[("DB_SYNCHRONOUS", "fulll")])));
+        assert_eq!(level(&state), 1, "a typo is not a change");
+        apply_db_durability(&state, Some(&config_with(&[("DB_SYNCHRONOUS", " FULL ")])));
+        assert_eq!(level(&state), 2, "FULL was asked for and not applied");
     }
 }
