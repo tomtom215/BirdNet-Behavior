@@ -71,11 +71,11 @@ and the fixture; on it fmt, typos, the module's tests and clippy for `birdnet-we
 comment fix: exit 0, 12 `test result:` lines, 5,329 passed, 0 failed, 1 ignored.
 
 **Integration tests**: `cargo test --workspace --all-features --tests` did not fit the disk (42 GB of test
-binaries; "linking with `cc` failed" at 8 MB free). They were restarted a package at a time, 16 test files a
-batch, and had not finished when this file was written; the pull request's description has the result, and its
-CI run is the complete one. Lane runs on the lanes' own branches, before integration: `birdnet-web` 2,395 passed
-(pages lane) and 2,375 passed (repair lane), root crate 1,687 passed, `birdnet-integrations` 590 passed,
-`birdnet-core` 1,196 passed and 1 failed on a test variable the lane had pointed at the wrong labels file.
+binaries; "linking with `cc` failed" at 8 MB free). Rerun a package at a time, 16 test files a batch, on
+`296175c` plus the doc comment fix: 331 `test result:` lines, 1,670 passed, 1 failed, 3 ignored. The failure
+was a seam: the pages lane's `the_header_badge_agrees_with_the_health_page` expected the literal `<primary>`
+that the repair lane's message no longer prints. The expectation was corrected and the file rerun: 7 passed.
+The suite was not rerun whole after the commits that followed.
 
 **Real models, the built binary** (`/home/user/lanes/model-e2e/`, not in the repository; V2.4, its range
 filter, V3.0, the geomodel and Perch, with `tests/testdata/Pica_pica_30s.wav`):
@@ -105,15 +105,21 @@ with real downloads printed "model-e2e PASSED".
 **Browser**: the fixture built as `a11y.yml` builds it, on a new fixture directory. All 17 gates of that workflow
 exit 0 on the default fixture (axe at both viewports, interactions, legibility, the two self-tests, layout,
 tokens, chart-ramps, surface-layers, token-doc, motion, focus, figures, dom-sinks, base-path on its own fixture,
-qa with `STRICT=1`, species-colours). On the `left-out` fixture, which now also carries a file under repair, axe
-exits 0; layout, focus and qa on it and on `not-detecting` had not finished when this file was written (the pages
-lane ran all four on both, before the repair condition existed). Screenshots at 1280x900 and 390x844, light and
-dark, of Today, Station Health and Capture on the three fixtures: 36 page states, none wider than its viewport
-(`scrollWidth - innerWidth` is 0 for each). Looked at: Today on `left-out` at 1280 light and 390 dark, before and
-after the notice was reworded; Capture at 1280 light and Station Health at 390 dark, full page, for layout only
-(too small to read the words). Seen and left: on a phone the repair notice's text column is narrow beside its
-"Open Station health" button, as the clock notice's already was; Station Health's banner prints full paths where
-Today prints file names.
+qa with `STRICT=1`, species-colours). On the `left-out` fixture, which now also carries a file under repair,
+axe and focus exit 0 and **layout and qa failed**: Station Health's banner prints a model's path, a path breaks
+only at its hyphens, and the card was 525 px wide in a 390 px viewport (12 layout findings on `/station` and
+`/admin`). The pages lane's run of the same gate had passed on a shorter fixture path. Fixed in `app.css` (the
+text column may shrink and a path may break anywhere) and gated: `a11y.yml` has a new step that starts the
+`left-out` fixture in a deep data directory and runs layout and axe on the dashboard, Station and admin routes.
+On the fixed build those six runs exit 0 (150 page states graded by layout, 0 axe violations); on the build
+before the fix the same command reports the findings. The `not-detecting` fixture's gates were not read.
+Screenshots at 1280x900 and 390x844, light and dark, of Today, Station Health and Capture on the three
+fixtures. Looked at: Today on `left-out` at 1280 light and 390 dark, before and after the repair notice was
+reworded (it was bold from end to end); Capture at 1280 light and Station Health at 390 dark, full page, for
+layout only. The session's own overflow measurement on those screenshots read 0 on the phone and was wrong: an
+emulated phone widens its viewport to the page, so `scrollWidth - innerWidth` cannot see this. The layout gate
+could. Seen and left: on a phone the repair notice's text column is narrow beside its "Open Station health"
+button, as the clock notice's already was.
 
 ## Not verified
 
@@ -122,7 +128,7 @@ Today prints file names.
 - The repair against a slow or unreachable internet. The "down" origin in the tests is a closed local port.
 - The loss of queued detections on the old code. Only the stop time was reproduced (29 s against the unit's 30).
 - `model-e2e.yml` and the `perch-v2` publish job as GitHub runs them, before this pull request's own run.
-- The integration tests on the integrated tree, complete, on this machine: see above.
+- The integration suite whole on the final commit, on this machine: see above.
 
 ## Open, from this batch
 

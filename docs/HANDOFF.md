@@ -24,8 +24,8 @@ configuration names, keeps identifying with the rest when one cannot be used, sa
 fetches a missing or damaged file again itself. What the session ran on the integrated tree, and
 what it did not, is in the status file's "Verification" and "Not verified" sections: the static gates, the unit
 tests (5,329 passed), twelve situations on the built binary with the real model files, and the browser gates on
-the default fixture were run; Docker, macOS, a Raspberry Pi and the complete integration suite on this machine
-were not.
+the default fixture were run, and the integration tests in batches (1,670 passed, 1 failed and fixed); Docker, macOS and a
+Raspberry Pi were not.
 
 *How the batches are run, and what to keep.* One promise at a time, in this order of method: write down what the
 station promises its owner; break each promise on a real install (the built binary, real model files, a real

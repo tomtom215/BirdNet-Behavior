@@ -5444,6 +5444,12 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 .st-status.warn .ico { background: color-mix(in oklab, var(--dawn) 16%, var(--surface)); color: var(--dawn-ink); }
 .st-status .t { font-family: var(--font-display); font-size: var(--fs-title); line-height: 1.1; }
 .st-status .s { font-size: var(--fs-md); color: var(--fg-2); margin-top: var(--space-2); }
+/* The sentence names files by their paths, and a path breaks only at its
+   hyphens: a data directory as long as a macOS home folder's made this card
+   525px wide on a 390px phone. The text column may shrink, and a path may
+   break anywhere. */
+.st-status > div { min-width: 0; }
+.st-status .s { overflow-wrap: anywhere; }
 
 /* per-source activity panel */
 .st-sources { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: var(--space-14); }

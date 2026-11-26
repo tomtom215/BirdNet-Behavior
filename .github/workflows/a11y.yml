@@ -203,6 +203,30 @@ jobs:
           done
           node base-path.mjs
 
+      - name: Model-fault states (a classifier left out, the filter off, a file under repair)
+        # The sweeps above grade a healthy station. The notices and banners a
+        # model fault draws exist only when a model is at fault, so a second
+        # fixture publishes that state, in a data directory as deep as a real
+        # one: Station Health's banner printed a model's path and was 525px
+        # wide on a 390px phone, on that fixture and never on the default one.
+        working-directory: tools/visual-qa
+        run: |
+          set -euo pipefail
+          BNB_FIXTURE_MODELS=left-out BNB_FIXTURE_ADDR=127.0.0.1:8504 \
+            BNB_FIXTURE_DIR="$RUNNER_TEMP/bnb-model-faults/as/deep/as/a/real/data/directory" \
+            ../../target/debug/examples/screenshot_server \
+            > "$RUNNER_TEMP/screenshot-server-models.log" 2>&1 &
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8504/ >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+          # The fixture must be showing the state, or the sweeps grade nothing.
+          curl -fsS http://127.0.0.1:8504/api/v2/health | grep -q '"state":"will_retry"'
+          for only in dashboard station admin; do
+            BASE=http://127.0.0.1:8504 ONLY="$only" node layout.mjs
+            BASE=http://127.0.0.1:8504 ONLY="$only" VPS=desktop,mobile node axe.mjs
+          done
+
       - name: Visual-QA sweep (overflow / console / broken images)
         working-directory: tools/visual-qa
         env:

@@ -279,7 +279,7 @@ fn broken_models() -> Vec<(&'static str, ModelsState, &'static str)> {
     out.push((
         "a second classifier is unrouted",
         unrouted,
-        "local:&lt;primary&gt;+perch",
+        "local:birdnet+perch",
     ));
     let mut no_position = running_models();
     no_position.occurrence_filter = FilterState::off(
