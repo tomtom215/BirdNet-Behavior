@@ -19,8 +19,9 @@ pub mod quarantine;
 pub mod species;
 
 pub use analysis_runs::{
-    AnalysisRun, NewAnalysisRun, RunModel, analysis_run, detection_counts_by_run,
-    insert_analysis_run, latest_analysis_run, list_analysis_runs, run_models,
+    AnalysisRun, ModelAttribution, NewAnalysisRun, NewRunClassifier, RunModel, analysis_run,
+    detection_counts_by_run, insert_analysis_run, insert_run_classifier, latest_analysis_run,
+    list_analysis_runs, model_attribution, run_models,
 };
 pub use analytics::{
     QualitySummary, ReviewVerdictDay, SpeciesReviewShare, confidence_distribution,

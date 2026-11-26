@@ -40,6 +40,12 @@ pub(super) struct RunManifest {
     /// Each classifier's own confidence threshold, by id, for the ones that
     /// set one (`MODEL_THRESHOLD`, `MODEL_2_THRESHOLD`, …).
     pub model_thresholds: std::collections::HashMap<String, f32>,
+    /// The primary classifier's id: what its rows carry in `model_id`.
+    pub primary_id: String,
+    /// Every other configured classifier, as `(id, model file, labels file)`,
+    /// recorded with the run so an export can name the file each row's
+    /// classifier loaded (review F19, MMP-08).
+    pub extra_classifiers: Vec<(String, PathBuf, PathBuf)>,
 }
 
 /// A run that exists in the database.
@@ -115,8 +121,43 @@ pub(super) fn register_run(
         lat: manifest.lat,
         lon: manifest.lon,
     };
+    // Each other classifier's files, hashed as the primary's are. One that
+    // cannot be read is left out of the record, said in the journal, and does
+    // not stop the run: its rows then export no checksum, which is true.
+    let mut extras = Vec::with_capacity(manifest.extra_classifiers.len());
+    for (model_id, model, labels) in &manifest.extra_classifiers {
+        match ModelIdentity::resolve(model, labels, None) {
+            Ok(extra) => extras.push((model_id.as_str(), extra)),
+            Err(e) => tracing::warn!(
+                classifier = %model_id,
+                error = %e,
+                "a classifier's files could not be hashed for the run record; its rows will \
+                 be exported without a model checksum"
+            ),
+        }
+    }
     let id = state
-        .with_db(|conn| birdnet_db::sqlite::insert_analysis_run(conn, &new))
+        .with_db(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let id = birdnet_db::sqlite::insert_analysis_run(&tx, &new)?;
+            let classifiers = std::iter::once((manifest.primary_id.as_str(), &identity, true))
+                .chain(extras.iter().map(|(model_id, i)| (*model_id, i, false)));
+            for (model_id, i, is_primary) in classifiers {
+                birdnet_db::sqlite::insert_run_classifier(
+                    &tx,
+                    &birdnet_db::sqlite::NewRunClassifier {
+                        run_id: id,
+                        model_id,
+                        model_name: &i.model_name,
+                        model_sha256: &i.model.sha256,
+                        labels_sha256: &i.labels.sha256,
+                        is_primary,
+                    },
+                )?;
+            }
+            tx.commit()?;
+            Ok::<_, birdnet_db::sqlite::DbError>(id)
+        })
         .map_err(RunError::Db)?;
     tracing::info!(
         run_id = id,
@@ -188,7 +229,49 @@ mod tests {
             lat: Some(51.48),
             lon: Some(-0.13),
             model_thresholds: std::collections::HashMap::new(),
+            primary_id: "birdnet".to_owned(),
+            extra_classifiers: Vec::new(),
         }
+    }
+
+    /// Review F19: a run records each classifier it was started with, the
+    /// primary and every other, with the file each loaded; one whose files
+    /// cannot be read is left out and does not stop the run.
+    #[test]
+    fn a_run_records_each_classifier_and_its_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut m = manifest(tmp.path());
+        std::fs::write(&m.model_path, b"primary").unwrap();
+        std::fs::write(&m.labels_path, "Pica pica_Eurasian Magpie\n").unwrap();
+        let perch = tmp.path().join("perch.onnx");
+        std::fs::write(&perch, b"second").unwrap();
+        m.extra_classifiers = vec![
+            ("perch".into(), perch, m.labels_path.clone()),
+            (
+                "gone".into(),
+                tmp.path().join("missing.onnx"),
+                m.labels_path.clone(),
+            ),
+        ];
+        let state = AppState::new(tmp.path().join("birds.db")).unwrap();
+        let run = register_run(&state, &m).expect("registered");
+        let rows: Vec<(String, String, bool)> = state.with_db(|c| {
+            let mut s = c
+                .prepare(
+                    "SELECT model_id, model_sha256, is_primary FROM analysis_run_models \
+                     WHERE run_id = ?1 ORDER BY model_id",
+                )
+                .unwrap();
+            s.query_map([run.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .collect::<Result<_, _>>()
+                .unwrap()
+        });
+        let ids: Vec<&str> = rows.iter().map(|r| r.0.as_str()).collect();
+        assert_eq!(ids, ["birdnet", "perch"], "{rows:?}");
+        assert!(rows[0].2 && !rows[1].2);
+        assert_eq!(rows[0].1, run.identity.model.sha256);
+        assert_ne!(rows[1].1, rows[0].1, "each its own file's checksum");
     }
 
     #[test]

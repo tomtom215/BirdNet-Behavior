@@ -902,6 +902,12 @@ fn run_manifest(
         lat: settings.latitude,
         lon: settings.longitude,
         model_thresholds,
+        primary_id: daemon_config.primary_id.clone(),
+        extra_classifiers: daemon_config
+            .extra_models
+            .iter()
+            .map(|m| (m.id.clone(), m.model_path.clone(), m.labels_path.clone()))
+            .collect(),
     }
 }
 

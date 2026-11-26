@@ -195,7 +195,7 @@ pub(super) async fn export_ebird(
                 MAX_EXPORT_ROWS,
             )?;
             // The model each row was made with, to name in the comment.
-            let runs = birdnet_db::sqlite::run_models(conn)?;
+            let runs = birdnet_db::sqlite::model_attribution(conn)?;
             Ok::<_, birdnet_db::sqlite::DbError>((configured, station_name, rows, runs))
         })
     })
@@ -302,20 +302,21 @@ fn format_coordinate(value: Option<f64>) -> String {
 /// than the run table). Commas and quotes are dropped, as in the comment.
 fn model_of(
     row: &birdnet_db::sqlite::DetectionRow,
-    runs: &HashMap<i64, birdnet_db::sqlite::RunModel>,
+    runs: &birdnet_db::sqlite::ModelAttribution,
 ) -> String {
-    row.run_id.and_then(|id| runs.get(&id)).map_or_else(
-        || "a model this station did not record".to_owned(),
-        |m| {
-            let name: String = m
-                .model_name
-                .chars()
-                .filter(|c| *c != ',' && *c != '"')
-                .collect();
-            let sha = m.model_sha256.get(..12).unwrap_or(&m.model_sha256);
-            format!("{name} (sha256 {sha})")
-        },
-    )
+    runs.for_row(row.run_id, row.model_id.as_deref())
+        .map_or_else(
+            || "a model this station did not record".to_owned(),
+            |m| {
+                let name: String = m
+                    .model_name
+                    .chars()
+                    .filter(|c| *c != ',' && *c != '"')
+                    .collect();
+                let sha = m.model_sha256.get(..12).unwrap_or(&m.model_sha256);
+                format!("{name} (sha256 {sha})")
+            },
+        )
 }
 
 /// What one checklist record aggregates.
@@ -336,7 +337,7 @@ struct HourTally {
 /// it came from a classifier reads as a sighting.
 fn detections_to_ebird_csv(
     rows: &[birdnet_db::sqlite::DetectionRow],
-    runs: &HashMap<i64, birdnet_db::sqlite::RunModel>,
+    runs: &birdnet_db::sqlite::ModelAttribution,
     effort: &ChecklistEffort,
 ) -> String {
     // Keyed (date, hour, common name, scientific name) so the output order is

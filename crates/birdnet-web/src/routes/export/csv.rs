@@ -54,7 +54,7 @@ pub(super) async fn export_detections(
             )?;
             // The model each row was made with (R-1): joined in memory over
             // the run table, which is one row per daemon start.
-            let runs = birdnet_db::sqlite::run_models(conn)?;
+            let runs = birdnet_db::sqlite::model_attribution(conn)?;
             Ok::<_, birdnet_db::sqlite::DbError>((rows, runs))
         })
     })
@@ -204,9 +204,9 @@ struct ExportedDetection<'a> {
 impl<'a> ExportedDetection<'a> {
     fn new(
         row: &'a birdnet_db::sqlite::DetectionRow,
-        runs: &'a std::collections::HashMap<i64, birdnet_db::sqlite::RunModel>,
+        runs: &'a birdnet_db::sqlite::ModelAttribution,
     ) -> Self {
-        let model = row.run_id.and_then(|id| runs.get(&id));
+        let model = runs.for_row(row.run_id, row.model_id.as_deref());
         Self {
             row,
             event_date: event_date_of(row),
@@ -247,7 +247,7 @@ fn event_date_of(row: &birdnet_db::sqlite::DetectionRow) -> Option<String> {
 /// for a row this station recorded) and `BirdWeather_Soundscape_Id`.
 fn detections_to_csv(
     rows: &[birdnet_db::sqlite::DetectionRow],
-    runs: &std::collections::HashMap<i64, birdnet_db::sqlite::RunModel>,
+    runs: &birdnet_db::sqlite::ModelAttribution,
 ) -> String {
     let mut csv = String::with_capacity(rows.len() * 240);
     csv.push_str(
@@ -258,7 +258,7 @@ fn detections_to_csv(
     );
 
     for row in rows {
-        let model = row.run_id.and_then(|id| runs.get(&id));
+        let model = runs.for_row(row.run_id, row.model_id.as_deref());
         let _ = writeln!(
             csv,
             "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
@@ -324,7 +324,7 @@ mod tests {
 
     #[test]
     fn detections_csv_header() {
-        let csv = detections_to_csv(&[], &std::collections::HashMap::new());
+        let csv = detections_to_csv(&[], &birdnet_db::sqlite::ModelAttribution::default());
         assert!(csv.starts_with("Date,Time,Sci_Name,Com_Name,Confidence"));
         assert_eq!(
             csv.trim_end(),
@@ -354,7 +354,7 @@ mod tests {
             birdweather_soundscape_id: Some(34),
             ..Default::default()
         };
-        let csv = detections_to_csv(&[row], &std::collections::HashMap::new());
+        let csv = detections_to_csv(&[row], &birdnet_db::sqlite::ModelAttribution::default());
         let mut lines = csv.lines();
         let header: Vec<&str> = lines.next().unwrap().split(',').collect();
         let cells: Vec<&str> = lines.next().unwrap().split(',').collect();
@@ -409,7 +409,10 @@ mod tests {
             ..first.clone()
         };
         let runs = std::collections::HashMap::new();
-        let csv = detections_to_csv(&[first.clone(), second, unplaceable.clone()], &runs);
+        let csv = detections_to_csv(
+            &[first.clone(), second, unplaceable.clone()],
+            &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+        );
         let lines: Vec<&str> = csv.lines().collect();
         assert!(
             lines[1].contains(",2026-10-25T01:30:00+01:00,2026-10-25T00:30:00Z,"),
@@ -424,10 +427,18 @@ mod tests {
         assert!(lines[3].ends_with(",,,,,"), "unplaceable row: {}", lines[3]);
         assert_eq!(lines[3].matches(',').count(), lines[1].matches(',').count());
 
-        let v = serde_json::to_value(ExportedDetection::new(&first, &runs)).unwrap();
+        let v = serde_json::to_value(ExportedDetection::new(
+            &first,
+            &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+        ))
+        .unwrap();
         assert_eq!(v["event_date"], "2026-10-25T01:30:00+01:00");
         assert_eq!(v["detected_at_utc"], bst);
-        let v = serde_json::to_value(ExportedDetection::new(&unplaceable, &runs)).unwrap();
+        let v = serde_json::to_value(ExportedDetection::new(
+            &unplaceable,
+            &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+        ))
+        .unwrap();
         assert!(v.get("event_date").is_none(), "{v}");
         assert!(v.get("detected_at_utc").is_none(), "{v}");
     }
@@ -452,7 +463,10 @@ mod tests {
             ..two.clone()
         };
         let runs = std::collections::HashMap::new();
-        let csv = detections_to_csv(&[two.clone(), legacy.clone()], &runs);
+        let csv = detections_to_csv(
+            &[two.clone(), legacy.clone()],
+            &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+        );
         let lines: Vec<&str> = csv.lines().collect();
         assert!(lines[1].ends_with(",\"perch,v2\",2,,,,,,"), "{}", lines[1]);
         assert!(
@@ -460,10 +474,18 @@ mod tests {
             "a legacy row leaves both empty: {}",
             lines[2]
         );
-        let v = serde_json::to_value(ExportedDetection::new(&two, &runs)).unwrap();
+        let v = serde_json::to_value(ExportedDetection::new(
+            &two,
+            &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+        ))
+        .unwrap();
         assert_eq!(v["model_id"], "perch,v2");
         assert_eq!(v["model_agreement"], 2);
-        let v = serde_json::to_value(ExportedDetection::new(&legacy, &runs)).unwrap();
+        let v = serde_json::to_value(ExportedDetection::new(
+            &legacy,
+            &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+        ))
+        .unwrap();
         assert!(
             v.get("model_id").is_none() && v.get("model_agreement").is_none(),
             "{v}"
@@ -500,7 +522,10 @@ mod tests {
             run_id: None,
             ..Default::default()
         };
-        let csv = detections_to_csv(&[made_by_run, imported], &runs);
+        let csv = detections_to_csv(
+            &[made_by_run, imported],
+            &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+        );
         let lines: Vec<&str> = csv.lines().collect();
         // The run's three columns are followed by `Model_Id,Model_Agreement`,
         // empty here because neither row names a classifier.
@@ -530,13 +555,21 @@ mod tests {
             run_id: Some(3),
             ..Default::default()
         };
-        let v = serde_json::to_value(ExportedDetection::new(&row, &runs)).unwrap();
+        let v = serde_json::to_value(ExportedDetection::new(
+            &row,
+            &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+        ))
+        .unwrap();
         assert_eq!(v["sci_name"], "Pica pica");
         assert_eq!(v["run_id"], 3);
         assert_eq!(v["model_name"], "m");
         assert_eq!(v["model_sha256"], "abc");
         let orphan = birdnet_db::sqlite::DetectionRow::default();
-        let v = serde_json::to_value(ExportedDetection::new(&orphan, &runs)).unwrap();
+        let v = serde_json::to_value(ExportedDetection::new(
+            &orphan,
+            &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+        ))
+        .unwrap();
         assert!(v.get("model_name").is_none(), "{v}");
         assert!(v.get("run_id").is_none(), "{v}");
     }
@@ -560,7 +593,7 @@ mod tests {
             source: None,
             ..Default::default()
         };
-        let csv = detections_to_csv(&[row], &std::collections::HashMap::new());
+        let csv = detections_to_csv(&[row], &birdnet_db::sqlite::ModelAttribution::default());
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(lines.len(), 2);
         assert!(lines[1].contains("Turdus merula"));

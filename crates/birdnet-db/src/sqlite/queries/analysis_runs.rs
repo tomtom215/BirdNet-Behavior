@@ -331,3 +331,130 @@ mod tests {
         assert!(err.to_string().contains("FOREIGN KEY"), "{err}");
     }
 }
+
+/// One classifier of a run, as [`insert_run_classifier`] records it
+/// (migration 67).
+#[derive(Debug, Clone, Copy)]
+pub struct NewRunClassifier<'a> {
+    /// The `analysis_runs` row.
+    pub run_id: i64,
+    /// The id the classifier's rows carry in `model_id`.
+    pub model_id: &'a str,
+    /// Operator-facing name of its model.
+    pub model_name: &'a str,
+    /// Lowercase hex SHA-256 of the model file it loaded.
+    pub model_sha256: &'a str,
+    /// Lowercase hex SHA-256 of its labels file.
+    pub labels_sha256: &'a str,
+    /// Whether it is the run's primary.
+    pub is_primary: bool,
+}
+
+/// Record one classifier of a run.
+///
+/// # Errors
+///
+/// Returns `DbError` on insert failure, including a second record of the same
+/// classifier for the same run.
+pub fn insert_run_classifier(conn: &Connection, new: &NewRunClassifier<'_>) -> Result<(), DbError> {
+    conn.execute(
+        "INSERT INTO analysis_run_models
+             (run_id, model_id, model_name, model_sha256, labels_sha256, is_primary)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            new.run_id,
+            new.model_id,
+            new.model_name,
+            new.model_sha256,
+            new.labels_sha256,
+            new.is_primary
+        ],
+    )?;
+    Ok(())
+}
+
+/// Which model file made a detection row, as far as the station recorded it
+/// (review F19, MMP-08).
+///
+/// A run registered since migration 67 recorded each of its classifiers, and
+/// a row resolves through its `(run_id, model_id)`: the file of the classifier
+/// that answered, or nothing for a classifier the run did not record. A run
+/// from before recorded only its primary; its rows keep that file when they
+/// all name one classifier (or none), which is a run where one classifier
+/// answered, and get nothing when they name more than one, because which
+/// file made which row was never written down.
+#[derive(Debug, Clone, Default)]
+pub struct ModelAttribution {
+    runs: HashMap<i64, RunModel>,
+    per_classifier: HashMap<(i64, String), RunModel>,
+    recorded: std::collections::HashSet<i64>,
+    ambiguous: std::collections::HashSet<i64>,
+}
+
+impl ModelAttribution {
+    /// Attribution from the run table alone, every run treated as one from
+    /// before migration 67 with one classifier answering: what exports did
+    /// before it, for a caller that has nothing else.
+    #[must_use]
+    pub fn from_runs(runs: HashMap<i64, RunModel>) -> Self {
+        Self {
+            runs,
+            ..Self::default()
+        }
+    }
+
+    /// The model file that made a row of `run_id` answered by `model_id`;
+    /// `None` when the station did not record it.
+    #[must_use]
+    pub fn for_row(&self, run_id: Option<i64>, model_id: Option<&str>) -> Option<&RunModel> {
+        let run = run_id?;
+        if self.recorded.contains(&run) {
+            return self.per_classifier.get(&(run, model_id?.to_owned()));
+        }
+        if self.ambiguous.contains(&run) {
+            return None;
+        }
+        self.runs.get(&run)
+    }
+}
+
+/// [`ModelAttribution`] for this station.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn model_attribution(conn: &Connection) -> Result<ModelAttribution, DbError> {
+    let runs = run_models(conn)?;
+    let mut per_classifier = HashMap::new();
+    let mut recorded = std::collections::HashSet::new();
+    let mut stmt =
+        conn.prepare("SELECT run_id, model_id, model_name, model_sha256 FROM analysis_run_models")?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            RunModel {
+                model_name: row.get(2)?,
+                model_sha256: row.get(3)?,
+            },
+        ))
+    })?;
+    for row in rows {
+        let (run, id, model) = row?;
+        recorded.insert(run);
+        per_classifier.insert((run, id), model);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT run_id FROM detections WHERE run_id IS NOT NULL AND model_id IS NOT NULL \
+         GROUP BY run_id HAVING COUNT(DISTINCT model_id) > 1",
+    )?;
+    let ambiguous = stmt
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .collect::<Result<_, _>>()?;
+    Ok(ModelAttribution {
+        runs,
+        per_classifier,
+        recorded,
+        ambiguous,
+    })
+}

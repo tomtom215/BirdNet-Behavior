@@ -2914,6 +2914,28 @@ pub const MIGRATIONS: &[Migration] = &[
                     OLD.Sci_Name);
         END;",
     },
+    Migration {
+        version: 67,
+        description: "Each classifier a run used, with the file it loaded",
+        // Review F19 / MMP-08. `analysis_runs` records one classifier, the
+        // primary, and every export resolved a row's model through `run_id`
+        // alone, so a row the second classifier answered was exported with the
+        // primary's name and SHA-256. Each classifier a run registers is now a
+        // row here, keyed by the id rows carry in `model_id`.
+        //
+        // A run from before this migration has no rows here and is left as it
+        // was: what classifiers it used was never recorded, and nothing is
+        // inferred into this table. Purely additive.
+        up_sql: "CREATE TABLE IF NOT EXISTS analysis_run_models (
+            run_id        INTEGER NOT NULL REFERENCES analysis_runs(id),
+            model_id      TEXT    NOT NULL,
+            model_name    TEXT    NOT NULL,
+            model_sha256  TEXT    NOT NULL,
+            labels_sha256 TEXT    NOT NULL,
+            is_primary    INTEGER NOT NULL CHECK (is_primary IN (0, 1)),
+            PRIMARY KEY (run_id, model_id)
+        );",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
