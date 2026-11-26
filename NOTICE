@@ -61,19 +61,39 @@ Served by the web interface from the binary
 Downloaded, not distributed with the source or the archives
 -----------------------------------------------------------
 
+Every model below is installed by `birdnet-behavior --install-model` (which
+install.sh, the macOS installer and the container run), from an ordered list of
+origins, each file checked against a sha256 and a size the binary pins.
+
+* BirdNET V2.4 (K. Lisa Yang Center for Conservation Bioacoustics, Cornell Lab
+  of Ornithology, and Chemnitz University of Technology), as birdnet-go's FP32
+  ONNX conversion at https://huggingface.co/tphakala/BirdNET-v2.4 (pinned
+  revision), licensed CC BY-NC-SA 4.0 according to that model card. Fetched from
+  this project's `models-v2.4` release, which holds an unmodified copy, then
+  from Hugging Face. Its labels are not downloaded: the binary carries V2.4's
+  class order with BirdNET-Pi's English names.
+* BirdNET's species-occurrence (metadata) model V2 for V2.4, as the ONNX file
+  https://github.com/tphakala/birdnet-go ships (pinned commit), CC BY-NC-SA 4.0
+  according to the `models-v2.4` release notes. Fetched from `models-v2.4`,
+  which holds an unmodified copy, then from raw.githubusercontent.com.
 * The BirdNET+ V3.0 classifier and labels, "BirdNET+ V3.0 model developer
   preview" (Preview 3, 2026-01-14), by Mario Lasseck, Maximilian Eibl, Holger
   Klinck and Stefan Kahl, DOI 10.5281/zenodo.18247420, licensed CC BY-SA 4.0
-  according to that Zenodo record. The installer fetches it from this project's
-  `models-v3.0-preview3` release, which holds an unmodified copy, and falls back
-  to Zenodo; both are checked against a pinned sha256.
-* The BirdNET geomodel, v3.0.2, from https://github.com/birdnet-team/geomodel:
-  source MIT; the trained weights CC BY-SA 4.0, according to that repository's
-  README at that tag. Mirrored unmodified in the same release, checked against a
-  pinned sha256.
-* Other classifiers (for example Google Perch v2, as an ONNX conversion hosted
-  on Hugging Face) are fetched only when the operator runs
-  `birdnet-behavior --install-model`; their terms are their publishers'.
+  according to that Zenodo record. Fetched from this project's
+  `models-v3.0-preview3` release, which holds an unmodified copy, then from
+  Zenodo.
+* The BirdNET geomodel, v3.0.2, and its labels, from
+  https://github.com/birdnet-team/geomodel: source MIT; the trained weights
+  CC BY-SA 4.0 with prohibited uses (poaching; any military purpose), according
+  to MODEL_LICENSE.txt in that release. Mirrored unmodified in
+  `models-v3.0-preview3`; fetched from there, then from that release.
+* Google's Perch v2 (bird-vocalization-classifier), as the ONNX conversion at
+  https://huggingface.co/justinchuby/Perch-onnx (pinned revision), whose model
+  card declares Apache-2.0; fetched from there, its only origin, and only when
+  the operator installs it. Its class list is carried by the binary (see
+  crates/birdnet-core/data/labels/README.md).
+* An operator may name a mirror of their own (BIRDNET_MODEL_MIRROR); what it
+  serves is held to the same pins.
 * Species photographs are cached from Wikipedia and Wikimedia Commons and, when
   enabled, AviCommons and Flickr, under the licence each photograph carries.
   Each picture is kept with its title, author, source and licence and shown
