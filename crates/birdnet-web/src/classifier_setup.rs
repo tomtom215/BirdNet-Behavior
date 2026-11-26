@@ -38,7 +38,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use birdnet_integrations::model_catalog::{
-    CatalogEntry, DEFAULT_CLASSIFIER_ID, DEFAULT_RANGE_FILTER_ID, Progress, find, looks_installed,
+    CatalogEntry, DEFAULT_CLASSIFIER_ID, DEFAULT_RANGE_FILTER_ID, Progress, Rehash, find,
+    installed_state,
 };
 
 /// What the binary tells the web layer about this start.
@@ -273,8 +274,9 @@ impl ClassifierSetup {
             p.file_name()
                 .map_or_else(String::new, |n| n.to_string_lossy().into_owned())
         };
-        let installed = looks_installed(model, &layout.model_dir);
-        let range_installed = looks_installed(range, &layout.model_dir);
+        // From the verification records only: a poll does not hash 54 MB.
+        let installed = installed_state(model, &layout.model_dir, Rehash::Never).is_present();
+        let range_installed = installed_state(range, &layout.model_dir, Rehash::Never).is_present();
 
         if layout.web_only {
             snap.phase = Phase::WebOnly;
@@ -472,7 +474,7 @@ mod tests {
                 .and_then(|f| f.set_len(e.model_bytes))
                 .expect("model");
             if let Some(l) = labels {
-                std::fs::write(l, "x\n").expect("labels");
+                std::fs::write(l, e.labels_embedded.unwrap_or_default()).expect("labels");
             }
         }
     }
@@ -655,7 +657,8 @@ mod tests {
                 .and_then(|f| f.set_len(e.model_bytes))
                 .map_err(|e| e.to_string())?;
             if let Some(l) = labels {
-                std::fs::write(l, "x\n").map_err(|e| e.to_string())?;
+                std::fs::write(l, e.labels_embedded.unwrap_or_default())
+                    .map_err(|e| e.to_string())?;
             }
             Ok(())
         }

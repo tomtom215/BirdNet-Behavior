@@ -33,46 +33,34 @@ valid_classifier_id() {
 }
 
 # Make $1 the classifier the rest of the installer works with, by copying its
-# file names (and, for V3.0 only, its digests and release tag) into the
-# unprefixed names the download, config and summary code read.
-# Silent: it only sets variables.
+# file names and its occurrence filter's catalogue id into the unprefixed names
+# the install, config and summary code read. Silent: it only sets variables.
 select_classifier() {
     case "$1" in
         birdnet-v24)
-            CLASSIFIER="birdnet-v24"
+            CLASSIFIER="${V24_MODEL_ID}"
             CLASSIFIER_NAME="BirdNET V2.4"
             MODEL_FILE="${V24_MODEL_FILE}"
             LABELS_FILE="${V24_LABELS_FILE}"
-            # No digests and no release tag: the binary installs these files
-            # and owns what they must hash to (see 10-config.sh).
-            MODEL_SHA256=""
-            LABELS_SHA256=""
-            MODEL_RELEASE_TAG=""
+            FILTER_ID="${V24_RANGE_ID}"
             MODEL_SIZE_HINT="~54 MB"
             # The binary will not install into less than the model's size plus
             # a 512 MiB margin, so the floor is above that, not above 85 MB.
             REQUIRED_FREE_MB=600
             ;;
         birdnet-v3)
-            CLASSIFIER="birdnet-v3"
+            CLASSIFIER="${V3_MODEL_ID}"
             CLASSIFIER_NAME="BirdNET+ V3.0"
             MODEL_FILE="${V3_MODEL_FILE}"
             LABELS_FILE="${V3_LABELS_FILE}"
-            MODEL_SHA256="${V3_MODEL_SHA256}"
-            LABELS_SHA256="${V3_LABELS_SHA256}"
-            MODEL_RELEASE_TAG="${V3_MODEL_RELEASE_TAG}"
+            FILTER_ID="${V3_GEOMODEL_ID}"
             MODEL_SIZE_HINT="~541 MB"
-            REQUIRED_FREE_MB=900
+            REQUIRED_FREE_MB=1100
             ;;
         *)
             fatal "Unknown classifier '$1'. Choose ${CLASSIFIER_V24} (the default) or ${CLASSIFIER_V3}."
             ;;
     esac
-    if [ -n "${MODEL_RELEASE_TAG}" ]; then
-        MODEL_GH_BASE="https://github.com/${REPO}/releases/download/${MODEL_RELEASE_TAG}"
-    else
-        MODEL_GH_BASE=""
-    fi
 }
 
 # The value of KEY in FILE (default: the station config): the last active
@@ -111,7 +99,7 @@ resolve_classifier() {
     elif [ -n "${requested}" ]; then
         how="requested"
         chosen="${requested}"
-    elif [ -f "${MODEL_DIR}/${V3_MODEL_FILE}" ]; then
+    elif [ -f "${MODEL_DIR}/${V3_MODEL_FILE}" ] || [ -f "${MODEL_DIR}/${V3_LEGACY_MODEL_FILE}" ]; then
         how="v3-files"
         chosen="${CLASSIFIER_V3}"
     else
@@ -123,7 +111,8 @@ resolve_classifier() {
     case "${how}" in
         kept)
             if [ "${chosen}" = "${CLASSIFIER_V24}" ] \
-                || [ "${kept_model}" = "${MODEL_DIR}/${V3_MODEL_FILE}" ]; then
+                || [ "${kept_model}" = "${MODEL_DIR}/${V3_MODEL_FILE}" ] \
+                || [ "${kept_model}" = "${MODEL_DIR}/${V3_LEGACY_MODEL_FILE}" ]; then
                 CLASSIFIER_SUMMARY="$(classifier_summary "${chosen}")"
             elif [ -n "${kept_model}" ]; then
                 CLASSIFIER_SUMMARY="the model in MODEL_PATH (${kept_model}) — this installer did not change it"

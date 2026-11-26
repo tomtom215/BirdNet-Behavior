@@ -72,7 +72,7 @@ run_helper() { # <path-dir> <helper> [no-curl] -> echoes the recorded argument l
 make_stub "${SANDBOX}/with-curl" curl
 make_stub "${SANDBOX}/with-wget" wget
 
-for helper in download download_or_absent download_large; do
+for helper in download download_large; do
     args="$(run_helper "${SANDBOX}/with-curl" "${helper}")"
     if [[ "${args}" == *"--proto =https"* && "${args}" == *"--proto-redir =https"* && "${args}" == *"--tlsv1.2"* ]]; then
         pass "${helper} (curl) refuses a non-https origin or redirect and TLS older than 1.2"

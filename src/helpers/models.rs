@@ -516,12 +516,18 @@ pub fn model_dir(config: Option<&Config>) -> PathBuf {
     crate::helpers::station_defaults::model_dir(config)
 }
 
-/// `--install-model <id>`: fetch and verify a classifier, or list what is
-/// available. Returns a process exit code.
+/// `--install-model <id>`: fetch and verify a model, or list what is
+/// available. Returns a process exit code: 0 when the files are in place and
+/// verify, 1 when they are not.
 ///
 /// Foreground and synchronous. A 400 MB download over a field station's uplink
 /// is measured in hours, and an operator should be able to watch it, stop it,
 /// and see it fail — none of which a background task or an API call offers.
+/// `install.sh`, the macOS installer and the container's entrypoint all install
+/// every model through this (MDL-09), so the retries, the resume and the
+/// timeouts (`BIRDNET_MODEL_RETRY_WAITS`, `BIRDNET_MODEL_STALL_TIMEOUT`,
+/// `BIRDNET_MODEL_CONNECT_TIMEOUT`, `BIRDNET_MODEL_MIRROR`) are the same
+/// wherever a model comes from.
 ///
 /// **Blocking.** It builds a `reqwest::blocking` client, which panics if
 /// constructed inside a tokio runtime — and `main` is `#[tokio::main]`, so the
@@ -537,7 +543,7 @@ pub fn install_from_catalogue(
     dest: &std::path::Path,
     from_file: Option<&std::path::Path>,
 ) -> i32 {
-    use birdnet_integrations::model_catalog::{Use, install, install_from_file};
+    use birdnet_integrations::model_catalog::{install_from_file, install_with_progress};
 
     if id.trim().is_empty() || id.trim().eq_ignore_ascii_case("list") {
         print!("{}", catalogue_listing());
@@ -547,7 +553,7 @@ pub fn install_from_catalogue(
     let result = from_file.map_or_else(
         || {
             println!("Installing `{id}` into {}", dest.display());
-            install(id, dest)
+            install_with_progress(id, dest, &mut progress_printer())
         },
         |file| {
             println!(
@@ -562,14 +568,8 @@ pub fn install_from_catalogue(
         Ok(installed) => {
             println!("\nInstalled and verified.");
             println!("  model:  {}", installed.model_path.display());
-            if installed.usage != Use::RangeFilter {
-                match &installed.labels_path {
-                    Some(p) => println!("  labels: {}", p.display()),
-                    None => println!(
-                        "  labels: not shipped with this model — supply your own, with one row \
-                         per class, or species are reported under other species' names"
-                    ),
-                }
+            if let Some(p) = &installed.labels_path {
+                println!("  labels: {}", p.display());
             }
             print_next_steps(&installed);
             0
@@ -581,11 +581,34 @@ pub fn install_from_catalogue(
     }
 }
 
+/// A progress report for a terminal or a container log: one line when a file
+/// starts, one every ten seconds while it downloads, and one when it is all
+/// there. A 541 MB download is minutes of silence otherwise, and `docker
+/// compose logs` cannot show a carriage-return progress bar.
+fn progress_printer() -> impl FnMut(&birdnet_integrations::model_catalog::Progress) {
+    const EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+    let mut last: Option<(String, std::time::Instant)> = None;
+    move |p| {
+        let new_file = last.as_ref().is_none_or(|(f, _)| *f != p.file);
+        let due = last.as_ref().is_some_and(|(_, at)| at.elapsed() >= EVERY);
+        if new_file || due || p.done == p.total {
+            let percent = p.done.saturating_mul(100).checked_div(p.total).unwrap_or(0);
+            println!(
+                "  {}: {percent}% ({} of {} KiB)",
+                p.file,
+                p.done / 1024,
+                p.total / 1024
+            );
+            last = Some((p.file.clone(), std::time::Instant::now()));
+        }
+    }
+}
+
 /// What `--install-model list` prints: every entry, what it is for, and
 /// where it comes from.
 #[must_use]
 pub fn catalogue_listing() -> String {
-    use birdnet_integrations::model_catalog::{CATALOG, Use, model_origins, taxonomy_edition};
+    use birdnet_integrations::model_catalog::{CATALOG, labels_origins, model_origins};
     use std::fmt::Write as _;
 
     let mut out = String::from("Models this build can install:\n\n");
@@ -598,42 +621,8 @@ pub fn catalogue_listing() -> String {
             entry.model_bytes / (1024 * 1024),
             entry.model_sha256
         );
-        let _ = match entry.usage {
-            Use::Classifier => writeln!(
-                out,
-                "    a second classifier; needs MODEL_n_SAMPLE_RATE={}",
-                entry.sample_rate
-            ),
-            Use::PrimaryReplacement => writeln!(
-                out,
-                "    replaces the primary classifier ({} Hz)",
-                entry.sample_rate
-            ),
-            Use::RangeFilter => {
-                writeln!(out, "    a species-occurrence filter (METADATA_MODEL_PATH)")
-            }
-        };
-        if entry.usage != Use::RangeFilter {
-            let _ = writeln!(
-                out,
-                "    labels: {}",
-                if entry.ships_labels() {
-                    "installed alongside, verified"
-                } else {
-                    "not shipped — supply your own"
-                }
-            );
-            // RES-32: the checklist the labels' names come from, only where
-            // it can be cited.
-            let _ = match entry.labels_sha256.and_then(taxonomy_edition) {
-                Some(t) => writeln!(
-                    out,
-                    "    taxonomy: {} (read from {})",
-                    t.edition, t.cited_from
-                ),
-                None => writeln!(out, "    taxonomy: not recorded"),
-            };
-        }
+        let _ = writeln!(out, "    {}", what_it_is_for(entry));
+        listing_labels(&mut out, entry);
         // MMP-20: who made it, under what licence, and where that was read.
         let _ = writeln!(out, "    source: {}", entry.source);
         let _ = writeln!(
@@ -647,6 +636,14 @@ pub fn catalogue_listing() -> String {
             "    downloaded from, in order: {}",
             model_origins(entry).join(", then ")
         );
+        let labels = labels_origins(entry);
+        if !labels.is_empty() {
+            let _ = writeln!(
+                out,
+                "    labels downloaded from, in order: {}",
+                labels.join(", then ")
+            );
+        }
         let _ = writeln!(out, "    {}\n", entry.notes);
     }
     out.push_str("Install one with:  birdnet-behavior --install-model <id>\n");
@@ -656,27 +653,84 @@ pub fn catalogue_listing() -> String {
     out
 }
 
+/// One line on what an entry is for.
+fn what_it_is_for(entry: &birdnet_integrations::model_catalog::CatalogEntry) -> String {
+    use birdnet_integrations::model_catalog::Use;
+    match entry.usage {
+        Use::Classifier => format!(
+            "a classifier: the station's own, or a second one (MODEL_n_SAMPLE_RATE={})",
+            entry.sample_rate
+        ),
+        Use::PrimaryReplacement => {
+            format!("replaces the primary classifier ({} Hz)", entry.sample_rate)
+        }
+        Use::RangeFilter => entry.pairs_with.map_or_else(
+            || "a species-occurrence filter (METADATA_MODEL_PATH)".to_owned(),
+            |classifier| {
+                format!("a species-occurrence filter (METADATA_MODEL_PATH) for {classifier} only")
+            },
+        ),
+    }
+}
+
+/// The labels lines of the listing: whether labels come with it, and (for a
+/// classifier) the taxonomy their names follow, where it can be cited.
+fn listing_labels(out: &mut String, entry: &birdnet_integrations::model_catalog::CatalogEntry) {
+    use birdnet_integrations::model_catalog::{Use, taxonomy_edition};
+    use std::fmt::Write as _;
+    if entry.usage == Use::RangeFilter && !entry.ships_labels() {
+        return;
+    }
+    let _ = writeln!(
+        out,
+        "    labels: {}",
+        if entry.ships_labels() {
+            "installed alongside, verified"
+        } else {
+            "not shipped — supply your own"
+        }
+    );
+    if entry.usage == Use::RangeFilter {
+        return;
+    }
+    // RES-32: the checklist the labels' names come from, only where it can be
+    // cited.
+    let _ = match entry.labels_sha256.and_then(taxonomy_edition) {
+        Some(t) => writeln!(
+            out,
+            "    taxonomy: {} (read from {})",
+            t.edition, t.cited_from
+        ),
+        None => writeln!(out, "    taxonomy: not recorded"),
+    };
+}
+
 /// What to configure after an install, by what the file is for.
 fn print_next_steps(installed: &birdnet_integrations::model_catalog::Installed) {
     use birdnet_integrations::model_catalog::Use;
     let model = installed.model_path.display();
+    let labels = installed.labels_path.as_ref().map_or_else(
+        || "<your labels file>".to_owned(),
+        |p| p.display().to_string(),
+    );
     match installed.usage {
         Use::Classifier => {
-            let labels = installed.labels_path.as_ref().map_or_else(
-                || "<your labels file>".to_owned(),
-                |p| p.display().to_string(),
-            );
-            println!("\nTo run it as a second classifier, set:");
+            println!("\nTo make it the station's classifier, set (then restart):");
+            println!("  MODEL_PATH={model}      (BIRDNET_MODEL)");
+            println!("  LABELS_PATH={labels}      (BIRDNET_LABELS)");
+            println!("\nOr to run it as a second classifier, set:");
             println!("  BIRDNET_MODEL_2_PATH={model}");
             println!("  BIRDNET_MODEL_2_LABELS={labels}");
             println!("  BIRDNET_MODEL_2_ID={}", installed.id);
             println!("  BIRDNET_MODEL_2_SAMPLE_RATE={}", installed.sample_rate);
+            if let Some(filter) =
+                birdnet_integrations::model_catalog::occurrence_filter_for(installed.id)
+            {
+                println!("\nFor its species-occurrence filter:");
+                println!("  birdnet-behavior --install-model {}", filter.id);
+            }
         }
         Use::PrimaryReplacement => {
-            let labels = installed.labels_path.as_ref().map_or_else(
-                || "<your labels file>".to_owned(),
-                |p| p.display().to_string(),
-            );
             println!(
                 "\nTo make it the station's classifier, set (birdnet.conf, or the BIRDNET_* variables), then restart:"
             );
@@ -688,14 +742,31 @@ fn print_next_steps(installed: &birdnet_integrations::model_catalog::Installed) 
             println!("\nFor the species-occurrence filter:");
             println!("  birdnet-behavior --install-model birdnet-v24-range-v2");
         }
-        Use::RangeFilter => {
-            println!("\nTo use it, set your LATITUDE and LONGITUDE and:");
-            println!("  METADATA_MODEL_PATH={model}      (BIRDNET_METADATA_MODEL)");
-            println!(
-                "No METADATA_LABELS_PATH is needed: it is indexed like the V2.4 labels. Use it \
-                 only with the BirdNET V2.4 classifier."
-            );
-        }
+        Use::RangeFilter => print_filter_steps(installed),
+    }
+}
+
+/// The next steps for an occurrence filter: its model, its labels when it has
+/// any, and the one classifier it belongs to.
+fn print_filter_steps(installed: &birdnet_integrations::model_catalog::Installed) {
+    let pairs_with =
+        birdnet_integrations::model_catalog::find(installed.id).and_then(|e| e.pairs_with);
+    println!("\nTo use it, set your LATITUDE and LONGITUDE and:");
+    println!(
+        "  METADATA_MODEL_PATH={}      (BIRDNET_METADATA_MODEL)",
+        installed.model_path.display()
+    );
+    match &installed.labels_path {
+        Some(labels) => println!(
+            "  METADATA_LABELS_PATH={}      (BIRDNET_METADATA_LABELS)",
+            labels.display()
+        ),
+        None => println!(
+            "No METADATA_LABELS_PATH is needed: it is indexed like its classifier's labels."
+        ),
+    }
+    if let Some(classifier) = pairs_with {
+        println!("Use it only with the {classifier} classifier.");
     }
 }
 
@@ -1209,6 +1280,7 @@ mod tests {
             ("birdnet-v24", "CC BY-NC-SA 4.0"),
             ("birdnet-v24-range-v2", "CC BY-NC-SA 4.0"),
             ("birdnet-v3", "CC BY-SA 4.0"),
+            ("birdnet-v3-geomodel", "CC BY-SA 4.0, with prohibited uses"),
             ("perch-v2", "Apache-2.0"),
         ] {
             let block = listed(id);
@@ -1241,5 +1313,31 @@ mod tests {
             );
         }
         assert!(!listed("birdnet-v24-range-v2").contains("taxonomy:"));
+        assert!(!listed("birdnet-v3-geomodel").contains("taxonomy:"));
+    }
+
+    /// MDL-12: the listing shows every origin in the order it is tried, the
+    /// labels' too, and which classifier a filter belongs to.
+    #[test]
+    fn the_listing_shows_every_origin_in_order() {
+        let v3 = listed("birdnet-v3");
+        let release = v3
+            .find("releases/download/models-v3.0-preview3/BirdNET%2B_V3.0-preview3_Global_11K_FP32")
+            .unwrap_or_else(|| panic!("no release origin:\n{v3}"));
+        let zenodo = v3
+            .find("zenodo.org/api/records/18247420/files/BirdNET+_V3.0-preview3_Global_11K_FP32")
+            .unwrap_or_else(|| panic!("no Zenodo origin:\n{v3}"));
+        assert!(release < zenodo, "{v3}");
+        assert!(
+            v3.contains("    labels downloaded from, in order: "),
+            "{v3}"
+        );
+        let geo = listed("birdnet-v3-geomodel");
+        assert!(geo.contains("for birdnet-v3 only"), "{geo}");
+        assert!(
+            geo.contains("    labels: installed alongside, verified"),
+            "{geo}"
+        );
+        assert!(listed("birdnet-v24-range-v2").contains("for birdnet-v24 only"));
     }
 }

@@ -90,7 +90,7 @@ flow_run "${SB}" repair;                               assert_paired "$(flow_con
 # What was fetched, as well as what was written: the files of the other family
 # must not even be on the disk of a station that cannot use them.
 new_sandbox; flow_run "${SB}"
-if flow_models_match "${SB}" 'V3|Geomodel'; then fail "a V2.4 station has V3.0/geomodel files on disk"; else pass "a V2.4 station has no V3.0/geomodel files on disk"; fi
+if flow_models_match "${SB}" 'v3|V3|Geomodel'; then fail "a V2.4 station has V3.0/geomodel files on disk"; else pass "a V2.4 station has no V3.0/geomodel files on disk"; fi
 new_sandbox; flow_run "${SB}" --classifier birdnet-v3
 if flow_models_match "${SB}" 'birdnet-v24'; then fail "a V3.0 station has V2.4 files on disk"; else pass "a V3.0 station has no V2.4 files on disk"; fi
 
@@ -100,14 +100,16 @@ dispatch() { # $1 = classifier id; prints which downloader ran
     (
         # shellcheck disable=SC1090
         source <(flow_script)
-        download_range_filter() { echo range; }
-        download_geomodel()     { echo geomodel; }
+        # The binary is asked for one catalogue id; record which.
+        install_model_with_binary() { echo "ASKED $1" >&3; }
+        install() { :; }
+        info() { :; }; success() { :; }; warn() { :; }
         select_classifier "$1"
         download_occurrence_filter
-    ) 2>&1
+    ) 3>&1 >/dev/null 2>&1
 }
-[ "$(dispatch birdnet-v24)" = "range" ]    && pass "birdnet-v24 -> the range filter only" || fail "birdnet-v24 dispatched to '$(dispatch birdnet-v24)'"
-[ "$(dispatch birdnet-v3)" = "geomodel" ]  && pass "birdnet-v3 -> the geomodel only"      || fail "birdnet-v3 dispatched to '$(dispatch birdnet-v3)'"
+[ "$(dispatch birdnet-v24)" = "ASKED birdnet-v24-range-v2" ] && pass "birdnet-v24 -> the range filter only" || fail "birdnet-v24 dispatched to '$(dispatch birdnet-v24)'"
+[ "$(dispatch birdnet-v3)" = "ASKED birdnet-v3-geomodel" ]   && pass "birdnet-v3 -> the geomodel only"      || fail "birdnet-v3 dispatched to '$(dispatch birdnet-v3)'"
 
 # ── P3. write_config handed a contradiction ─────────────────────────────────
 echo "=== P3. write_config does not mix even when the wrong family's flag is set ==="
@@ -217,7 +219,7 @@ else
     fail "counterpart: the range-filter retrofit did not fill a V2.4 placeholder: $(cat "${sb}/etc/birdnet/birdnet.conf")"
 fi
 sb="$(retrofit_in_place enable_geomodel_in_kept_config "${v3_conf}")"
-if grep -qE "^METADATA_MODEL_PATH=.*/Geomodel|^METADATA_MODEL_PATH=.*BirdNET\\+_Geomodel" "${sb}/etc/birdnet/birdnet.conf"; then
+if grep -qE "^METADATA_MODEL_PATH=.*/${FLOW_GEO_MODEL}\$" "${sb}/etc/birdnet/birdnet.conf"; then
     pass "counterpart: the geomodel retrofit fills a V3.0 config's placeholder"
 else
     fail "counterpart: the geomodel retrofit did not fill a V3.0 placeholder: $(cat "${sb}/etc/birdnet/birdnet.conf")"

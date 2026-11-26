@@ -8,8 +8,9 @@
 #   installer/catalogue-field.sh birdnet-v24-range-v2 model_url
 #   installer/catalogue-field.sh birdnet-v24-range-v2 model_bytes
 #
-# Prints the field's string or integer (underscores removed from integers), NONE
-# for `None`, and nothing when the entry or the field is absent. The exit status
+# Prints the field's string or integer (underscores removed from integers), the
+# first string of a list (`&["…", …]`), NONE for `None`, and nothing when the
+# entry or the field is absent. The exit status
 # is 0 either way; the caller decides what absence means.
 #
 # Why this exists: the catalogue is the one place a model's digest, origin and
@@ -46,7 +47,7 @@ rest="${block#*$'\n'"        ${FIELD}:"}"
 rest="${rest#"${rest%%[![:space:]]*}"}"
 if [[ "${rest}" == None* ]]; then
     echo NONE
-elif [[ "${rest}" =~ ^(Some\([[:space:]]*)?\"([^\"]*)\" ]]; then
+elif [[ "${rest}" =~ ^(Some\([[:space:]]*|\&\[[[:space:]]*)?\"([^\"]*)\" ]]; then
     echo "${BASH_REMATCH[2]}"
 elif [[ "${rest}" =~ ^([0-9_]+) ]]; then
     echo "${BASH_REMATCH[1]//_/}"

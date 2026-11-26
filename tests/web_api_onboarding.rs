@@ -985,7 +985,7 @@ async fn installed_but_not_loaded_is_not_reported_as_listening() {
             .and_then(|f| f.set_len(e.model_bytes))
             .unwrap();
         if let Some(l) = labels {
-            std::fs::write(l, "x\n").unwrap();
+            std::fs::write(l, e.labels_embedded.unwrap_or_default()).unwrap();
         }
     }
     let state = fresh_state();

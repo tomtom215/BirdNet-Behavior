@@ -22,7 +22,10 @@
 #
 #   3. verify_model_sha256: a missing sha256sum returned 0 — the same value a
 #      verified file returns — so the absence of the checking tool counted as
-#      a successful check of the 541 MB model.
+#      a successful check of the 541 MB model. The installer and the container
+#      no longer check a model at all (MDL-09): the binary installs every model
+#      and refuses one it cannot verify. Section 6 holds that no shell code has
+#      gone back to deciding a model is verified.
 #
 # `CLAUDE.md` names this shape, and D13 closed an instance of it in CI. These
 # are the installer's instances.
@@ -303,70 +306,23 @@ else
 fi
 
 echo
-echo "=== 6. the model checker treats a missing sha256sum as a refusal ==="
-model_out="$(mktemp)"
-(
-    set -uo pipefail
-    # shellcheck disable=SC1090
-    source <(sed -n '/^verify_model_sha256()/,/^}/p' "${MODEL_LIB}")
-    warn()  { echo "[WARN] $*"; }
-    error() { echo "[ERROR] $*"; }
-    fatal() { echo "[FATAL] $*"; exit 1; }
-    # An empty PATH is the only honest way to make `command -v sha256sum` fail.
-    # shellcheck disable=SC2123
-    PATH=""
-    verify_model_sha256 /nonexistent/BirdNET_GLOBAL_6K_V3.0_Model_FP32.onnx deadbeef
-) >"${model_out}" 2>&1
-rc=$?
-if [ "${rc}" -ne 0 ]; then
-    pass "verify_model_sha256 refused (exit ${rc})"
+echo "=== 6. no shell code decides that a model is verified: the binary does ==="
+# The binary carries the pins and checks every model it installs; a shell that
+# hashed a model again would be a second verdict to drift from the first, and
+# its "could not check" path is the one this test was written for.
+hits="$(grep -nE 'sha256sum|verify_(model_)?sha256' "${MODEL_LIB}" "${REPO_ROOT}/docker/entrypoint.sh" || true)"
+if [ -z "${hits}" ]; then
+    pass "no sha256sum and no model verifier in 55-model.sh or the container's entrypoint"
 else
-    fail "verify_model_sha256 returned 0 — 'cannot check' passed as 'checked'"
+    fail "a model is hashed in shell: ${hits}"
 fi
-if grep -q "BirdNET_GLOBAL_6K_V3.0_Model_FP32.onnx" "${model_out}"; then
-    pass "and named the file, without needing basename on an empty PATH"
+# Counterpart: the install path through the binary is there, so the check above
+# is not passing on a file that installs nothing.
+if grep -q -- '--install-model' "${MODEL_LIB}" && grep -q -- '--install-model' "${REPO_ROOT}/docker/entrypoint.sh"; then
+    pass "both install every model with --install-model"
 else
-    fail "the abort message lost the filename: $(cat "${model_out}")"
+    fail "a model install path is missing from 55-model.sh or the entrypoint"
 fi
-rm -f "${model_out}"
-
-echo
-echo "=== 7. counterpart: a matching model digest is still accepted ==="
-model_out="$(mktemp)"
-sample="$(mktemp)"
-printf 'model bytes\n' >"${sample}"
-expected="$(sha256sum "${sample}" | awk '{print $1}')"
-(
-    set -uo pipefail
-    # shellcheck disable=SC1090
-    source <(sed -n '/^verify_model_sha256()/,/^}/p' "${MODEL_LIB}")
-    warn()  { echo "[WARN] $*"; }
-    error() { echo "[ERROR] $*"; }
-    fatal() { echo "[FATAL] $*"; exit 1; }
-    verify_model_sha256 "${sample}" "${expected}"
-) >"${model_out}" 2>&1
-rc=$?
-if [ "${rc}" -eq 0 ]; then
-    pass "a matching digest verifies"
-else
-    fail "a matching digest was rejected (exit ${rc}): $(cat "${model_out}")"
-fi
-(
-    set -uo pipefail
-    # shellcheck disable=SC1090
-    source <(sed -n '/^verify_model_sha256()/,/^}/p' "${MODEL_LIB}")
-    warn()  { echo "[WARN] $*"; }
-    error() { echo "[ERROR] $*"; }
-    fatal() { echo "[FATAL] $*"; exit 1; }
-    verify_model_sha256 "${sample}" "$(printf 'f%.0s' {1..64})"
-) >"${model_out}" 2>&1
-rc=$?
-if [ "${rc}" -ne 0 ]; then
-    pass "a mismatched digest is rejected"
-else
-    fail "a mismatched digest was accepted"
-fi
-rm -f "${model_out}" "${sample}"
 
 echo
 if [ "${FAILED}" -eq 0 ]; then

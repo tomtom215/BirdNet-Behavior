@@ -326,67 +326,83 @@ What "a manual per release" does and does not promise today:
 
 The ~541 MB BirdNET+ V3.0 model + labels are **not** attached to each app
 release. They live in one stable, arch-independent GitHub release —
-`models-v3.0-preview3` — that every app release's `install.sh` and Docker
-entrypoint pull from (sha256-verified), falling back to Zenodo (the upstream
-source) when that asset is absent or unreachable. The model is identical across
-app versions, so it is uploaded **once**, not re-pushed per patch (which also
-keeps each app release lean and provenance focused on the binaries).
+`models-v3.0-preview3` — that every station's binary fetches from first
+(`birdnet-behavior --install-model birdnet-v3`, which `install.sh`, the macOS
+installer and the Docker entrypoint all run), falling back to Zenodo record
+18247420 (the upstream source) when that asset is absent or unreachable. The
+model is identical across app versions, so it is uploaded **once**, not
+re-pushed per patch (which also keeps each app release lean and provenance
+focused on the binaries).
 
 The same release also carries the **BirdNET geomodel** (~14 MB) and its label
 file — the species occurrence filter, mirrored from
-[`birdnet-team/geomodel`](https://github.com/birdnet-team/geomodel). It pairs
-with this classifier, so it rides in the same release rather than making a
-station reach a second host.
+[`birdnet-team/geomodel`](https://github.com/birdnet-team/geomodel) v3.0.2
+(`--install-model birdnet-v3-geomodel`; it falls back to that upstream release).
+It pairs with this classifier, so it rides in the same release rather than
+making a station reach a second host. Both releases' assets were read on
+2026-11-25 and match the catalogue's sha256 and sizes.
 
 Publish or refresh it with the **`publish-model.yml`** workflow (Actions →
 *Publish model release* → *Run workflow*). It mirrors the classifier from
-Zenodo and the geomodel from its upstream release, **fails unless every
-sha256 matches the values pinned in `installer/lib/10-config.sh`** (so the
-published assets and the installer's verification hashes can never drift),
-writes a `SHA256SUMS`, attaches a SLSA build-provenance attestation over all
-four files, and creates/updates the release idempotently (marked non-latest so
-it never shadows the app release's *Latest* badge).
+Zenodo and the geomodel from its upstream release, writes a `SHA256SUMS`,
+attaches a SLSA build-provenance attestation over all four files, and
+creates/updates the release idempotently (marked non-latest so it never shadows
+the app release's *Latest* badge).
 
-Run it again only when a model file or its pinned checksums change: bump
-`MODEL_RELEASE_TAG` + `MODEL_SHA256` + `LABELS_SHA256` (classifier) or
-`GEOMODEL_VERSION` + `GEOMODEL_FILE` + `GEOMODEL_SHA256` +
-`GEOMODEL_LABELS_SHA256` (geomodel) in `installer/lib/10-config.sh` — and the
-matching constants in `docker/entrypoint.sh` — first, then dispatch the
-workflow.
+> **The workflow's `birdnet-v3` job reads its pins from
+> `installer/lib/10-config.sh`, and they are no longer there.** Since every
+> model is installed by the binary (MDL-09), the installer holds no digest, URL
+> or release tag of any model; the one place they live is
+> `crates/birdnet-integrations/src/model_catalog.rs`. The `birdnet-v24` job
+> already reads the catalogue through `installer/catalogue-field.sh`; the
+> `birdnet-v3` job must be changed the same way (the sha256 and size of
+> `birdnet-v3` and `birdnet-v3-geomodel`, model and labels, and the asset names
+> from their `mirror_urls` / `labels_mirror_urls`) before it is next run. Until
+> then it stops at its first step with "Could not parse".
 
-A release line whose model release has not been published yet still installs
-cleanly. Each family has its own fallback origin and they degrade differently,
-by design:
+Run it again only when a model file or its pinned checksums change: change the
+entry in the catalogue first (digest, size, URLs, and the test that pins them),
+then dispatch the workflow.
 
-| Asset | Primary | Fallback | If both fail |
-|---|---|---|---|
-| Classifier + labels | this release | Zenodo | install **aborts** — a station without a classifier detects nothing |
-| Geomodel + labels | this release | `birdnet-team/geomodel` | install **continues** with a warning; occurrence filtering is off, and `--doctor` says so |
+Every model has an ordered list of origins and they degrade the same way: the
+binary tries each origin in turn, resumes a transfer that dropped, gives up on
+one that sends nothing for the stall timeout, and makes three rounds 30 and 90 s
+apart (`BIRDNET_MODEL_RETRY_WAITS`). What happens when every round fails
+depends on the file:
 
-> **Until this release carries the geomodel**, every install falls through to
-> the upstream origin on the first fetch and succeeds — it is a fallback, not a
-> failure. Re-running the workflow simply moves that fetch back onto our host.
+| Asset | Origins, in order | If every origin fails |
+|---|---|---|
+| Classifier + labels | this release, then Zenodo (V3.0) or Hugging Face (V2.4) | the install **finishes** and exits **75**, saying last and loudly that the station is not detecting and how to install the model; the container starts anyway and says the same |
+| Occurrence filter (+ labels) | this release, then `birdnet-team/geomodel` (V3.0) or `raw.githubusercontent.com` (V2.4) | the install **continues** with a warning; occurrence filtering is off, `--doctor` says so, and the next `update`, `repair` or container start tries again |
 
 ## The V2.4 mirror (`models-v2.4`)
 
-BirdNET V2.4 and its range filter v2 are fetched by the binary
-(`birdnet-behavior --install-model birdnet-v24`, `birdnet-v24-range-v2`) from the
-origins pinned in `crates/birdnet-integrations/src/model_catalog.rs`: Hugging Face
-for the model, `raw.githubusercontent.com` for the range filter. The
-**`publish-model.yml`** workflow with `classifier` set to `birdnet-v24` copies both
-into the release `models-v2.4` of this repository. It downloads from the pinned
-URLs, **fails unless sha256 and byte count match the catalogue**, writes
-`SHA256SUMS`, attaches a SLSA attestation and creates or updates the release
-(non-latest). The labels are not mirrored: the binary carries BirdNET-Pi's English
-names for V2.4's classes.
+BirdNET V2.4 and its range filter v2 are installed by the binary
+(`birdnet-behavior --install-model birdnet-v24`, `birdnet-v24-range-v2`), which
+fetches each from this project's `models-v2.4` release first and from the
+upstream file pinned in `crates/birdnet-integrations/src/model_catalog.rs`
+second: Hugging Face for the model, `raw.githubusercontent.com` for the range
+filter. The **`publish-model.yml`** workflow with `classifier` set to
+`birdnet-v24` copies both into that release. It downloads from the pinned
+upstream URLs, **fails unless sha256 and byte count match the catalogue**,
+writes `SHA256SUMS`, attaches a SLSA attestation and creates or updates the
+release (non-latest). The labels are not mirrored: the binary carries
+BirdNET-Pi's English names for V2.4's classes.
 
-It was run once, on 2026-10-20, from a feature branch. **Nothing fetches from the
-release yet**: the catalogue holds one URL per file. Using it means giving
-`CatalogEntry` a mirror-first, upstream-fallback pair and making
-`fetch_unless_installed` try them in order with the same digest check on either.
-Re-run the workflow from `main` once the branch that carries the `classifier` input
-has merged, so the attestation names `main`, and again only when a pinned digest in
-the catalogue changes.
+It was run once, on 2026-10-20, from a feature branch; its assets were read on
+2026-11-25 and match the catalogue. Re-run the workflow from `main` once the
+branch that carries the `classifier` input has merged, so the attestation names
+`main`, and again only when a pinned digest in the catalogue changes.
+
+## Perch v2 has no release of this project's yet
+
+`--install-model perch-v2` fetches the ONNX conversion from its only origin,
+`huggingface.co/justinchuby/Perch-onnx` at a pinned revision; its labels are
+compiled into the binary. The catalogue's list of origins is ordered, so a
+`models-perch-v2` release, once published, goes first in `perch-v2`'s
+`mirror_urls` and nothing else changes. What that release would have to hold,
+and what is and is not established about the licences, is in
+`docs/book/admin/classifiers.md` ("Where the files come from").
 
 ## Rehearsing a release (dry run)
 

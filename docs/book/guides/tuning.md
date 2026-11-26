@@ -58,7 +58,7 @@ The two pairs are never mixed. The installer and the Docker entrypoint fetch the
 
 ```console
 $ birdnet-behavior --doctor | grep occurrence
-[ PASS ] Species occurrence filter - active - .../BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx ...
+[ PASS ] Species occurrence filter - active - .../birdnet-v3-geomodel.onnx ...
 ```
 
 (That line is a V3.0 station's; a V2.4 station's names the range filter and says it is indexed against the classifier's labels.) A `WARN` there names whichever of the missing pieces it needs: the model, or the coordinates. The geomodel download is deliberately non-fatal: a station without it still detects, it just stops filtering by location, and re-running `install.sh repair` picks it up later.

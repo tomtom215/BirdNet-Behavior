@@ -36,17 +36,13 @@ CI_TESTS=(
     classifier-never-mixed.sh
     config-dir-permissions.sh
     config-template.sh
-    container-model-cache.sh
     coord-parse.sh
     dockerfile-extension-target.sh
     downloads-are-https-only.sh
-    geomodel-fallback-quiet.sh
-    geomodel-resume.sh
     install-one-liner-is-a-release-asset.sh
     location-notice.sh
     macos-config.sh
     model-pins-match-catalogue.sh
-    model-resume.sh
     pipefail-sigpipe.sh
     quickstart-env.sh
     release-tag-gate.sh
