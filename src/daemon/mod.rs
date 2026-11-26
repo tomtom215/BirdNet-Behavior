@@ -1018,6 +1018,138 @@ pub fn mirror_liveness(
 }
 
 #[cfg(test)]
+mod settings_tests {
+    use super::*;
+    use birdnet_core::inference::model_state::ClassifierStatus;
+    use birdnet_web::occurrence::Unavailable;
+    use clap::Parser as _;
+
+    fn cli(args: &[&str]) -> Cli {
+        Cli::parse_from(std::iter::once("birdnet-behavior").chain(args.iter().copied()))
+    }
+
+    fn config(text: &str) -> birdnet_core::config::Config {
+        birdnet_core::config::Config::parse(text).unwrap()
+    }
+
+    /// `PRIVACY_RANK`: a station nobody has customised runs BirdNET-Pi's
+    /// default of 10; the config file's value is read when the flag was left
+    /// alone, `0` included (it turns the rule off); a flag that was set wins;
+    /// and a negative value in the file is off, not a wrapped huge rank.
+    #[test]
+    fn the_privacy_rank_is_the_flag_then_the_file_then_ten() {
+        assert_eq!(privacy_rank(&cli(&[]), None), 10);
+        assert_eq!(
+            privacy_rank(&cli(&[]), Some(&config("PRIVACY_RANK=0\n"))),
+            0
+        );
+        assert_eq!(
+            privacy_rank(&cli(&[]), Some(&config("PRIVACY_RANK=25\n"))),
+            25
+        );
+        assert_eq!(
+            privacy_rank(
+                &cli(&["--privacy-rank", "3"]),
+                Some(&config("PRIVACY_RANK=25\n"))
+            ),
+            3
+        );
+        assert_eq!(
+            privacy_rank(&cli(&[]), Some(&config("PRIVACY_RANK=-4\n"))),
+            0
+        );
+    }
+
+    /// Clips are cut into the folder the web serves recordings from, and stay
+    /// inside their own segment exactly when either privacy rule runs (PIPE7):
+    /// the default rank of 10 runs it, a rank of 0 with no score threshold
+    /// does not, and a score threshold alone does.
+    #[test]
+    fn clips_stay_in_their_segment_exactly_when_the_privacy_filter_runs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        for (args, own_segment) in [
+            (&[][..], true),
+            (&["--privacy-rank", "0"][..], false),
+            (
+                &["--privacy-rank", "0", "--privacy-threshold", "0.02"][..],
+                true,
+            ),
+        ] {
+            let cli = cli(args);
+            let settings = Settings::resolve(&cli, None, &state);
+            let extraction = extraction_config(&cli, None, &state, &settings);
+            assert_eq!(extraction.own_segment_only, own_segment, "{args:?}");
+            assert_eq!(extraction.output_dir, state.recording_dir(), "{args:?}");
+        }
+    }
+
+    /// The Species page is handed the daemon's range model, so a configured
+    /// one that will not load is reported as that failure; a range model
+    /// turned off (`off`) is reported as no model at all, not as a file named
+    /// "off" that failed.
+    #[test]
+    fn the_species_page_is_given_the_range_model_unless_it_is_turned_off() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let model = tmp.path().join("model.onnx");
+        let labels = tmp.path().join("labels.txt");
+        let ask = |metadata: &str| {
+            let cli = cli(&[
+                "--latitude",
+                "52.5",
+                "--longitude",
+                "13.4",
+                "--metadata-model",
+                metadata,
+            ]);
+            let settings = Settings::resolve(&cli, None, &state);
+            let planned = plan_classifiers(None, &state, &model, &labels);
+            publish_occurrence_source(&state, &settings, &labels, &planned);
+            state
+                .occurrence_source()
+                .expect("the daemon published its occurrence source")
+                .report(22)
+                .unwrap_err()
+        };
+        let configured = ask("/nonexistent/range.onnx");
+        assert!(
+            matches!(configured, Unavailable::Failed(_)),
+            "{configured:?}"
+        );
+        assert_eq!(ask("off"), Unavailable::NoModel);
+    }
+
+    fn classifier(id: &str) -> ClassifierState {
+        ClassifierState {
+            id: id.to_owned(),
+            primary: id == "primary",
+            model_path: PathBuf::from(format!("/m/{id}.onnx")),
+            labels_path: None,
+            status: ClassifierStatus::Judging {
+                sources: Vec::new(),
+                unrouted_sources: id == "primary",
+            },
+        }
+    }
+
+    /// The published classifiers are every one the configuration names, the
+    /// loaded and the left-out together, in the order the configuration
+    /// declares them, whichever list each came from.
+    #[test]
+    fn the_published_classifiers_are_in_declaration_order() {
+        let declared = ["primary", "bats", "owls"].map(str::to_owned);
+        let loaded = [classifier("owls"), classifier("primary")];
+        let planned_out = [classifier("bats")];
+        let ids: Vec<String> = declared_order(&loaded, &planned_out, &declared)
+            .into_iter()
+            .map(|c| c.id)
+            .collect();
+        assert_eq!(ids, ["primary", "bats", "owls"]);
+    }
+}
+
+#[cfg(test)]
 mod not_configured_tests {
     use super::not_configured_why;
     use clap::Parser as _;

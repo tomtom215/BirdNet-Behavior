@@ -203,8 +203,10 @@ pub trait Station: Send + 'static {
     fn publish(&self, file: ModelFile);
     /// What the detector made of the files at its start.
     fn models(&self) -> ModelsState;
-    /// Restart the station; `true` when a restart is under way.
-    fn restart(&self) -> bool;
+    /// Restart the station: [`RepairRestart::Restarting`] when a restart is
+    /// under way, [`RepairRestart::NeededByHand`] when nothing here can
+    /// restart this process.
+    fn restart(&self) -> RepairRestart;
 }
 
 impl Station for birdnet_web::state::AppState {
@@ -216,8 +218,12 @@ impl Station for birdnet_web::state::AppState {
         self.models_state()
     }
 
-    fn restart(&self) -> bool {
-        self.request_restart()
+    fn restart(&self) -> RepairRestart {
+        if self.request_restart() {
+            RepairRestart::Restarting
+        } else {
+            RepairRestart::NeededByHand
+        }
     }
 }
 
@@ -384,7 +390,11 @@ impl<S: Station> Repair<S> {
     /// are fetched, rather than one restart per file. `true` when a restart is
     /// under way.
     fn pass(&mut self) -> bool {
-        let now = Instant::now();
+        self.pass_at(Instant::now())
+    }
+
+    /// [`Self::pass`], with `now` the instant a file is due by.
+    fn pass_at(&mut self, now: Instant) -> bool {
         let mut again = Vec::new();
         for i in 0..self.tracked.len() {
             if self.tracked[i].next > now {
@@ -397,12 +407,10 @@ impl<S: Station> Repair<S> {
         if again.is_empty() {
             return false;
         }
-        let restart = if !again.iter().any(|(_, without)| *without) {
-            RepairRestart::NotNeeded
-        } else if self.station.restart() {
-            RepairRestart::Restarting
+        let restart = if again.iter().any(|(_, without)| *without) {
+            self.station.restart()
         } else {
-            RepairRestart::NeededByHand
+            RepairRestart::NotNeeded
         };
         let at_unix = unix_now();
         for (i, without) in again {
@@ -507,11 +515,7 @@ impl<S: Station> Repair<S> {
     /// of its origins after that.
     fn fetch(&mut self, i: usize, state: Option<FileState>) -> Look {
         let t = &mut self.tracked[i];
-        let policy = if t.attempts == 0 {
-            self.policy.clone()
-        } else {
-            self.policy.one_round()
-        };
+        let policy = policy_for(&self.policy, t.attempts);
         t.attempts += 1;
         let w = t.watched.clone();
         let attempts = t.attempts;
@@ -570,6 +574,17 @@ impl<S: Station> Repair<S> {
     }
 }
 
+/// The retry policy for a file's next fetch, `attempts` having been made
+/// since it last verified: the whole policy for the first, one round of the
+/// origins after that (each later one is already an interval apart).
+fn policy_for(policy: &FetchPolicy, attempts: u32) -> FetchPolicy {
+    if attempts == 0 {
+        policy.clone()
+    } else {
+        policy.one_round()
+    }
+}
+
 /// The size the catalogue pins for one of `entry`'s files.
 fn pinned_size(entry: &CatalogEntry, part: Part) -> u64 {
     match part {
@@ -592,6 +607,7 @@ fn model_file(watched: &Watched, repair: RepairState) -> ModelFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::daemon::test_support::logged;
     use birdnet_core::inference::model_state::{ClassifierState, DetectorState};
     use clap::Parser as _;
     use std::sync::{Arc, Mutex};
@@ -775,9 +791,9 @@ mod tests {
         fn models(&self) -> ModelsState {
             self.models.lock().unwrap().clone()
         }
-        fn restart(&self) -> bool {
+        fn restart(&self) -> RepairRestart {
             *self.restarts.lock().unwrap() += 1;
-            true
+            RepairRestart::Restarting
         }
     }
 
@@ -929,5 +945,356 @@ mod tests {
         assert!(repair.tracked[0].said_not_fetched);
         assert_eq!(repair.tracked[0].attempts, 0, "nothing was fetched");
         assert_eq!(std::fs::read(&model).unwrap(), b"damaged");
+    }
+
+    const HOUR: Duration = Duration::from_secs(3_600);
+
+    fn repair_with(
+        path: &Path,
+        reader: Reader,
+        station: &Recorder,
+        policy: FetchPolicy,
+    ) -> Repair<Recorder> {
+        let w = watched(&[Configured {
+            path: path.to_path_buf(),
+            reader,
+        }]);
+        Repair::new(w, policy, station.clone(), &[])
+    }
+
+    fn running() -> ModelsState {
+        models(
+            DetectorState::Running,
+            ClassifierStatus::Unrouted {
+                primary: "birdnet".to_owned(),
+            },
+            FilterState::Active { candidates: None },
+        )
+    }
+
+    /// Seconds since the epoch by the system clock, read here rather than
+    /// through the code under test.
+    fn epoch_secs() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs()
+    }
+
+    /// An instant well past any file's next look.
+    fn hours_later() -> Instant {
+        Instant::now() + 2 * HOUR
+    }
+
+    /// A file due at exactly this instant is looked at; one due a nanosecond
+    /// later is not, yet.
+    #[test]
+    fn a_file_is_looked_at_once_it_is_due_and_not_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let labels = dir.path().join("birdnet-v24_labels.txt");
+        let station = Recorder::default();
+        *station.models.lock().unwrap() = running();
+        let mut repair = repair_of(&labels, Reader::Primary, &station);
+        let due = repair.tracked[0].next;
+        assert!(!repair.pass_at(due.checked_sub(Duration::from_nanos(1)).unwrap()));
+        assert_eq!(last(&station), RepairState::Checking, "not due yet");
+        assert!(!labels.exists());
+        assert!(!repair.pass_at(due));
+        assert!(
+            labels.exists(),
+            "due at this instant: looked at, and written"
+        );
+        assert!(matches!(last(&station), RepairState::Repaired { .. }));
+    }
+
+    /// An `--offline` station with no mirror says, once, that it is not
+    /// fetching the file, tells the page when it looks again (an interval
+    /// from now), and does not look again before then.
+    #[test]
+    fn a_file_not_fetched_is_said_once_and_looked_at_again_an_interval_later() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("birdnet-v24-range-v2.onnx");
+        std::fs::write(&model, "damaged").unwrap();
+        let station = Recorder::default();
+        let policy = FetchPolicy {
+            mirror_only: true,
+            repair_interval: HOUR,
+            ..FetchPolicy::default()
+        };
+        let mut repair = repair_with(&model, Reader::Filter, &station, policy);
+        let ((), said) = logged(tracing::Level::WARN, || {
+            let before = epoch_secs();
+            assert!(!repair.pass());
+            let after = epoch_secs();
+            let RepairState::NotFetched {
+                looks_again_unix, ..
+            } = last(&station)
+            else {
+                panic!("{:?}", last(&station));
+            };
+            assert!(
+                (before + HOUR.as_secs()..=after + HOUR.as_secs()).contains(&looks_again_unix),
+                "{looks_again_unix} is not an hour after {before}"
+            );
+            let published = station.published.lock().unwrap().len();
+            assert!(!repair.pass());
+            assert_eq!(
+                station.published.lock().unwrap().len(),
+                published,
+                "looked at again before the interval had passed"
+            );
+            assert!(!repair.pass_at(hours_later()));
+            assert!(!repair.pass_at(hours_later()));
+            assert!(matches!(last(&station), RepairState::NotFetched { .. }));
+        });
+        assert_eq!(
+            said.matches("is not being fetched").count(),
+            1,
+            "said once over three looks: {said}"
+        );
+    }
+
+    /// The V2.4 model's labels are in the binary and its weights are not: an
+    /// `--offline` station with no mirror writes the labels again but does not
+    /// try to fetch the model.
+    #[test]
+    fn an_offline_station_does_not_fetch_a_model_whose_labels_are_embedded() {
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("birdnet-v24.onnx");
+        std::fs::write(&model, "damaged").unwrap();
+        let station = Recorder::default();
+        *station.models.lock().unwrap() = running();
+        let mut repair = repair_of(&model, Reader::Primary, &station);
+        assert!(!repair.pass());
+        assert!(
+            matches!(last(&station), RepairState::NotFetched { .. }),
+            "{:?}",
+            last(&station)
+        );
+        assert_eq!(repair.tracked[0].attempts, 0, "nothing was fetched");
+    }
+
+    /// A fetch that fails is published with how many attempts there have been
+    /// and when the next is (an interval from now), and is not tried again
+    /// before then. The mirror here is a port on this machine nothing listens
+    /// on, so the attempt fails at once.
+    #[test]
+    fn a_failed_fetch_counts_its_attempts_and_waits_an_interval() {
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("birdnet-v24-range-v2.onnx");
+        std::fs::write(&model, "damaged").unwrap();
+        let station = Recorder::default();
+        let policy = FetchPolicy {
+            mirror: Some(format!("http://127.0.0.1:{port}")),
+            mirror_only: true,
+            retry_waits: Vec::new(),
+            connect_timeout: Duration::from_secs(5),
+            stall_timeout: Duration::from_secs(5),
+            repair_interval: HOUR,
+        };
+        let mut repair = repair_with(&model, Reader::Filter, &station, policy);
+        let before = epoch_secs();
+        assert!(!repair.pass());
+        let after = epoch_secs();
+        let RepairState::WillRetry {
+            at_unix, attempts, ..
+        } = last(&station)
+        else {
+            panic!("{:?}", last(&station));
+        };
+        assert_eq!(attempts, 1);
+        assert!(
+            (before + HOUR.as_secs()..=after + HOUR.as_secs()).contains(&at_unix),
+            "{at_unix} is not an hour after {before}"
+        );
+        let published = station.published.lock().unwrap().len();
+        assert!(!repair.pass());
+        assert_eq!(
+            station.published.lock().unwrap().len(),
+            published,
+            "tried again before the interval had passed"
+        );
+        assert!(!repair.pass_at(hours_later()));
+        assert!(
+            matches!(last(&station), RepairState::WillRetry { attempts: 2, .. }),
+            "{:?}",
+            last(&station)
+        );
+    }
+
+    /// The first fetch of a file gets the catalogue's whole retry policy;
+    /// every later one, already an interval after the last, one round.
+    #[test]
+    fn the_first_fetch_retries_and_later_ones_try_once() {
+        let policy = FetchPolicy {
+            retry_waits: vec![Duration::from_secs(30), Duration::from_secs(90)],
+            ..FetchPolicy::default()
+        };
+        assert_eq!(policy_for(&policy, 0).retry_waits, policy.retry_waits);
+        assert!(policy_for(&policy, 1).retry_waits.is_empty());
+        assert!(policy_for(&policy, 2).retry_waits.is_empty());
+    }
+
+    /// While a file is fetched the page is told how big it is: the size the
+    /// catalogue pins, which for embedded labels is the text the binary holds.
+    #[test]
+    fn a_fetch_is_published_with_the_files_pinned_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let labels = dir.path().join("birdnet-v24_labels.txt");
+        let station = Recorder::default();
+        *station.models.lock().unwrap() = running();
+        let mut repair = repair_of(&labels, Reader::Primary, &station);
+        assert!(!repair.pass());
+        let totals: Vec<u64> = station
+            .published
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|f| match f.repair {
+                RepairState::Fetching { total, .. } => Some(total),
+                _ => None,
+            })
+            .collect();
+        let embedded = birdnet_core::inference::labels::BIRDNET_V24_ENGLISH_LABELS.len() as u64;
+        assert!(!totals.is_empty(), "the fetch was published");
+        assert!(totals.iter().all(|t| *t == embedded), "{totals:?}");
+
+        let model = at("/m/birdnet-v24.onnx").unwrap();
+        assert_eq!(
+            pinned_size(model.entry, Part::Model),
+            model.entry.model_bytes
+        );
+    }
+
+    /// The running application is the station the repair reports to: what it
+    /// publishes is what the Station Health page reads, the models it reads
+    /// are the ones the detector published, and a station nothing supervises
+    /// (as a test's is) says a restart must be made by hand rather than
+    /// signalling itself.
+    #[test]
+    fn the_application_is_the_station_the_repair_reports_to() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let file = ModelFile {
+            catalogue_id: "birdnet-v24".to_owned(),
+            path: PathBuf::from("/m/birdnet-v24.onnx"),
+            repair: RepairState::Checking,
+        };
+        Station::publish(&state, file.clone());
+        assert_eq!(state.metrics().model_files(), [file]);
+
+        let failed = DetectorState::Failed {
+            why: "labels".into(),
+        };
+        state.metrics().set_detector_state(failed.clone());
+        assert_eq!(Station::models(&state).detector, failed);
+
+        assert_eq!(Station::restart(&state), RepairRestart::NeededByHand);
+    }
+
+    /// A station that only forwards what is published, to a test on another
+    /// thread.
+    struct Forwarding(std::sync::mpsc::Sender<ModelFile>);
+
+    impl Station for Forwarding {
+        fn publish(&self, file: ModelFile) {
+            let _ = self.0.send(file);
+        }
+        fn models(&self) -> ModelsState {
+            running()
+        }
+        fn restart(&self) -> RepairRestart {
+            RepairRestart::NeededByHand
+        }
+    }
+
+    /// Starting the repair starts it: a missing labels file the catalogue
+    /// embeds is published as checked and then written, by the repair's own
+    /// thread, with no network (the station is `--offline`).
+    #[test]
+    fn spawning_the_repair_looks_after_the_configured_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let labels = dir.path().join("birdnet-v24_labels.txt");
+        let cli = cli(&["--offline", "--labels", labels.to_str().unwrap()]);
+        let (tx, rx) = std::sync::mpsc::channel();
+        spawn(&cli, None, Forwarding(tx));
+        let mut seen = Vec::new();
+        while let Ok(file) = rx.recv_timeout(Duration::from_secs(30)) {
+            assert_eq!(file.path, labels);
+            let repaired = matches!(file.repair, RepairState::Repaired { .. });
+            seen.push(file.repair);
+            if repaired {
+                break;
+            }
+        }
+        assert_eq!(seen.first(), Some(&RepairState::Checking), "{seen:?}");
+        assert!(
+            matches!(seen.last(), Some(RepairState::Repaired { .. })),
+            "{seen:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&labels).unwrap(),
+            birdnet_core::inference::labels::BIRDNET_V24_ENGLISH_LABELS
+        );
+    }
+
+    /// Starting the repair says so in the journal when there are files to look
+    /// after, and a `--web-only` station, which looks after none, does not.
+    #[test]
+    fn starting_the_repair_says_so_only_when_there_is_something_to_look_after() {
+        let dir = tempfile::tempdir().unwrap();
+        let labels = dir.path().join("birdnet-v24_labels.txt");
+        let path = labels.to_str().unwrap();
+        let start = |args: &[&str]| {
+            let (tx, _rx) = std::sync::mpsc::channel();
+            logged(tracing::Level::INFO, || {
+                spawn(&cli(args), None, Forwarding(tx));
+            })
+            .1
+        };
+        let said = start(&["--offline", "--web-only", "--labels", path]);
+        assert!(!said.contains("looking after the model files"), "{said}");
+        let said = start(&["--offline", "--labels", path]);
+        assert!(said.contains("looking after the model files"), "{said}");
+    }
+
+    /// At the start every catalogue model installed in the model directory is
+    /// hashed again, and its files are handed to the first look so it need not
+    /// hash them twice. One that is not the pinned file is warned about when
+    /// the configuration does not name it (by its model or its labels), and
+    /// left to the repair, without a warning, when it does.
+    #[test]
+    fn an_installed_model_is_rehashed_and_warned_about_only_when_nothing_repairs_it() {
+        const WARNING: &str = "is not the file this build pins";
+        let dir = tempfile::tempdir().unwrap();
+        let model = dir.path().join("birdnet-v24.onnx");
+        let labels = dir.path().join("birdnet-v24_labels.txt");
+        std::fs::write(&model, "not the pinned model").unwrap();
+        let named_by = |path: &Path| {
+            watched(&[Configured {
+                path: path.to_path_buf(),
+                reader: Reader::Primary,
+            }])
+        };
+
+        let (hashed, said) = logged(tracing::Level::WARN, || reverify(dir.path(), &[]));
+        assert_eq!(hashed, [model.clone(), labels.clone()]);
+        assert!(said.contains(WARNING), "not named: {said}");
+
+        let (hashed, said) = logged(tracing::Level::WARN, || {
+            reverify(dir.path(), &named_by(&model))
+        });
+        assert_eq!(hashed, [model, labels.clone()]);
+        assert!(!said.contains(WARNING), "named by its model: {said}");
+
+        let (_, said) = logged(tracing::Level::WARN, || {
+            reverify(dir.path(), &named_by(&labels))
+        });
+        assert!(!said.contains(WARNING), "named by its labels: {said}");
     }
 }

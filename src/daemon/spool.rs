@@ -116,10 +116,21 @@ impl ClipQueue {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_nanos());
+        self.new_batch_at(nanos)
+    }
+
+    /// [`Self::new_batch`] at `nanos` past the epoch: the first of
+    /// `<nanos>-0`, `<nanos>-1`, … not already there.
+    ///
+    /// The queue's own directory is made first, and once: a file in its
+    /// place reads as `AlreadyExists` too, which inside the loop below was
+    /// taken for a name in use and searched past for ever.
+    fn new_batch_at(&self, nanos: u128) -> std::io::Result<PathBuf> {
+        std::fs::create_dir_all(&self.dir)?;
         let mut n = 0_u32;
         loop {
             let dir = self.dir.join(format!("{nanos:024}-{n}"));
-            match std::fs::create_dir_all(&self.dir).and_then(|()| std::fs::create_dir(&dir)) {
+            match std::fs::create_dir(&dir) {
                 Ok(()) => return Ok(dir),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => n += 1,
                 Err(e) => return Err(e),
@@ -234,28 +245,26 @@ fn neighbours(source: &Path) -> Vec<PathBuf> {
     };
     let key = |r: &RecordingFile| format!("{} {}", r.date, r.time);
     let here_at = key(&here);
-    let mut before: Option<(String, PathBuf)> = None;
-    let mut after: Option<(String, PathBuf)> = None;
-    for path in std::fs::read_dir(dir)
+    // Every recording of the same source, by when it starts; two that start
+    // together are told apart by name, so the choice does not depend on the
+    // order the directory lists them in.
+    let same_source: Vec<(String, PathBuf)> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .map(|e| e.path())
-    {
-        let Some(other) = path.to_str().and_then(RecordingFile::parse) else {
-            continue;
-        };
-        if other.rtsp_id != here.rtsp_id {
-            continue;
-        }
-        let at = key(&other);
-        if at < here_at && before.as_ref().is_none_or(|(b, _)| at > *b) {
-            before = Some((at, path));
-        } else if at > here_at && after.as_ref().is_none_or(|(a, _)| at < *a) {
-            after = Some((at, path));
-        }
-    }
-    before.into_iter().chain(after).map(|(_, p)| p).collect()
+        .filter_map(|path| {
+            let other = path.to_str().and_then(RecordingFile::parse)?;
+            (other.rtsp_id == here.rtsp_id).then(|| (key(&other), path))
+        })
+        .collect();
+    let before = same_source.iter().filter(|(at, _)| *at < here_at).max();
+    let after = same_source.iter().filter(|(at, _)| *at > here_at).min();
+    before
+        .into_iter()
+        .chain(after)
+        .map(|(_, p)| p.clone())
+        .collect()
 }
 
 /// One kept detection on its way back through the processor.
@@ -323,6 +332,12 @@ impl Replay {
 /// kept too: the application's own wait for that loop (`DAEMON_STOP_GRACE`).
 const KEEP_WAIT: Duration = Duration::from_secs(15);
 
+/// When a stopping processor, starting to keep at `now`, gives up waiting for
+/// the detection loop's channel to close: [`KEEP_WAIT`] later.
+fn keep_deadline(now: Instant) -> Instant {
+    now + KEEP_WAIT
+}
+
 /// What the processor is to do next.
 #[derive(Debug)]
 pub enum Next {
@@ -386,7 +401,7 @@ impl Inbox {
     /// sends until it closes its channel (or [`KEEP_WAIT`] passes).
     fn keep_the_rest(&mut self, events: &mpsc::Receiver<DetectionEvent>) -> usize {
         let (mut rest, replayed_from) = self.replay.rest();
-        let deadline = Instant::now() + KEEP_WAIT;
+        let deadline = keep_deadline(Instant::now());
         while let Ok(event) =
             events.recv_timeout(deadline.saturating_duration_since(Instant::now()))
         {
@@ -517,6 +532,170 @@ mod tests {
             "a batch goes once its last detection is processed"
         );
         assert!(queue.take().next().is_none());
+    }
+
+    /// Two batches started in the same nanosecond are two batches: the
+    /// second takes the next free name instead of failing or writing into the
+    /// first. The call runs on its own thread so a loop that never ends
+    /// reads as a failure here, not a hung test.
+    #[test]
+    fn a_batch_name_already_taken_takes_the_next() {
+        let data = tempfile::tempdir().unwrap();
+        let queue = ClipQueue::beside(&data.path().join("birds.db"));
+        let first = queue.new_batch_at(7).unwrap();
+        std::fs::write(first.join(EVENTS), "taken").unwrap();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || tx.send(queue.new_batch_at(7)));
+        let second = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the second batch was named")
+            .expect("and created");
+        assert_ne!(first, second);
+        assert_eq!(
+            second.file_name().unwrap().to_string_lossy(),
+            format!("{:024}-1", 7)
+        );
+        assert!(second.is_dir());
+        assert_eq!(std::fs::read_dir(&second).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read_to_string(first.join(EVENTS)).unwrap(),
+            "taken"
+        );
+    }
+
+    /// A queue that cannot be created (its place on the disk is a file) is
+    /// an error the caller reports, at once, and not a search for a free name
+    /// that never ends.
+    #[test]
+    fn a_queue_that_cannot_be_created_is_an_error() {
+        let data = tempfile::tempdir().unwrap();
+        std::fs::write(data.path().join(DIR_NAME), "not a directory").unwrap();
+        let queue = ClipQueue::beside(&data.path().join("birds.db"));
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || tx.send(queue.new_batch_at(7)));
+        let got = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the attempt ended");
+        assert!(got.is_err(), "{got:?}");
+    }
+
+    /// A batch that cannot be made for any reason but its name being taken
+    /// is an error, at once, not a search for a free name: here its path is
+    /// longer than the system allows, though the queue's own directory is not.
+    #[test]
+    fn a_batch_that_cannot_be_made_is_an_error() {
+        let data = tempfile::tempdir().unwrap();
+        // A queue directory a little short of PATH_MAX (4096 on Linux), so
+        // the queue is made and a batch inside it is not.
+        let mut parent = data.path().to_path_buf();
+        while parent.as_os_str().len() + 2 * 200 + DIR_NAME.len() < 4085 {
+            parent.push("a".repeat(200));
+        }
+        let pad = 4085 - parent.as_os_str().len() - 2 - DIR_NAME.len();
+        parent.push("b".repeat(pad));
+        let queue = ClipQueue::beside(&parent.join("birds.db"));
+        if std::fs::create_dir_all(&queue.dir).is_err() {
+            // A system whose paths are shorter cannot set this up; the
+            // queue's own directory failing is covered above.
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || tx.send(queue.new_batch_at(7)));
+        let got = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the attempt ended");
+        assert!(got.is_err(), "{got:?}");
+    }
+
+    /// A stop keeps everything the processor had not processed: what was
+    /// left of the last stop's replay and every detection the loop sent before
+    /// closing its channel. The processor is told how many, and the next start
+    /// gets each of them back exactly once (the batch the replay came from is
+    /// gone, so nothing is processed twice).
+    #[test]
+    fn a_stop_keeps_the_replay_and_the_channel_and_says_how_many() {
+        let data = tempfile::tempdir().unwrap();
+        let db = data.path().join("birds.db");
+        let src = data.path().join("2026-05-19-birdnet-09:01:00.wav");
+        std::fs::write(&src, "audio").unwrap();
+        let queue = ClipQueue::beside(&db);
+        assert_eq!(queue.keep(&[event(&src, "Pica pica")]).unwrap(), 1);
+
+        let (_stop, stopping) = tokio::sync::watch::channel(true);
+        let mut inbox = Inbox::new(&db, stopping);
+        let (tx, rx) = mpsc::channel();
+        tx.send(event(&src, "Corvus corax")).unwrap();
+        tx.send(event(&src, "Parus major")).unwrap();
+        drop(tx);
+        let mut idled = false;
+        let got = inbox.next(&rx, Duration::from_millis(1), &mut || idled = true);
+        assert!(matches!(got, Next::Kept(3)), "{got:?}");
+        assert!(!idled, "a stopping inbox does not wait for detections");
+
+        let mut replay = queue.take();
+        let mut names = Vec::new();
+        while let Some(e) = replay.next() {
+            names.push(e.detection.scientific_name);
+        }
+        names.sort();
+        assert_eq!(names, ["Corvus corax", "Parus major", "Pica pica"]);
+    }
+
+    /// A stopping processor waits for the detection loop's channel no longer
+    /// than [`KEEP_WAIT`] from when it starts keeping, and no shorter: a
+    /// deadline already passed would keep only what had arrived, and lose the
+    /// detections of the file the loop was finishing.
+    #[test]
+    fn a_stop_waits_keep_wait_for_the_loop_to_finish() {
+        let now = Instant::now();
+        assert_eq!(keep_deadline(now).duration_since(now), KEEP_WAIT);
+    }
+
+    /// A recording already gone when the stop keeps its detection is not an
+    /// error: the detection is kept, and comes back. A recording that cannot
+    /// be copied for another reason (here it is a directory) fails the keep,
+    /// and leaves no half-written batch to replay.
+    #[test]
+    fn a_missing_recording_is_kept_without_it_and_an_unreadable_one_fails_the_keep() {
+        let data = tempfile::tempdir().unwrap();
+        let stream = tempfile::tempdir().unwrap();
+        let queue = ClipQueue::beside(&data.path().join("birds.db"));
+        let gone = stream.path().join("2026-05-19-birdnet-09:01:00.wav");
+        assert_eq!(queue.keep(&[event(&gone, "Pica pica")]).unwrap(), 1);
+        let mut replay = queue.take();
+        assert_eq!(
+            replay.next().unwrap().detection.scientific_name,
+            "Pica pica"
+        );
+        assert!(replay.next().is_none());
+
+        let not_a_file = stream.path().join("2026-05-19-birdnet-09:02:00.wav");
+        std::fs::create_dir(&not_a_file).unwrap();
+        let kept = queue.keep(&[event(&not_a_file, "Corvus corax")]);
+        assert!(kept.is_err(), "{kept:?}");
+        assert!(queue.take().next().is_none());
+        assert_eq!(
+            std::fs::read_dir(data.path().join(DIR_NAME))
+                .unwrap()
+                .count(),
+            0,
+            "the failed batch was removed"
+        );
+    }
+
+    /// The start says in the journal that it is replaying what the last stop
+    /// kept, and says nothing when there is nothing to replay.
+    #[test]
+    fn a_start_says_when_it_replays_kept_detections() {
+        const SAID: &str = "processing the detections the last stop kept";
+        let data = tempfile::tempdir().unwrap();
+        let queue = ClipQueue::beside(&data.path().join("birds.db"));
+        let (_, said) = crate::daemon::test_support::logged(tracing::Level::INFO, || queue.take());
+        assert!(!said.contains(SAID), "{said}");
+        let src = data.path().join("2026-05-19-birdnet-09:01:00.wav");
+        queue.keep(&[event(&src, "Pica pica")]).unwrap();
+        let (_, said) = crate::daemon::test_support::logged(tracing::Level::INFO, || queue.take());
+        assert!(said.contains(SAID), "{said}");
     }
 
     /// Nothing kept is nothing written, and nothing to take.
