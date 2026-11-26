@@ -38,10 +38,10 @@ render) are found only at integration. That is the session's judgement from batc
 one feature set, and deletes its `target/` when it finishes.
 
 *What the next session does first.*
-1. Read `BATCH-2026-11-26-models.md`, section "Open, from this batch". If the maintainer has said go, run the
-   `perch-v2` choice of the "Publish model release" workflow, download the asset and check its sha256 against the
-   catalogue's pin, then add the release URL as Perch's first `mirror_urls` entry (MDL-12). The licence was read at
-   Google's own page on 2026-11-26 and is Apache-2.0; nothing has been published.
+1. Read `BATCH-2026-11-26-models.md`, section "Open, from this batch". MDL-12 is closed: on the maintainer's go
+   the `models-perch-v2` release was published on 2026-11-26 (run 45827786454), its `perch-v2.onnx` was downloaded
+   and matched the catalogue's sha256 and size, and it is Perch's first `mirror_urls` entry. The built binary then installed Perch
+   with `--install-model perch-v2` into an empty directory (exit 0, the pinned sha256).
 2. Write the container half of `installer/test/model-e2e.sh` (MDL-18) and look at the first runs of
    `model-e2e.yml` on GitHub; it had never run there before this batch's pull request.
 3. Then the remaining promises, one batch each, in this order. For each, start by breaking it on a real install

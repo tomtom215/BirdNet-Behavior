@@ -394,15 +394,15 @@ It was run once, on 2026-10-20, from a feature branch; its assets were read on
 branch that carries the `classifier` input has merged, so the attestation names
 `main`, and again only when a pinned digest in the catalogue changes.
 
-## Perch v2 has no release of this project's yet
+## Perch v2's release: `models-perch-v2`
 
-`--install-model perch-v2` fetches the ONNX conversion from its only origin,
-`huggingface.co/justinchuby/Perch-onnx` at a pinned revision; its labels are
-compiled into the binary. The catalogue's list of origins is ordered, so a
-`models-perch-v2` release, once published, goes first in `perch-v2`'s
-`mirror_urls` and nothing else changes. What that release would have to hold,
-and what is and is not established about the licences, is in
-`docs/book/admin/classifiers.md` ("Where the files come from").
+`--install-model perch-v2` fetches the ONNX conversion from this project's
+`models-perch-v2` release first (published 2026-11-26 by the `perch-v2` choice
+of "Publish model release"), then from `huggingface.co/justinchuby/Perch-onnx`
+at a pinned revision; its labels are compiled into the binary. Both origins are
+held to the catalogue's sha256 and size. What the release holds, and what is
+established about the licences, is in `docs/book/admin/classifiers.md` ("Where
+the files come from"). Run the job again only if the pinned file changes.
 
 ## Rehearsing a release (dry run)
 

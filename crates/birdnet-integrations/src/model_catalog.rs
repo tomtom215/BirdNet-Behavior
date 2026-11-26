@@ -143,8 +143,8 @@ impl Use {
 /// Every file is fetched from an ordered list of origins: this project's own
 /// copies first (`mirror_urls`, `labels_mirror_urls`, in order), then the file
 /// as its publisher put it out (`model_url`, `labels_url`). A file with no copy
-/// of this project's yet (Perch) has an empty mirror list, and the day one is
-/// published its URL goes first in that list and nothing else changes. Every
+/// of this project's has an empty mirror list, and the day one is published
+/// its URL goes first in that list and nothing else changes. Every
 /// origin is held to the same sha256 and size, so an origin that served
 /// anything else is refused exactly as a bad upstream is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -330,10 +330,13 @@ pub const CATALOG: &[CatalogEntry] = &[
         name: "Google Perch v2 (14 795 classes)",
         model_url: "https://huggingface.co/justinchuby/Perch-onnx/resolve/\
                     da88bf8c37c0b3068fc706fe509f633b9fbd28c1/perch_v2.onnx",
-        // No copy of this project's yet: the ONNX conversion's only origin is
-        // its Hugging Face repository. A `models-perch-v2` release would go
-        // first here.
-        mirror_urls: &[],
+        // This project's `models-perch-v2` release: a byte-for-byte copy of
+        // the file below with the Apache-2.0 text and a notice beside it
+        // (publish-model.yml, `perch-v2`; published 2026-11-26).
+        mirror_urls: &[
+            "https://github.com/tomtom215/BirdNet-Behavior/releases/download/\
+             models-perch-v2/perch-v2.onnx",
+        ],
         source: "Google's Perch v2 (bird-vocalization-classifier v2, \
                  kaggle.com/models/google/bird-vocalization-classifier), as the ONNX \
                  conversion published at huggingface.co/justinchuby/Perch-onnx",
