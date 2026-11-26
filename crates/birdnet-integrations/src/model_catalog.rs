@@ -200,6 +200,13 @@ pub struct CatalogEntry {
     /// The name an earlier installer gave the labels file, adopted like
     /// [`Self::legacy_model_name`].
     pub legacy_labels_name: Option<&'static str>,
+    /// Other labels files a station may already hold under the installed name
+    /// and keeps: each a digest and a size. Such a file names the same classes
+    /// in the same order, so the model's scores land on the right species, and
+    /// differs only in the common names it gives them; replacing it would put
+    /// one species under two names in that station's history. Never written by
+    /// an install, only left in place.
+    pub labels_also_accepted: &'static [(&'static str, u64)],
     /// The sample rate it needs — what `MODEL_n_SAMPLE_RATE` should be set to.
     ///
     /// Carried here because it is not derivable from the tensor: Perch v2's
@@ -266,6 +273,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         labels_bytes: 809_172,
         labels_ext: "csv",
         legacy_labels_name: Some("BirdNET+_V3.0-preview3_Global_11K_Labels.csv"),
+        labels_also_accepted: &[],
         sample_rate: 32_000,
         usage: Use::Classifier,
         pairs_with: None,
@@ -306,6 +314,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         labels_bytes: 571_793,
         labels_ext: "txt",
         legacy_labels_name: Some("BirdNET+_Geomodel_V3.0.2_Global_12K_Labels.txt"),
+        labels_also_accepted: &[],
         sample_rate: 0,
         usage: Use::RangeFilter,
         pairs_with: Some("birdnet-v3"),
@@ -349,6 +358,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         labels_bytes: 0,
         labels_ext: "csv",
         legacy_labels_name: None,
+        labels_also_accepted: &[],
         sample_rate: 32_000,
         usage: Use::Classifier,
         pairs_with: None,
@@ -401,6 +411,13 @@ pub const CATALOG: &[CatalogEntry] = &[
         labels_bytes: 0,
         labels_ext: "txt",
         legacy_labels_name: None,
+        // birdnet-go's own `labels.txt` at the pinned revision, which installs
+        // before 0.18.0 downloaded: the same 6 522 classes in the same order
+        // (`data/labels/README.md`), 460 of them under another English name.
+        labels_also_accepted: &[(
+            "487937b6ad132b8506215523209a87b86adc9dce8e5ed3048ce9268189dddd3d",
+            259_894,
+        )],
         sample_rate: 48_000,
         usage: Use::PrimaryReplacement,
         pairs_with: None,
@@ -444,6 +461,7 @@ pub const CATALOG: &[CatalogEntry] = &[
         labels_bytes: 0,
         labels_ext: "",
         legacy_labels_name: None,
+        labels_also_accepted: &[],
         sample_rate: 0,
         usage: Use::RangeFilter,
         pairs_with: Some("birdnet-v24"),
@@ -780,6 +798,35 @@ struct FileSpec {
     legacy: Option<&'static str>,
     /// The bytes themselves, when the binary carries them.
     embedded: Option<&'static str>,
+    /// Other files kept when found in place ([`CatalogEntry::labels_also_accepted`]).
+    also_accepted: &'static [(&'static str, u64)],
+}
+
+impl FileSpec {
+    /// The state of this file in `dir`: verified when it is the pinned file or
+    /// one of [`Self::also_accepted`].
+    fn state_in(&self, dir: &Path, rehash: Rehash) -> FileState {
+        let path = dir.join(&self.name);
+        let pinned = record::check(&path, self.sha256, self.bytes, rehash);
+        if pinned != FileState::Damaged {
+            return pinned;
+        }
+        // Not the pinned file. One of the others is as good; one that cannot
+        // be told without hashing is unchecked, as the pinned file would be.
+        let others = self
+            .also_accepted
+            .iter()
+            .map(|(sha256, bytes)| record::check(&path, sha256, *bytes, rehash));
+        let mut state = FileState::Damaged;
+        for other in others {
+            match other {
+                FileState::Verified => return FileState::Verified,
+                FileState::Unchecked => state = FileState::Unchecked,
+                FileState::Damaged | FileState::Missing => {}
+            }
+        }
+        state
+    }
 }
 
 impl CatalogEntry {
@@ -793,6 +840,7 @@ impl CatalogEntry {
             bytes: self.model_bytes,
             legacy: self.legacy_model_name,
             embedded: None,
+            also_accepted: &[],
         }
     }
 
@@ -815,6 +863,7 @@ impl CatalogEntry {
             origins,
             legacy: self.legacy_labels_name,
             embedded: self.labels_embedded,
+            also_accepted: self.labels_also_accepted,
         })
     }
 }
@@ -857,7 +906,7 @@ pub fn installed_state(entry: &CatalogEntry, dir: &Path, rehash: Rehash) -> Inst
     let model = installed_paths(entry, dir).0;
     let labels = entry
         .labels_spec(&FetchPolicy::default())
-        .map(|spec| record::check(&dir.join(&spec.name), spec.sha256, spec.bytes, rehash));
+        .map(|spec| spec.state_in(dir, rehash));
     InstallState {
         model: record::check(&model, entry.model_sha256, entry.model_bytes, rehash),
         labels,
@@ -1020,7 +1069,7 @@ fn ensure_file(
     // Hashed in full, not taken from its record: `--install-model` is what an
     // operator runs when something is wrong, and a file damaged in place keeps
     // its size and its modification time.
-    if record::check(&dest, spec.sha256, spec.bytes, Rehash::Always) == FileState::Verified {
+    if spec.state_in(dir, Rehash::Always) == FileState::Verified {
         tracing::info!(id, path = %dest.display(), "already installed and verified; not fetching it again");
         return Ok(());
     }

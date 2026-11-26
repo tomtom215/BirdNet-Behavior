@@ -337,7 +337,7 @@ jobs:
           echo "$sha  $model" | sha256sum -c -
 
           # The geomodel, for the occurrence-filter test. Same release, same
-          # pinned checksums as installer/lib/10-config.sh, and the same rule:
+          # pinned checksums as the model catalogue, and the same rule:
           # a download failure skips, a wrong checksum fails.
           geo="$dir/geomodel.onnx"
           geolabels="$dir/geomodel-labels.txt"

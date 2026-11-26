@@ -30,6 +30,7 @@ fn spec_with_urls(body: &[u8], origins: Vec<String>) -> FileSpec {
         origins,
         legacy: None,
         embedded: None,
+        also_accepted: &[],
     }
 }
 

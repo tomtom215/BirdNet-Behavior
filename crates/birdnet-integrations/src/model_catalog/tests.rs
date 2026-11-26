@@ -563,6 +563,82 @@ fn spec_for(body: &[u8], legacy: Option<&'static str>) -> FileSpec {
         origins: Vec::new(),
         legacy,
         embedded: None,
+        also_accepted: &[],
+    }
+}
+
+/// A labels file an earlier install left in place is kept when it is one the
+/// entry also accepts, and only then: a station that has birdnet-go's V2.4
+/// names keeps them, so its history does not gain a second name for 460
+/// species, while any other file of that size is still damaged.
+///
+/// Observed failing with `state_in` returning the pinned verdict alone
+/// (`left: Damaged, right: Unchecked`).
+#[test]
+fn a_labels_file_the_entry_also_accepts_is_kept_and_no_other() {
+    const PINNED: &[u8] = b"Pica pica_Eurasian Magpie\n";
+    const OLDER: &[u8] = b"Pica pica_Common Magpie\n";
+    const OTHER: &[u8] = b"Pica pica_Magpie itself\n";
+    assert_eq!(
+        OLDER.len(),
+        OTHER.len(),
+        "the impostor has the accepted size"
+    );
+    let accepted: &'static [(&'static str, u64)] =
+        Box::leak(Box::new([(digest_of(OLDER), OLDER.len() as u64)]));
+    let spec = FileSpec {
+        also_accepted: accepted,
+        ..spec_for(PINNED, None)
+    };
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join(&spec.name);
+
+    std::fs::write(&path, OLDER).expect("write");
+    assert_eq!(
+        spec.state_in(dir.path(), Rehash::Never),
+        FileState::Unchecked,
+        "not hashed yet, and asked not to"
+    );
+    assert_eq!(
+        spec.state_in(dir.path(), Rehash::IfChanged),
+        FileState::Verified
+    );
+    assert_eq!(
+        spec.state_in(dir.path(), Rehash::Never),
+        FileState::Verified
+    );
+    assert_eq!(
+        spec.state_in(dir.path(), Rehash::Always),
+        FileState::Verified
+    );
+
+    std::fs::write(&path, OTHER).expect("write");
+    assert_eq!(
+        spec.state_in(dir.path(), Rehash::Always),
+        FileState::Damaged
+    );
+    std::fs::write(&path, PINNED).expect("write");
+    assert_eq!(
+        spec.state_in(dir.path(), Rehash::Always),
+        FileState::Verified
+    );
+    std::fs::remove_file(&path).expect("remove");
+    assert_eq!(
+        spec.state_in(dir.path(), Rehash::Always),
+        FileState::Missing
+    );
+
+    let v24 = find("birdnet-v24").expect("in the catalogue");
+    assert_eq!(
+        v24.labels_also_accepted,
+        &[(
+            "487937b6ad132b8506215523209a87b86adc9dce8e5ed3048ce9268189dddd3d",
+            259_894
+        )],
+        "the catalogue accepts birdnet-go's labels"
+    );
+    for entry in CATALOG.iter().filter(|e| e.id != "birdnet-v24") {
+        assert!(entry.labels_also_accepted.is_empty(), "{}", entry.id);
     }
 }
 
