@@ -453,3 +453,66 @@ fn a_failure_says_what_the_network_did() {
     assert!(text.contains("nothing arrived for 1 s"), "{text}");
     assert!(text.to_ascii_lowercase().contains("refused"), "{text}");
 }
+
+/// **An operator's mirror credentials never reach a log line or an error**
+/// (MDL-22, review F20). A mirror URL with a password and a token in its
+/// query, answering 404, is logged and reported; neither secret may appear in
+/// anything the download wrote to the journal or returned, and the host and
+/// path still do, so the failure stays diagnosable.
+#[test]
+fn a_mirrors_credentials_are_never_logged_or_reported() {
+    #[derive(Clone, Default)]
+    struct Sink(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for Sink {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(b);
+            Ok(b.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let body = body();
+    let origin = Origin::start(vec![Step::Status(404)]);
+    let secret_url = origin
+        .url
+        .replace("http://", "http://mirror-user:hunter2pw@")
+        + "?token=s3cr3ttok&file=model";
+    let spec = spec_with_urls(&body, vec![secret_url]);
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dest_in(dir.path());
+    let sink = Sink::default();
+    let writer = sink.clone();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_writer(move || writer.clone())
+            .finish();
+        let r = tracing::subscriber::with_default(subscriber, || {
+            Network::new(&policy(&[])).fetch(&spec, &dest, &mut |_| {})
+        });
+        let _ = tx.send(r);
+    });
+    let r = rx
+        .recv_timeout(Duration::from_secs(30))
+        .expect("the fetch ended");
+    let err = r.expect_err("a 404 is not an install");
+    let mut seen = String::from_utf8_lossy(&sink.0.lock().unwrap()).into_owned();
+    seen.push_str(&format!("\n{err}\n{err:?}"));
+    assert!(
+        seen.contains("127.0.0.1"),
+        "the host is still named: {seen}"
+    );
+    assert!(
+        seen.contains("mirror-user"),
+        "the account is still named: {seen}"
+    );
+    for secret in ["hunter2pw", "s3cr3ttok"] {
+        assert!(
+            !seen.contains(secret),
+            "{secret} reached a log line or the error: {seen}"
+        );
+    }
+}

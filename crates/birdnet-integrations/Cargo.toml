@@ -55,6 +55,8 @@ tempfile.workspace = true
 # The MQTT-over-TLS gate stands up a real rustls server, so it needs the
 # server half of the same crate the publisher uses for the client half.
 rustls = { workspace = true, features = ["std"] }
+# The credential-redaction gate reads every line a model download logs.
+tracing-subscriber.workspace = true
 
 [lints]
 workspace = true

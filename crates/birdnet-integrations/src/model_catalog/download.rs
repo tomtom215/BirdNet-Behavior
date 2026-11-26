@@ -114,18 +114,23 @@ impl Network {
                 if refused[i] {
                     continue;
                 }
-                tracing::info!(url = %url, round = round + 1, "downloading");
+                // Every log line and message names the origin by this, never
+                // by `url`: an operator's mirror can carry a password or a
+                // token (MDL-22), and the journal and the support bundle are
+                // read by people the operator did not give it to.
+                let shown = shown(url);
+                tracing::info!(url = %shown, round = round + 1, "downloading");
                 let stall = self.policy.stall_timeout;
                 match attempt_origin(&client, url, spec, stall, &mut staging, progress) {
                     Ok(()) => return staging.finish(dest),
                     Err(Failure::Fatal(e)) => return Err(e),
                     Err(Failure::Refused(e)) => {
-                        tracing::warn!(url = %url, error = %e, "this origin will not serve the pinned file; not asking it again");
+                        tracing::warn!(url = %shown, error = %e, "this origin will not serve the pinned file; not asking it again");
                         refused[i] = true;
                         last[i] = Some(e);
                     }
                     Err(Failure::Transient(e) | Failure::ResumedBadly(e)) => {
-                        tracing::warn!(url = %url, error = %e, "this attempt failed; what arrived is kept for the next");
+                        tracing::warn!(url = %shown, error = %e, "this attempt failed; what arrived is kept for the next");
                         last[i] = Some(e);
                     }
                 }
@@ -156,7 +161,7 @@ fn collect(spec: &FileSpec, last: Vec<Option<InstallError>>) -> InstallError {
         .origins
         .iter()
         .zip(last)
-        .filter_map(|(url, e)| e.map(|e| (url.clone(), e)))
+        .filter_map(|(url, e)| e.map(|e| (shown(url), e)))
         .collect();
     if tried.len() == 1 {
         return tried.remove(0).1;
@@ -184,7 +189,16 @@ fn describe(e: &(dyn std::error::Error + 'static)) -> String {
         }
         cause = c.source();
     }
-    text
+    // A library's own message can name the URL another way (a redirect's
+    // target, a cause that prints it): whatever is left is redacted here.
+    birdnet_core::config::redact::redact_credentials_in_text(&text)
+}
+
+/// `url` as it may be printed: the password of any `user:pass@` and the value
+/// of any query parameter that carries a secret replaced (MDL-22). The host,
+/// the path and the account name stay, so a failure is still diagnosable.
+pub(super) fn shown(url: &str) -> String {
+    birdnet_core::config::redact::redact_url_credentials(url)
 }
 
 /// One origin, and once more from the start if a resumed file failed its hash.
@@ -198,7 +212,7 @@ fn attempt_origin(
 ) -> Result<(), Failure> {
     match attempt(client, url, spec, stall, staging, progress) {
         Err(Failure::ResumedBadly(e)) => {
-            tracing::warn!(url, error = %e, "the resumed file did not verify; discarded, fetching it again from the start");
+            tracing::warn!(url = %shown(url), error = %e, "the resumed file did not verify; discarded, fetching it again from the start");
             attempt(client, url, spec, stall, staging, progress).map_err(|f| match f {
                 // From the start, the wrong bytes are the origin's.
                 Failure::ResumedBadly(e) => Failure::Refused(e),
@@ -218,6 +232,7 @@ fn attempt(
     staging: &mut Staging,
     progress: &mut dyn FnMut(&Progress),
 ) -> Result<(), Failure> {
+    let url_shown = shown(url);
     let mut have = staging.len().map_err(Failure::Fatal)?;
     if have > spec.bytes {
         staging.restart().map_err(Failure::Fatal)?;
@@ -230,7 +245,7 @@ fn attempt(
     let mut request = client.get(url);
     if have > 0 {
         tracing::info!(
-            url,
+            url = %url_shown,
             from_byte = have,
             of = spec.bytes,
             "resuming the download"
@@ -246,14 +261,14 @@ fn attempt(
             if content_range_start(&resp) != Some(have) {
                 staging.restart().map_err(Failure::Fatal)?;
                 return Err(Failure::Transient(InstallError::Network(format!(
-                    "{url} answered a range other than the one asked for; starting the file again"
+                    "{url_shown} answered a range other than the one asked for; starting the file again"
                 ))));
             }
             true
         }
         200 => {
             if have > 0 {
-                tracing::info!(url, "this origin does not resume; starting the file again");
+                tracing::info!(url = %url_shown, "this origin does not resume; starting the file again");
                 staging.restart().map_err(Failure::Fatal)?;
             }
             false
@@ -261,17 +276,17 @@ fn attempt(
         416 => {
             staging.restart().map_err(Failure::Fatal)?;
             return Err(Failure::Transient(InstallError::Network(format!(
-                "{url} could not serve the rest of the file; starting it again"
+                "{url_shown} could not serve the rest of the file; starting it again"
             ))));
         }
         404 | 410 => {
             return Err(Failure::Refused(InstallError::Network(format!(
-                "{url} answered {status}"
+                "{url_shown} answered {status}"
             ))));
         }
         _ => {
             return Err(Failure::Transient(InstallError::Network(format!(
-                "{url} answered {status}"
+                "{url_shown} answered {status}"
             ))));
         }
     };
