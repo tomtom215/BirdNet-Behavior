@@ -1407,8 +1407,12 @@ mod tests {
             }),
             Ok(vec![DEFAULT_RANGE_FILTER_ID])
         );
+        // The file is in place before the job that put it there has ended, so
+        // the wait is for both: on a slow machine the first alone was true
+        // while the phase still read `Installing`.
         wait_until("the install", || {
-            s.snapshot(true, &unfiltered).awaits_restart()
+            let snap = s.snapshot(true, &unfiltered);
+            snap.awaits_restart() && snap.phase == Phase::Ready
         });
         let snap = s.snapshot(true, &unfiltered);
         assert_eq!(snap.phase, Phase::Ready);
