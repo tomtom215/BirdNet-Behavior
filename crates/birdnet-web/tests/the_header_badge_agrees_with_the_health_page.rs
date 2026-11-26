@@ -150,7 +150,11 @@ async fn a_source_that_keeps_dropping_out_is_not_healthy_in_the_header() {
 #[tokio::test]
 async fn a_species_filter_that_admits_nothing_is_not_healthy_in_the_header() {
     let state = station(&[("local", SourceState::Connected, false)]);
-    state.metrics().set_occurrence_filter(true, Some(0));
+    state.metrics().set_occurrence_filter(
+        birdnet_core::inference::model_state::FilterState::Active {
+            candidates: Some(0),
+        },
+    );
     let (page_ok, badge_ok, _, badge) = verdicts(&state).await;
     assert!(!page_ok);
     assert!(!badge_ok, "{badge}");

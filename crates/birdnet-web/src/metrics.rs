@@ -258,15 +258,17 @@ pub struct MetricsRegistry {
     /// Distinct from a restart: this is the *diagnosis*, and a stall that keeps
     /// recurring on one source is a hardware fault rather than a flaky link.
     capture_stalls: RwLock<HashMap<String, AtomicU64>>,
-    /// Whether the species occurrence filter is actually running (1) or the
-    /// station is admitting every species the classifier knows (0).
+    /// What the station did with its model files: the detector, every
+    /// configured classifier and the occurrence filter, each in exactly one
+    /// state (MDL-01 to MDL-16). Written by the binary as start-up decides each
+    /// part, read by every surface that says what the models are doing, and
+    /// exported as `birdnet_detector_state`, `birdnet_classifier_state` and
+    /// `birdnet_occurrence_filter_state`.
     ///
-    /// The one number that would have made the inert-filter defect visible
-    /// from a dashboard rather than from reading the code.
-    occurrence_filter_active: AtomicU64,
-    /// How many species the occurrence filter currently admits. `u64::MAX`
-    /// until the filter has run once.
-    occurrence_candidates: AtomicU64,
+    /// `birdnet_occurrence_filter_active` and `birdnet_occurrence_candidates`
+    /// are read from it too, so the one number that would have made the
+    /// inert-filter defect visible cannot disagree with the reason given.
+    models: RwLock<birdnet_core::inference::model_state::ModelsState>,
     /// Clips the database referenced and the disk did not have, found and
     /// stamped by the last reconciliation pass (S-14). `u64::MAX` until a
     /// pass has run.
@@ -337,8 +339,7 @@ impl MetricsRegistry {
             notifications_dropped: RwLock::new(HashMap::new()),
             capture_restarts: RwLock::new(HashMap::new()),
             capture_stalls: RwLock::new(HashMap::new()),
-            occurrence_filter_active: AtomicU64::new(0),
-            occurrence_candidates: AtomicU64::new(u64::MAX),
+            models: RwLock::new(birdnet_core::inference::model_state::ModelsState::default()),
             orphaned_clips: AtomicU64::new(u64::MAX),
             analytics_mirror_failures_total: AtomicU64::new(0),
             analytics_mirror_last_failure: AtomicU64::new(0),
@@ -548,13 +549,46 @@ impl MetricsRegistry {
         Self::bump(&self.capture_stalls, source);
     }
 
-    /// Publish whether occurrence filtering is running, and over how many
-    /// species. `None` candidates means "the filter has not run yet".
-    pub fn set_occurrence_filter(&self, active: bool, candidates: Option<u64>) {
-        self.occurrence_filter_active
-            .store(u64::from(active), Ordering::Relaxed);
-        self.occurrence_candidates
-            .store(candidates.unwrap_or(u64::MAX), Ordering::Relaxed);
+    /// Publish the occurrence filter's state: filtering, with how many species
+    /// it admitted when it last ran, or off and why.
+    pub fn set_occurrence_filter(&self, state: birdnet_core::inference::model_state::FilterState) {
+        self.models
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .occurrence_filter = state;
+    }
+
+    /// Publish what became of every configured classifier, the primary first.
+    pub fn set_classifier_states(
+        &self,
+        states: Vec<birdnet_core::inference::model_state::ClassifierState>,
+    ) {
+        self.models
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .classifiers = states;
+    }
+
+    /// Publish the detector's state. One that is not running takes the
+    /// classifiers it had loaded and the occurrence filter with it (see
+    /// [`birdnet_core::inference::model_state::ModelsState::set_detector`]).
+    pub fn set_detector_state(&self, state: birdnet_core::inference::model_state::DetectorState) {
+        self.models
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .set_detector(state);
+    }
+
+    /// What the station did with its model files, as last published.
+    #[must_use]
+    pub fn models_state(&self) -> birdnet_core::inference::model_state::ModelsState {
+        // A writer that panicked left a whole state behind (each write
+        // replaces one part), so the last one written is read rather than an
+        // invented "starting".
+        self.models
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
     }
 
     /// The flag a disk manager sets when its purge stopped achieving
@@ -650,15 +684,13 @@ impl MetricsRegistry {
     }
 
     /// The occurrence filter's live state: whether it is running, and how
-    /// many species it admits (`None` until it has run). The same pair
-    /// `set_occurrence_filter` stores, for the surfaces a person reads.
+    /// many species it admits (`None` until it has run, and whenever it is
+    /// off). Read from [`Self::models_state`], for the surfaces a person reads.
     pub fn occurrence_filter(&self) -> OccurrenceFilterState {
+        let models = self.models_state();
         OccurrenceFilterState {
-            active: self.occurrence_filter_active.load(Ordering::Relaxed) == 1,
-            candidates: match self.occurrence_candidates.load(Ordering::Relaxed) {
-                u64::MAX => None,
-                n => Some(n),
-            },
+            active: models.occurrence_filter.is_active(),
+            candidates: models.occurrence_filter.candidates(),
         }
     }
 
@@ -925,8 +957,7 @@ impl MetricsRegistry {
             notifications_dropped: Self::read_map(&self.notifications_dropped),
             capture_restarts: Self::read_map(&self.capture_restarts),
             capture_stalls: Self::read_map(&self.capture_stalls),
-            occurrence_filter_active: self.occurrence_filter().active,
-            occurrence_candidates: self.occurrence_filter().candidates,
+            models: self.models_state(),
             orphaned_clips: self.orphaned_clips(),
             analytics_mirror_failures: self.analytics_mirror_failures(),
             disk_full: DiskFullSnapshot {
@@ -1032,10 +1063,9 @@ pub struct MetricsSnapshot {
     pub capture_restarts: Vec<(String, u64)>,
     /// Silent stalls diagnosed per source.
     pub capture_stalls: Vec<(String, u64)>,
-    /// Whether occurrence filtering is running.
-    pub occurrence_filter_active: bool,
-    /// Species the occurrence filter admits (`None` = not yet run).
-    pub occurrence_candidates: Option<u64>,
+    /// What the station did with its model files: the detector, each
+    /// classifier and the occurrence filter.
+    pub models: birdnet_core::inference::model_state::ModelsState,
     /// Orphaned clips found by the last reconciliation pass; `None` until one
     /// has run.
     pub orphaned_clips: Option<u64>,
@@ -1047,6 +1077,70 @@ pub struct MetricsSnapshot {
     pub http_responses: Vec<(String, u64)>,
     /// Web request latency.
     pub http_duration: HistogramSnapshot,
+}
+
+/// The station's models as state-set gauges (MDL-01 to MDL-16): for the
+/// detector, each configured classifier and the occurrence filter, one series
+/// per state it can be in, the one it is in at 1 and the rest at 0. Every
+/// state is listed, so an alert on `…{state="failed"} == 1` has a series to
+/// read before the first failure as well as after it.
+///
+/// `birdnet_occurrence_filter_active` is 1 only for a filter that is
+/// filtering: one configured with no coordinates, or whose files are missing
+/// or unusable, is 0 (MDL-04). Its candidate count is exported only while it
+/// is filtering and has run, never invented for one that is off.
+fn push_models_series(
+    out: &mut String,
+    models: &birdnet_core::inference::model_state::ModelsState,
+) {
+    use birdnet_core::inference::model_state::{ClassifierStatus, DetectorState, FilterState};
+    use std::fmt::Write as _;
+
+    out.push_str("# HELP birdnet_detector_state The detection daemon's state: 1 for the state it is in (starting, running, web_only, not_configured, failed, stopped), 0 for the others.\n");
+    out.push_str("# TYPE birdnet_detector_state gauge\n");
+    for code in DetectorState::CODES {
+        let _ = writeln!(
+            out,
+            "birdnet_detector_state{{state=\"{code}\"}} {}",
+            u8::from(*code == models.detector.code())
+        );
+    }
+    if !models.classifiers.is_empty() {
+        out.push_str("# HELP birdnet_classifier_state Each configured classifier's state: 1 for the state it is in (judging; unrouted, loaded and judging nothing; or left_out_<why>), 0 for the others.\n");
+        out.push_str("# TYPE birdnet_classifier_state gauge\n");
+        for classifier in &models.classifiers {
+            let id = escape_label(&classifier.id);
+            for code in ClassifierStatus::CODES {
+                let _ = writeln!(
+                    out,
+                    "birdnet_classifier_state{{classifier=\"{id}\",state=\"{code}\"}} {}",
+                    u8::from(*code == classifier.status.code())
+                );
+            }
+        }
+    }
+    out.push_str("# HELP birdnet_occurrence_filter_state The species occurrence filter's state: 1 for the state it is in (active, or off_<why>), 0 for the others.\n");
+    out.push_str("# TYPE birdnet_occurrence_filter_state gauge\n");
+    for code in FilterState::CODES {
+        let _ = writeln!(
+            out,
+            "birdnet_occurrence_filter_state{{state=\"{code}\"}} {}",
+            u8::from(*code == models.occurrence_filter.code())
+        );
+    }
+
+    out.push_str("# HELP birdnet_occurrence_filter_active Whether species occurrence filtering is running (1) or every species the classifier knows is admitted (0).\n");
+    out.push_str("# TYPE birdnet_occurrence_filter_active gauge\n");
+    let _ = writeln!(
+        out,
+        "birdnet_occurrence_filter_active {}",
+        u8::from(models.occurrence_filter.is_active())
+    );
+    if let Some(n) = models.occurrence_filter.candidates() {
+        out.push_str("# HELP birdnet_occurrence_candidates Species the occurrence filter currently admits.\n");
+        out.push_str("# TYPE birdnet_occurrence_candidates gauge\n");
+        let _ = writeln!(out, "birdnet_occurrence_candidates {n}");
+    }
 }
 
 /// Render the runtime metrics as Prometheus text 0.0.4.
@@ -1282,19 +1376,7 @@ pub fn render_runtime_metrics(snap: &MetricsSnapshot) -> String {
     push_pipeline_series(&mut out, snap);
     push_model_health_series(&mut out, &snap.model_health);
 
-    out.push_str("# HELP birdnet_occurrence_filter_active Whether species occurrence filtering is running (1) or every species the classifier knows is admitted (0).\n");
-    out.push_str("# TYPE birdnet_occurrence_filter_active gauge\n");
-    let _ = writeln!(
-        out,
-        "birdnet_occurrence_filter_active {}",
-        u8::from(snap.occurrence_filter_active)
-    );
-
-    if let Some(n) = snap.occurrence_candidates {
-        out.push_str("# HELP birdnet_occurrence_candidates Species the occurrence filter currently admits.\n");
-        out.push_str("# TYPE birdnet_occurrence_candidates gauge\n");
-        let _ = writeln!(out, "birdnet_occurrence_candidates {n}");
-    }
+    push_models_series(&mut out, &snap.models);
 
     out.push_str("# HELP birdnet_http_responses_total Web responses served, by status class.\n");
     out.push_str("# TYPE birdnet_http_responses_total counter\n");
@@ -1911,9 +1993,114 @@ mod operational_metrics_tests {
 
     #[test]
     fn the_occurrence_gauge_reports_a_running_filter_and_its_candidates() {
-        let out = rendered(|r| r.set_occurrence_filter(true, Some(287)));
+        let out = rendered(|r| {
+            r.set_occurrence_filter(birdnet_core::inference::model_state::FilterState::Active {
+                candidates: Some(287),
+            });
+        });
         assert!(out.contains("birdnet_occurrence_filter_active 1"), "{out}");
         assert!(out.contains("birdnet_occurrence_candidates 287"), "{out}");
+        assert!(
+            out.contains("birdnet_occurrence_filter_state{state=\"active\"} 1"),
+            "{out}"
+        );
+    }
+
+    /// MDL-04: a filter that is configured and cannot filter — here, no
+    /// coordinates — is not "on". It was reported active with every species as
+    /// a candidate, and Station Health said "on · admitting".
+    #[test]
+    fn a_filter_that_is_off_is_not_active_whatever_it_was_told_to_admit() {
+        use birdnet_core::inference::model_state::{FilterOff, FilterState};
+        let r = MetricsRegistry::new();
+        r.set_occurrence_filter(FilterState::off(FilterOff::NoCoordinates, "no position"));
+        assert_eq!(
+            r.occurrence_filter(),
+            OccurrenceFilterState {
+                active: false,
+                candidates: None
+            }
+        );
+        let out = render_runtime_metrics(&r.snapshot());
+        assert!(out.contains("birdnet_occurrence_filter_active 0"), "{out}");
+        assert!(
+            out.contains("birdnet_occurrence_filter_state{state=\"off_no_coordinates\"} 1"),
+            "{out}"
+        );
+        assert!(
+            out.contains("birdnet_occurrence_filter_state{state=\"active\"} 0"),
+            "{out}"
+        );
+        assert!(!out.contains("birdnet_occurrence_candidates"), "{out}");
+    }
+
+    /// Each classifier gets one series per state, the one it is in at 1, and
+    /// the detector its own; a station that has published no classifier yet
+    /// has no classifier family, rather than an invented one.
+    #[test]
+    fn the_models_state_is_exported_one_series_per_state() {
+        use birdnet_core::inference::model_state::{
+            ClassifierFault, ClassifierState, ClassifierStatus, DetectorState,
+        };
+        let r = MetricsRegistry::new();
+        let out = render_runtime_metrics(&r.snapshot());
+        assert!(
+            out.contains("birdnet_detector_state{state=\"starting\"} 1"),
+            "{out}"
+        );
+        assert!(!out.contains("birdnet_classifier_state"), "{out}");
+
+        r.set_classifier_states(vec![
+            ClassifierState {
+                id: "birdnet".to_owned(),
+                primary: true,
+                model_path: "/m/v24.onnx".into(),
+                labels_path: Some("/m/v24.txt".into()),
+                status: ClassifierStatus::Judging {
+                    sources: Vec::new(),
+                    unrouted_sources: true,
+                },
+            },
+            ClassifierState {
+                id: "perch".to_owned(),
+                primary: false,
+                model_path: "/m/perch.onnx".into(),
+                labels_path: Some("/m/perch.csv".into()),
+                status: ClassifierStatus::left_out(ClassifierFault::WillNotLoad, "truncated"),
+            },
+        ]);
+        r.set_detector_state(DetectorState::Running);
+        let out = render_runtime_metrics(&r.snapshot());
+        assert!(
+            out.contains("birdnet_detector_state{state=\"running\"} 1"),
+            "{out}"
+        );
+        assert!(
+            out.contains("birdnet_detector_state{state=\"starting\"} 0"),
+            "{out}"
+        );
+        assert!(
+            out.contains(
+                "birdnet_classifier_state{classifier=\"perch\",state=\"left_out_will_not_load\"} 1"
+            ),
+            "{out}"
+        );
+        assert!(
+            out.contains("birdnet_classifier_state{classifier=\"perch\",state=\"judging\"} 0"),
+            "{out}"
+        );
+        assert!(
+            out.contains("birdnet_classifier_state{classifier=\"birdnet\",state=\"judging\"} 1"),
+            "{out}"
+        );
+        let per_classifier = out
+            .lines()
+            .filter(|l| l.starts_with("birdnet_classifier_state{classifier=\"perch\""))
+            .count();
+        assert_eq!(
+            per_classifier,
+            birdnet_core::inference::model_state::ClassifierStatus::CODES.len()
+        );
     }
 
     /// "Detecting nothing" and "discarding everything" look identical from
@@ -2015,7 +2202,18 @@ mod operational_metrics_tests {
     #[test]
     fn the_rendered_document_is_well_formed() {
         let out = rendered(|r| {
-            r.set_occurrence_filter(true, Some(1));
+            r.set_occurrence_filter(birdnet_core::inference::model_state::FilterState::Active {
+                candidates: Some(1),
+            });
+            r.set_classifier_states(vec![
+                birdnet_core::inference::model_state::ClassifierState {
+                    id: r#"we"ird"#.to_owned(),
+                    primary: true,
+                    model_path: "/m/a.onnx".into(),
+                    labels_path: None,
+                    status: birdnet_core::inference::model_state::ClassifierStatus::Unrouted,
+                },
+            ]);
             r.inc_detection_dropped("quality");
             r.inc_capture_restart(r#"weird"source"#);
             r.observe_http(200, 0.01);

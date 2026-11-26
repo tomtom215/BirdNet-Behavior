@@ -39,6 +39,7 @@ use std::path::PathBuf;
 
 use birdnet_core::config::Config;
 use birdnet_core::inference::model::OutputScale;
+use birdnet_core::inference::model_state::{ClassifierFault, ClassifierState, ClassifierStatus};
 use birdnet_core::inference::registry::{MAX_MODELS, ModelSpec, model_size_mib, parse_routes};
 
 /// The settings that declare one extra classifier.
@@ -140,12 +141,22 @@ pub struct ModelPlan {
     pub specs: Vec<ModelSpec>,
     /// Per-source routing, already parsed.
     pub routes: HashMap<String, Vec<String>>,
-    /// Human-readable notes: refusals, malformed routes, what was admitted.
+    /// Human-readable notes: malformed routes and settings, what was
+    /// admitted.
     ///
     /// Reported rather than returned as errors because none of them should
     /// stop a station recording birds — but every one of them must be visible
     /// to somebody reading a journal months later.
     pub notes: Vec<String>,
+    /// The extra classifiers the configuration declares and this machine will
+    /// not load, each with why (MDL-01): its file cannot be read, it has no
+    /// labels setting, or it does not fit in memory. Published with the
+    /// classifiers the registry loads, so a station says why it runs on fewer
+    /// than it was given.
+    pub left_out: Vec<ClassifierState>,
+    /// Every classifier id the configuration declares, the primary first, in
+    /// declaration order — the order the published states are listed in.
+    pub declared: Vec<String>,
 }
 
 /// Read the classifier configuration and decide what this machine can run.
@@ -235,48 +246,94 @@ pub fn plan_with(
     let mut used = model_size_mib(&specs[0].model_path)
         .map_or(PER_MODEL_WORKING_SET_MIB, |m| m + PER_MODEL_WORKING_SET_MIB);
 
+    let mut left_out = Vec::new();
+    let mut declared = vec![specs[0].id.clone()];
+    // Once one classifier has not fitted, none after it is tried: the set is
+    // a prefix, so an operator sees one boundary rather than a scatter.
+    let mut refused_for_memory: Option<(ClassifierFault, String)> = None;
     for keys in EXTRA_MODEL_KEYS {
         let Some(path) = get(keys.path_key) else {
             continue;
         };
-        let Some(labels) = get(keys.labels_key) else {
-            notes.push(format!(
-                "{} is set but {} is not; skipping that classifier. Labels are positional \
-                 against a model's output, so running one without its own labels would \
-                 report species under other species' names",
-                keys.path_key, keys.labels_key
-            ));
-            continue;
-        };
         let path = PathBuf::from(path);
         let id = get(keys.id_key).unwrap_or_else(|| keys.default_id.to_owned());
-
+        declared.push(id.clone());
+        let labels = get(keys.labels_key).map(PathBuf::from);
+        let mut leave_out = |fault: ClassifierFault, why: String| {
+            left_out.push(ClassifierState {
+                id: id.clone(),
+                primary: false,
+                model_path: path.clone(),
+                labels_path: labels.clone(),
+                status: ClassifierStatus::left_out(fault, why),
+            });
+        };
+        if let Some((fault, why)) = refused_for_memory.as_ref() {
+            leave_out(*fault, why.clone());
+            continue;
+        }
+        let Some(labels_path) = labels.clone() else {
+            leave_out(
+                ClassifierFault::LabelsNotSet,
+                format!(
+                    "{} is set but {} is not. Labels are positional against a model's output, \
+                     so running one without its own labels would report species under other \
+                     species' names; set {} to its labels file",
+                    keys.path_key, keys.labels_key, keys.labels_key
+                ),
+            );
+            continue;
+        };
         let Some(size) = model_size_mib(&path) else {
-            notes.push(format!(
-                "classifier `{id}` at {} cannot be read; skipping it. A model whose size is \
-                 unknown is treated as unaffordable rather than free",
-                path.display()
-            ));
+            let fault = if path.exists() {
+                ClassifierFault::WillNotLoad
+            } else {
+                ClassifierFault::FileMissing
+            };
+            leave_out(
+                fault,
+                format!(
+                    "its model file {} cannot be read{}; install it (`birdnet-behavior \
+                     --install-model <id>`) or correct {}. A model whose size is unknown is \
+                     treated as unaffordable rather than free",
+                    path.display(),
+                    if path.exists() {
+                        ""
+                    } else {
+                        " (it is not there)"
+                    },
+                    keys.path_key
+                ),
+            );
             continue;
         };
         let want = size + PER_MODEL_WORKING_SET_MIB;
 
         match budget {
             None => {
-                notes.push(format!(
-                    "classifier `{id}` skipped: this machine does not report how much memory \
-                     it has, so a second classifier cannot be shown to fit. Running one that \
-                     does not fit is an out-of-memory kill on an unattended station"
-                ));
-                break;
+                let why = format!(
+                    "this machine does not report how much memory it has, so a classifier \
+                     beside the primary cannot be shown to fit. Running one that does not fit \
+                     is an out-of-memory kill on an unattended station (`{id}` needs about \
+                     {want} MiB)"
+                );
+                leave_out(ClassifierFault::MemoryUnknown, why.clone());
+                refused_for_memory = Some((ClassifierFault::MemoryUnknown, why));
             }
             Some(budget) if used + want > budget => {
-                notes.push(format!(
-                    "classifier `{id}` skipped: it needs about {want} MiB and {used} MiB of the \
-                     {budget} MiB classifier budget is already committed. The station runs on \
-                     the classifiers it can afford rather than being OOM-killed later"
+                let why = format!(
+                    "it needs about {want} MiB and {used} MiB of the {budget} MiB classifier \
+                     budget (half of this machine's memory) is already committed. The station \
+                     runs on the classifiers it can afford rather than being OOM-killed later"
+                );
+                leave_out(ClassifierFault::DoesNotFit, why);
+                refused_for_memory = Some((
+                    ClassifierFault::DoesNotFit,
+                    format!(
+                        "an earlier classifier did not fit in the {budget} MiB classifier \
+                         budget, so none after it is loaded"
+                    ),
                 ));
-                break;
             }
             Some(_) => {
                 used += want;
@@ -286,7 +343,7 @@ pub fn plan_with(
                 specs.push(ModelSpec {
                     id,
                     model_path: path,
-                    labels_path: PathBuf::from(labels),
+                    labels_path,
                     threshold: model_threshold(get, keys.threshold_key, &mut notes),
                     sample_rate: model_sample_rate(get, keys.sample_rate_key, &mut notes),
                     output_scale: model_output_scale(get, keys.output_scale_key, &mut notes),
@@ -309,12 +366,7 @@ pub fn plan_with(
     // route target and with it the whole station (MMP-22). Its sources keep
     // the classifiers that did load, or fall back to the primary. A name that
     // was never declared stays, so the registry still refuses the typo.
-    let declined: Vec<String> = EXTRA_MODEL_KEYS
-        .iter()
-        .filter(|keys| get(keys.path_key).is_some())
-        .map(|keys| get(keys.id_key).unwrap_or_else(|| keys.default_id.to_owned()))
-        .filter(|id| specs.iter().all(|s| s.id != *id))
-        .collect();
+    let declined: Vec<String> = left_out.iter().map(|s| s.id.clone()).collect();
     let mut sources: Vec<&String> = routes.keys().collect();
     sources.sort();
     let mut dropped = Vec::new();
@@ -340,6 +392,8 @@ pub fn plan_with(
         specs,
         routes,
         notes,
+        left_out,
+        declared,
     }
 }
 
@@ -651,6 +705,22 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
+    /// Everything the plan says, as a person reads it: its notes and why each
+    /// classifier it left out is not running.
+    fn said(p: &super::ModelPlan) -> Vec<String> {
+        p.notes
+            .iter()
+            .cloned()
+            .chain(p.left_out.iter().map(super::ClassifierState::message))
+            .collect()
+    }
+
+    /// The state code of the one classifier the plan left out.
+    fn left_out_code(p: &super::ModelPlan) -> &'static str {
+        assert_eq!(p.left_out.len(), 1, "{:?}", p.left_out);
+        p.left_out[0].status.code()
+    }
+
     /// Write a file of `mib` megabytes and return its path.
     fn model_of(dir: &std::path::Path, name: &str, mib: u64) -> PathBuf {
         let p = dir.join(name);
@@ -904,12 +974,13 @@ mod tests {
             None,
         );
         assert_eq!(p.specs.len(), 1, "no ceiling → no extra classifier");
+        assert_eq!(left_out_code(&p), "left_out_memory_unknown");
         assert!(
-            p.notes
+            said(&p)
                 .iter()
                 .any(|n| n.contains("does not report how much memory")),
             "{:?}",
-            p.notes
+            said(&p)
         );
     }
 
@@ -971,9 +1042,10 @@ mod tests {
             "the second must be refused: {:?}",
             p.notes
         );
-        let note = p.notes.join(" | ");
+        assert_eq!(left_out_code(&p), "left_out_does_not_fit");
+        let note = said(&p).join(" | ");
         assert!(note.contains("perch"), "{note}");
-        assert!(note.contains("skipped"), "{note}");
+        assert!(note.contains("not running"), "{note}");
         assert!(note.contains("512"), "the budget must appear: {note}");
         assert!(
             note.contains("OOM-killed"),
@@ -997,10 +1069,11 @@ mod tests {
             Some(8192),
         );
         assert_eq!(p.specs.len(), 1);
+        assert_eq!(left_out_code(&p), "left_out_labels_not_set");
         assert!(
-            p.notes.iter().any(|n| n.contains("other species' names")),
+            said(&p).iter().any(|n| n.contains("other species' names")),
             "{:?}",
-            p.notes
+            said(&p)
         );
     }
 
@@ -1021,12 +1094,13 @@ mod tests {
             Some(8192),
         );
         assert_eq!(p.specs.len(), 1);
+        assert_eq!(left_out_code(&p), "left_out_file_missing");
         assert!(
-            p.notes
+            said(&p)
                 .iter()
                 .any(|n| n.contains("unaffordable rather than free")),
             "{:?}",
-            p.notes
+            said(&p)
         );
     }
 

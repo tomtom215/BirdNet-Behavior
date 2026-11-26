@@ -14,7 +14,15 @@
 //!
 //! **A registry always has at least one classifier.** A station with none is
 //! not a degraded station, it is a station that has silently stopped being
-//! what it is for. [`ClassifierRegistry::load`] refuses to build one.
+//! what it is for. [`ClassifierRegistry::load`] refuses to build one, and
+//! refuses a primary that will not load.
+//!
+//! **An extra classifier that will not load is left out, not fatal**
+//! (MDL-01). The primary is the station; a second opinion is optional. A
+//! truncated Perch file beside a working V2.4 used to fail the whole registry,
+//! and a real station recorded nothing for it. Now that classifier is held in
+//! [`ClassifierRegistry::left_out`] with the reason, a route naming it falls
+//! back to the classifiers that did load, and the rest of the station detects.
 //!
 //! **An unknown route fails at startup.** `MODEL_ROUTES=front-door:pecrh` is a
 //! typo that must stop the station before it starts, where the journal and
@@ -39,8 +47,19 @@ use std::collections::HashMap;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use crate::inference::labels::LabelSet;
+use crate::inference::labels::{LabelError, LabelSet};
 use crate::inference::model::{BirdNetModel, InputSpec, ModelConfig, OutputScale};
+use crate::inference::model_state::{ClassifierFault, ClassifierState, ClassifierStatus};
+
+/// The source id a recording with no source id in its name belongs to: the
+/// station's own microphone, named as `BirdNET-Pi` names its recordings.
+///
+/// It is the label that microphone's detections and metrics carry, and so the
+/// key a `MODEL_ROUTES` entry for it is written against
+/// (`local:birdnet+perch`). [`ClassifierRegistry::route_for`] reads a
+/// recording with no id as this source, so the route an operator writes from
+/// what the station shows them reaches the microphone it names (MDL-07).
+pub const LOCAL_SOURCE: &str = "local";
 
 /// How many classifiers a station may run at once.
 ///
@@ -119,6 +138,10 @@ pub struct ModelInfo {
 pub struct RegisteredModel {
     /// The operator's name for it.
     pub id: String,
+    /// Its model file, as declared.
+    pub model_path: PathBuf,
+    /// Its labels file, as declared.
+    pub labels_path: PathBuf,
     /// The classifier itself.
     pub model: BirdNetModel,
     /// Its own threshold, if it was given one.
@@ -167,11 +190,14 @@ pub enum RegistryError {
         /// The repeated id.
         id: String,
     },
-    /// A classifier could not be loaded.
+    /// The primary classifier could not be loaded. (An extra one that
+    /// cannot is left out instead: see [`ClassifierRegistry::left_out`].)
     Load {
         /// Which one.
         id: String,
-        /// Why.
+        /// Why, as a kind.
+        fault: ClassifierFault,
+        /// Why, for a person.
         why: String,
     },
     /// A route names a classifier that was never declared.
@@ -201,7 +227,9 @@ impl fmt::Display for RegistryError {
                 f,
                 "two classifiers are both called `{id}`; a route naming it could mean either"
             ),
-            Self::Load { id, why } => write!(f, "classifier `{id}` could not be loaded: {why}"),
+            Self::Load { id, why, .. } => {
+                write!(f, "classifier `{id}` could not be loaded: {why}")
+            }
             Self::UnknownRouteTarget {
                 source,
                 target,
@@ -225,86 +253,70 @@ pub struct ClassifierRegistry {
     /// Source id → indices into `models`. A source absent from this map uses
     /// [`ClassifierRegistry::default_route`].
     routes: HashMap<String, Vec<usize>>,
+    /// The extra classifiers that were declared and could not be loaded, with
+    /// why, in declaration order.
+    left_out: Vec<ClassifierState>,
+    /// Every declared id, in declaration order, so [`Self::states`] lists
+    /// the classifiers as the configuration does.
+    declared: Vec<String>,
 }
 
 impl ClassifierRegistry {
     /// Load every declared classifier and resolve the routing table.
     ///
     /// `routes` maps an audio source id to the classifier ids that should
-    /// judge it. A source named here must route to classifiers that exist; a
-    /// source not named here uses the primary.
+    /// judge it. A source named here must route to classifiers that were
+    /// declared; a source not named here uses the primary.
+    ///
+    /// An **extra** classifier that cannot be loaded — its file missing or
+    /// damaged, its labels missing, unreadable or not the length of its
+    /// output — is left out with the reason ([`Self::left_out`]), and a route
+    /// naming it keeps the classifiers that did load, or falls back to the
+    /// primary. The primary is the station, so a primary that cannot be
+    /// loaded is refused.
     ///
     /// # Errors
     ///
     /// [`RegistryError`] for an empty or oversized set, a duplicate id, a
-    /// classifier that will not load, or a route naming one that does not
-    /// exist. Every one of these is refused **at startup**, which is the whole
-    /// point: an unattended station must fail where somebody can see it, not
-    /// months later as a source that quietly stopped producing detections.
+    /// primary that will not load, or a route naming a classifier that was
+    /// never declared. Every one of these is refused **at startup**, which is
+    /// the whole point: an unattended station must fail where somebody can
+    /// see it, not months later as a source that quietly stopped producing
+    /// detections.
     pub fn load(
         specs: &[ModelSpec],
         routes: &HashMap<String, Vec<String>>,
         model_config: &ModelConfig,
     ) -> Result<Self, RegistryError> {
-        if specs.is_empty() {
-            return Err(RegistryError::Empty);
-        }
-        if specs.len() > MAX_MODELS {
-            return Err(RegistryError::TooMany {
-                declared: specs.len(),
-            });
-        }
-        let mut seen: Vec<&str> = Vec::with_capacity(specs.len());
-        for spec in specs {
-            if seen.contains(&spec.id.as_str()) {
-                return Err(RegistryError::DuplicateId {
-                    id: spec.id.clone(),
-                });
-            }
-            seen.push(&spec.id);
-        }
+        check_declared(specs)?;
 
         let mut models = Vec::with_capacity(specs.len());
-        for spec in specs {
-            let labels = LabelSet::load(&spec.labels_path).map_err(|e| RegistryError::Load {
-                id: spec.id.clone(),
-                why: format!("labels: {e}"),
-            })?;
-            // A per-classifier threshold is applied to its own config here,
-            // once, rather than swapped in around every inference call. Two
-            // models are not calibrated alike: forcing the station's single
-            // number on both means the stricter one is effectively off or the
-            // looser one floods the log.
-            let mut config = model_config.clone();
-            if let Some(threshold) = spec.threshold {
-                config.confidence_threshold = threshold;
-            }
-            // The same for a declared output scale: the model reads it at
-            // load, and refuses an unrecognised shape that has none.
-            if spec.output_scale.is_some() {
-                config.output_scale = spec.output_scale;
-            }
-            let own_threshold = config.confidence_threshold;
-            let model = BirdNetModel::load(&spec.model_path, labels, config).map_err(|e| {
-                RegistryError::Load {
-                    id: spec.id.clone(),
-                    why: e.to_string(),
+        let mut left_out = Vec::new();
+        for (slot, spec) in specs.iter().enumerate() {
+            match load_one(spec, model_config) {
+                Ok(model) => models.push(model),
+                Err((fault, why)) if slot == 0 => {
+                    return Err(RegistryError::Load {
+                        id: spec.id.clone(),
+                        fault,
+                        why,
+                    });
                 }
-            })?;
-            // Declared rate wins over the shape-derived guess; the window in
-            // samples still comes from the tensor, which does state it.
-            let mut effective = model.input_spec();
-            if let Some(rate) = spec.sample_rate {
-                effective.sample_rate = rate;
+                Err((fault, why)) => {
+                    tracing::warn!(
+                        classifier = %spec.id,
+                        "classifier `{}` is left out, and the others keep detecting: {why}",
+                        spec.id
+                    );
+                    left_out.push(ClassifierState {
+                        id: spec.id.clone(),
+                        primary: false,
+                        model_path: spec.model_path.clone(),
+                        labels_path: Some(spec.labels_path.clone()),
+                        status: ClassifierStatus::left_out(fault, why),
+                    });
+                }
             }
-            models.push(RegisteredModel {
-                id: spec.id.clone(),
-                own_threshold,
-                model,
-                threshold: spec.threshold,
-                spec: effective,
-                health: super::health::ModelHealth::default(),
-            });
         }
 
         // Classifiers may want different sample rates and different windows
@@ -316,33 +328,12 @@ impl ClassifierRegistry {
         // here stopped all detection on the default V2.4 station that added
         // Perch, the pairing the manual recommends.
 
-        // Resolved here, once, so a typo cannot survive into the loop.
-        let mut resolved: HashMap<String, Vec<usize>> = HashMap::new();
-        for (source, targets) in routes {
-            let mut idxs = Vec::with_capacity(targets.len());
-            for target in targets {
-                let Some(idx) = models.iter().position(|m| m.id == *target) else {
-                    return Err(RegistryError::UnknownRouteTarget {
-                        source: source.clone(),
-                        target: target.clone(),
-                        known: models.iter().map(|m| m.id.clone()).collect(),
-                    });
-                };
-                if !idxs.contains(&idx) {
-                    idxs.push(idx);
-                }
-            }
-            // An empty route is not "no models" — see the module header. It is
-            // an operator who wrote `front-door:` and meant nothing by it, and
-            // the safe reading is the primary.
-            if !idxs.is_empty() {
-                resolved.insert(source.clone(), idxs);
-            }
-        }
-
+        let routes = resolve_routes(routes, &models, &left_out)?;
         Ok(Self {
             models,
-            routes: resolved,
+            routes,
+            left_out,
+            declared: specs.iter().map(|s| s.id.clone()).collect(),
         })
     }
 
@@ -355,16 +346,21 @@ impl ClassifierRegistry {
     /// and the id is the caller's own.
     #[must_use]
     pub fn single(id: impl Into<String>, model: BirdNetModel) -> Self {
+        let id = id.into();
         Self {
             models: vec![RegisteredModel {
                 spec: model.input_spec(),
                 own_threshold: model.config().confidence_threshold,
-                id: id.into(),
+                id: id.clone(),
+                model_path: PathBuf::new(),
+                labels_path: PathBuf::new(),
                 model,
                 threshold: None,
                 health: super::health::ModelHealth::default(),
             }],
             routes: HashMap::new(),
+            left_out: Vec::new(),
+            declared: vec![id],
         }
     }
 
@@ -438,14 +434,63 @@ impl ClassifierRegistry {
 
     /// Which classifiers judge `source_id`.
     ///
+    /// A recording with no source id in its name is the station's own
+    /// microphone, [`LOCAL_SOURCE`], the source its detections are recorded
+    /// under: a route written for `local` reaches it (MDL-07). It used to get
+    /// the primary whatever the routes said, so `MODEL_ROUTES=local:birdnet+perch`
+    /// on a one-microphone station loaded Perch and ran it on nothing.
+    ///
     /// A source with no route of its own gets the primary — never an empty
     /// slice, which would mean that microphone silently detects nothing.
     #[must_use]
     pub fn route_for(&self, source_id: Option<&str>) -> Vec<usize> {
-        source_id
-            .and_then(|id| self.routes.get(id))
+        self.routes
+            .get(source_id.unwrap_or(LOCAL_SOURCE))
             .filter(|idxs| !idxs.is_empty())
             .map_or_else(|| Self::default_route().to_vec(), Clone::clone)
+    }
+
+    /// The extra classifiers that were declared and could not be loaded,
+    /// each with why, in declaration order.
+    #[must_use]
+    pub fn left_out(&self) -> &[ClassifierState] {
+        &self.left_out
+    }
+
+    /// What became of every declared classifier, in declaration order: the
+    /// loaded ones judging their sources or judging nothing, and the ones
+    /// [`Self::left_out`] holds.
+    #[must_use]
+    pub fn states(&self) -> Vec<ClassifierState> {
+        let loaded = self.models.iter().enumerate().map(|(idx, m)| {
+            let mut sources: Vec<String> = self
+                .routes
+                .iter()
+                .filter(|(_, targets)| targets.contains(&idx))
+                .map(|(source, _)| source.clone())
+                .collect();
+            sources.sort();
+            let primary = idx == 0;
+            let status = if primary || !sources.is_empty() {
+                ClassifierStatus::Judging {
+                    sources,
+                    unrouted_sources: primary,
+                }
+            } else {
+                ClassifierStatus::Unrouted
+            };
+            ClassifierState {
+                id: m.id.clone(),
+                primary,
+                model_path: m.model_path.clone(),
+                labels_path: Some(m.labels_path.clone()),
+                status,
+            }
+        });
+        let mut states: Vec<ClassifierState> =
+            loaded.chain(self.left_out.iter().cloned()).collect();
+        states.sort_by_key(|s| self.declared.iter().position(|id| *id == s.id));
+        states
     }
 
     /// The longest and shortest window any loaded classifier wants, in
@@ -538,12 +583,214 @@ impl ClassifierRegistry {
     }
 }
 
+/// What became of each declared classifier when [`ClassifierRegistry::load`]
+/// refused the set.
+///
+/// The primary carries its own fault when it was the one that would not load;
+/// every other classifier was not loaded because the detector did not start.
+#[must_use]
+pub fn refused_states(specs: &[ModelSpec], err: &RegistryError) -> Vec<ClassifierState> {
+    specs
+        .iter()
+        .enumerate()
+        .map(|(slot, spec)| {
+            let status = match err {
+                RegistryError::Load { id, fault, why } if slot == 0 && *id == spec.id => {
+                    ClassifierStatus::left_out(*fault, why.clone())
+                }
+                other => ClassifierStatus::left_out(
+                    ClassifierFault::DetectorNotRunning,
+                    format!("not loaded, because the detector did not start: {other}"),
+                ),
+            };
+            ClassifierState {
+                id: spec.id.clone(),
+                primary: slot == 0,
+                model_path: spec.model_path.clone(),
+                labels_path: Some(spec.labels_path.clone()),
+                status,
+            }
+        })
+        .collect()
+}
+
+/// Refuse a declared set that cannot be a station: none, more than
+/// [`MAX_MODELS`], or two classifiers under one id.
+fn check_declared(specs: &[ModelSpec]) -> Result<(), RegistryError> {
+    if specs.is_empty() {
+        return Err(RegistryError::Empty);
+    }
+    if specs.len() > MAX_MODELS {
+        return Err(RegistryError::TooMany {
+            declared: specs.len(),
+        });
+    }
+    let mut seen: Vec<&str> = Vec::with_capacity(specs.len());
+    for spec in specs {
+        if seen.contains(&spec.id.as_str()) {
+            return Err(RegistryError::DuplicateId {
+                id: spec.id.clone(),
+            });
+        }
+        seen.push(&spec.id);
+    }
+    Ok(())
+}
+
+/// Load one classifier, or say why it cannot be, as a kind and in words.
+///
+/// The labels are read first and the model's class width is checked against
+/// them (MDL-16): labels are positional against the output, so a file of the
+/// wrong length names every species by another's row, at full confidence,
+/// with nothing else to show for it. That used to be a warning at the first
+/// inference.
+fn load_one(
+    spec: &ModelSpec,
+    model_config: &ModelConfig,
+) -> Result<RegisteredModel, (ClassifierFault, String)> {
+    if !spec.model_path.exists() {
+        return Err((
+            ClassifierFault::FileMissing,
+            format!(
+                "its model file {} is not there; install it (`birdnet-behavior \
+                 --install-model <id>`) or correct the path",
+                spec.model_path.display()
+            ),
+        ));
+    }
+    let labels = match LabelSet::load(&spec.labels_path) {
+        Ok(labels) => labels,
+        Err(LabelError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err((
+                ClassifierFault::LabelsMissing,
+                format!(
+                    "its labels file {} is not there; install the labels file that ships \
+                     with the model, or correct the path",
+                    spec.labels_path.display()
+                ),
+            ));
+        }
+        Err(e) => {
+            return Err((
+                ClassifierFault::LabelsUnreadable,
+                format!(
+                    "its labels file {} cannot be read as labels ({e}); install the labels \
+                     file that ships with the model",
+                    spec.labels_path.display()
+                ),
+            ));
+        }
+    };
+    // A per-classifier threshold is applied to its own config here, once,
+    // rather than swapped in around every inference call. Two models are not
+    // calibrated alike: forcing the station's single number on both means the
+    // stricter one is effectively off or the looser one floods the log.
+    let mut config = model_config.clone();
+    if let Some(threshold) = spec.threshold {
+        config.confidence_threshold = threshold;
+    }
+    // The same for a declared output scale: the model reads it at load, and
+    // refuses an unrecognised shape that has none.
+    if spec.output_scale.is_some() {
+        config.output_scale = spec.output_scale;
+    }
+    let own_threshold = config.confidence_threshold;
+    let label_count = labels.len();
+    let model = BirdNetModel::load(&spec.model_path, labels, config).map_err(|e| {
+        (
+            ClassifierFault::WillNotLoad,
+            format!(
+                "its model file {} will not load ({e}); a truncated or damaged download \
+                 does this: install it again",
+                spec.model_path.display()
+            ),
+        )
+    })?;
+    if let Some(width) = model.output_dimension()
+        && width != label_count
+    {
+        return Err((
+            ClassifierFault::LabelsWrongLength,
+            format!(
+                "its model scores {width} classes and its labels file {} names \
+                 {label_count}; species are assigned by position, so every detection would \
+                 carry the wrong name. Install the labels file that shipped with this model",
+                spec.labels_path.display()
+            ),
+        ));
+    }
+    // Declared rate wins over the shape-derived guess; the window in samples
+    // still comes from the tensor, which does state it.
+    let mut effective = model.input_spec();
+    if let Some(rate) = spec.sample_rate {
+        effective.sample_rate = rate;
+    }
+    Ok(RegisteredModel {
+        id: spec.id.clone(),
+        model_path: spec.model_path.clone(),
+        labels_path: spec.labels_path.clone(),
+        own_threshold,
+        model,
+        threshold: spec.threshold,
+        spec: effective,
+        health: super::health::ModelHealth::default(),
+    })
+}
+
+/// Resolve routes to indices, once, so a typo cannot survive into the loop.
+///
+/// A target that was declared and left out is not a typo: it is dropped from
+/// that source's route, which keeps the classifiers that did load or, empty,
+/// falls back to the primary. A target that was never declared refuses the
+/// set ([`RegistryError::UnknownRouteTarget`]).
+fn resolve_routes(
+    routes: &HashMap<String, Vec<String>>,
+    models: &[RegisteredModel],
+    left_out: &[ClassifierState],
+) -> Result<HashMap<String, Vec<usize>>, RegistryError> {
+    let mut resolved: HashMap<String, Vec<usize>> = HashMap::new();
+    for (source, targets) in routes {
+        let mut idxs = Vec::with_capacity(targets.len());
+        for target in targets {
+            if let Some(idx) = models.iter().position(|m| m.id == *target) {
+                if !idxs.contains(&idx) {
+                    idxs.push(idx);
+                }
+            } else if left_out.iter().any(|s| s.id == *target) {
+                tracing::warn!(
+                    source = %source,
+                    classifier = %target,
+                    "MODEL_ROUTES sends `{source}` to classifier `{target}`, which is not \
+                     running; `{source}` is judged by the other classifiers its route names, \
+                     or by the primary"
+                );
+            } else {
+                let mut known: Vec<String> = models.iter().map(|m| m.id.clone()).collect();
+                known.extend(left_out.iter().map(|s| s.id.clone()));
+                return Err(RegistryError::UnknownRouteTarget {
+                    source: source.clone(),
+                    target: target.clone(),
+                    known,
+                });
+            }
+        }
+        // An empty route is not "no models" — see the module header. It is an
+        // operator who wrote `front-door:` and meant nothing by it, or one
+        // whose only target was left out, and the safe reading is the primary.
+        if !idxs.is_empty() {
+            resolved.insert(source.clone(), idxs);
+        }
+    }
+    Ok(resolved)
+}
+
 impl fmt::Debug for ClassifierRegistry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ClassifierRegistry")
             .field("models", &self.models)
             .field("routes", &self.routes)
-            .finish()
+            .field("left_out", &self.left_out)
+            .finish_non_exhaustive()
     }
 }
 
@@ -593,9 +840,11 @@ pub fn model_size_mib(path: &Path) -> Option<u64> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClassifierRegistry, MAX_MODELS, ModelSpec, RegistryError, model_size_mib, parse_routes,
+        ClassifierRegistry, LOCAL_SOURCE, MAX_MODELS, ModelSpec, RegistryError, model_size_mib,
+        parse_routes,
     };
     use crate::inference::model::{ModelConfig, OutputScale};
+    use crate::inference::model_state::{ClassifierFault, ClassifierStatus};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -763,6 +1012,11 @@ mod tests {
 
     /// A model file that will not load names *which* one, because a station
     /// with three configured and one bad must not send its operator hunting.
+    ///
+    /// MDL-01: an extra classifier that will not load is left out under its
+    /// own id, and the primary loads; it used to refuse the whole set, and a
+    /// real station with a truncated Perch file beside a working V2.4 recorded
+    /// nothing. A route naming it falls back to the primary.
     #[test]
     fn a_classifier_that_cannot_load_names_itself() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -770,12 +1024,113 @@ mod tests {
         let mut bad = spec(dir.path(), "broken", TINY_V30, None);
         std::fs::write(&bad.model_path, b"not an onnx file").expect("write");
         bad.labels_path = good.labels_path.clone();
-        let err = ClassifierRegistry::load(&[good, bad], &no_routes(), &ModelConfig::default())
-            .expect_err("a corrupt model must be refused");
+        let routes: HashMap<String, Vec<String>> =
+            [("pond".to_owned(), vec!["broken".to_owned()])].into();
+        let reg = ClassifierRegistry::load(
+            &[good.clone(), bad.clone()],
+            &routes,
+            &ModelConfig::default(),
+        )
+        .expect("the primary loads and the broken extra is left out");
+        assert_eq!(reg.ids(), vec!["birdnet"]);
+        assert_eq!(reg.route_for(Some("pond")), vec![0], "its route falls back");
+        let states = reg.states();
+        assert_eq!(states.len(), 2, "{states:?}");
+        assert_eq!(states[1].id, "broken");
+        assert_eq!(states[1].status.code(), "left_out_will_not_load");
+        assert!(states[0].primary && states[0].status.code() == "judging");
+
+        // The primary that will not load still refuses the set, by name.
+        let err = ClassifierRegistry::load(&[bad, good], &no_routes(), &ModelConfig::default())
+            .expect_err("a corrupt primary must be refused");
         match &err {
-            RegistryError::Load { id, .. } => assert_eq!(id, "broken"),
+            RegistryError::Load { id, fault, .. } => {
+                assert_eq!(id, "broken");
+                assert_eq!(*fault, ClassifierFault::WillNotLoad);
+            }
             other => panic!("wrong error: {other:?}"),
         }
+    }
+
+    /// Each way an extra classifier's files can be wrong is left out with its
+    /// own reason, and the primary keeps running (MDL-01, MDL-16).
+    #[test]
+    fn each_broken_extra_is_left_out_with_its_own_reason() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let good = spec(dir.path(), "birdnet", TINY_V30, None);
+        let mut missing = spec(dir.path(), "missing", TINY_V30, None);
+        missing.model_path = dir.path().join("not-there.onnx");
+        let mut no_labels = spec(dir.path(), "nolabels", TINY_V30, None);
+        no_labels.labels_path = dir.path().join("not-there.txt");
+        let wrong = spec(dir.path(), "wrong", TINY_V30, None);
+        let twelve: Vec<String> = (0..12).map(|i| format!("Sp{i}_Bird {i}")).collect();
+        std::fs::write(&wrong.labels_path, twelve.join("\n")).expect("write labels");
+        for (extra, code) in [
+            (missing, "left_out_file_missing"),
+            (no_labels, "left_out_labels_missing"),
+            (wrong, "left_out_labels_wrong_length"),
+        ] {
+            let reg = ClassifierRegistry::load(
+                &[good.clone(), extra.clone()],
+                &no_routes(),
+                &ModelConfig::default(),
+            )
+            .unwrap_or_else(|e| panic!("{}: the primary must still load: {e}", extra.id));
+            assert_eq!(reg.len(), 1, "{}", extra.id);
+            assert_eq!(reg.left_out()[0].status.code(), code, "{}", extra.id);
+        }
+
+        // MDL-16: the primary with labels of the wrong length is refused, and
+        // the reason names both counts.
+        let mut primary = spec(dir.path(), "birdnet", TINY_V30, None);
+        std::fs::write(&primary.labels_path, twelve.join("\n")).expect("write labels");
+        primary.id = "birdnet".to_owned();
+        let err = ClassifierRegistry::load(&[primary], &no_routes(), &ModelConfig::default())
+            .expect_err("a mispaired primary must be refused");
+        match &err {
+            RegistryError::Load { fault, why, .. } => {
+                assert_eq!(*fault, ClassifierFault::LabelsWrongLength);
+                assert!(
+                    why.contains("scores 11 classes") && why.contains("names 12"),
+                    "{why}"
+                );
+            }
+            other => panic!("wrong error: {other:?}"),
+        }
+    }
+
+    /// MDL-07: a recording with no source id is the station's own microphone,
+    /// and a route written for `local` reaches it; a named source keeps its
+    /// own route, and with no `local` route the microphone gets the primary.
+    #[test]
+    fn a_route_for_local_reaches_a_recording_with_no_source_id() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let specs = [
+            spec(dir.path(), "birdnet", TINY_V24, None),
+            spec(dir.path(), "perch", TINY_V24, None),
+        ];
+        let routes: HashMap<String, Vec<String>> = [(
+            LOCAL_SOURCE.to_owned(),
+            vec!["birdnet".to_owned(), "perch".to_owned()],
+        )]
+        .into();
+        let reg =
+            ClassifierRegistry::load(&specs, &routes, &ModelConfig::default()).expect("loads");
+        assert_eq!(reg.route_for(None), vec![0, 1]);
+        assert_eq!(reg.route_for(Some("pond")), vec![0]);
+        assert!(reg.unrouted().is_empty());
+        assert_eq!(
+            reg.states()[1].status,
+            ClassifierStatus::Judging {
+                sources: vec![LOCAL_SOURCE.to_owned()],
+                unrouted_sources: false,
+            }
+        );
+
+        let reg =
+            ClassifierRegistry::load(&specs, &no_routes(), &ModelConfig::default()).expect("loads");
+        assert_eq!(reg.route_for(None), vec![0], "no route: the primary alone");
+        assert_eq!(reg.states()[1].status, ClassifierStatus::Unrouted);
     }
 
     /// The single-model station — every station today — loads exactly as it
@@ -980,15 +1335,34 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let primary = spec(dir.path(), "birdnet", TINY_V24, None);
         let mut odd = spec(dir.path(), "odd", TINY_MEL, None);
+        // Its own labels: it scores four classes, and a labels file of any
+        // other length is refused for that reason alone (MDL-16).
+        let four: Vec<String> = (0..4).map(|i| format!("Sp{i}_Bird {i}")).collect();
+        std::fs::write(&odd.labels_path, four.join("\n")).expect("write labels");
 
-        let err = ClassifierRegistry::load(
+        // As an extra classifier it is left out (MDL-01), under its own id and
+        // naming the setting; as the primary it refuses the set.
+        let reg = ClassifierRegistry::load(
             &[primary.clone(), odd.clone()],
+            &no_routes(),
+            &ModelConfig::default(),
+        )
+        .expect("the primary loads");
+        assert_eq!(reg.len(), 1);
+        let left = &reg.left_out()[0];
+        assert_eq!(left.id, "odd");
+        assert!(
+            matches!(&left.status, ClassifierStatus::LeftOut { fault: ClassifierFault::WillNotLoad, why } if why.contains("MODEL_n_OUTPUT_SCALE")),
+            "{left:?}"
+        );
+        let err = ClassifierRegistry::load(
+            std::slice::from_ref(&odd),
             &no_routes(),
             &ModelConfig::default(),
         )
         .expect_err("an unknown shape with no declared scale must be refused");
         match &err {
-            RegistryError::Load { id, why } => {
+            RegistryError::Load { id, why, .. } => {
                 assert_eq!(id, "odd");
                 assert!(why.contains("MODEL_n_OUTPUT_SCALE"), "{why}");
             }

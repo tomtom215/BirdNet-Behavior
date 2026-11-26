@@ -86,6 +86,32 @@ fn report_species_filter_failure(error: &crate::inference::model::InferenceError
     );
 }
 
+/// The occurrence filter's state after it ran on one file: active with the
+/// species it admitted, or off with why when it failed (MDL-05). The next file
+/// it runs on sets it again, so a passing fault is not published for longer
+/// than it lasts.
+fn filter_state_after_file(
+    failure: Option<&crate::inference::model::InferenceError>,
+    admitted: u64,
+) -> crate::inference::model_state::FilterState {
+    use crate::inference::model_state::{FilterOff, FilterState};
+    failure.map_or(
+        FilterState::Active {
+            candidates: Some(admitted),
+        },
+        |e| {
+            FilterState::off(
+                FilterOff::ModelUnusable,
+                format!(
+                    "the occurrence model failed on the last recording ({e}); recording goes \
+                     on with the operator's species lists alone. If this persists, install the \
+                     occurrence model again"
+                ),
+            )
+        },
+    )
+}
+
 /// How often a source that delivers digital silence is named in the log, in
 /// seconds. A muted source fills every recording, so a line per recording
 /// would be a line every few seconds.
@@ -386,7 +412,7 @@ pub fn process_and_infer_filtered(
     route: &[usize],
     chunk_filters: &ChunkFilters,
     species_filter: &mut SpeciesFilter,
-    filter_observer: Option<&crate::detection::daemon::SpeciesFilterObserver>,
+    model_state: Option<&crate::detection::daemon::ModelStateObserver>,
     lat: Option<f64>,
     lon: Option<f64>,
     correlation_id: &str,
@@ -448,12 +474,12 @@ pub fn process_and_infer_filtered(
     // was a `?`, which failed every file for as long as the fault lasted: a
     // station that recorded nothing, rather than one that recorded without an
     // occurrence filter.
-    let (allowed_species, geo_ok) =
+    let (allowed_species, geo_failure) =
         match species_filter.filter_species(lat.zip(lon), week, primary_labels) {
-            Ok(set) => (set, true),
+            Ok(set) => (set, None),
             Err(e) => {
                 report_species_filter_failure(&e);
-                (species_filter.allowed_by_lists(primary_labels), false)
+                (species_filter.allowed_by_lists(primary_labels), Some(e))
             }
         };
     // Species only another routed classifier knows, judged in that
@@ -491,11 +517,16 @@ pub fn process_and_infer_filtered(
             allowed_elsewhere.contains(sci)
         }
     };
-    if let Some(observer) = filter_observer {
-        observer.report(
-            species_filter.has_model() && geo_ok,
-            Some(allowed_species.len() as u64),
-        );
+    // Only a filter that runs here reports, so a filter that start-up found
+    // off (no model, or no position: MDL-04) keeps the reason it was given.
+    if let Some(observer) = model_state
+        && species_filter.has_model()
+        && lat.zip(lon).is_some()
+    {
+        observer.filter(&filter_state_after_file(
+            geo_failure.as_ref(),
+            allowed_species.len() as u64,
+        ));
     }
 
     // Collect events, applying species filter
@@ -714,7 +745,7 @@ mod tests {
     fn two_classifiers_with(
         dir: &Path,
         bars: (Option<f32>, Option<f32>),
-        second_labels: usize,
+        shared: usize,
     ) -> ClassifierRegistry {
         use crate::inference::model::ModelConfig;
         use crate::inference::registry::ModelSpec;
@@ -728,8 +759,22 @@ mod tests {
         };
         let labels = dir.join("labels.txt");
         std::fs::write(&labels, names(11)).unwrap();
+        // The second classifier shares the primary's first `shared` species;
+        // its other classes are species the primary does not have. Always one
+        // name per class it scores: a labels file of another length is
+        // refused at load (MDL-16).
         let labels_second = dir.join("labels_second.txt");
-        std::fs::write(&labels_second, names(second_labels)).unwrap();
+        let second_names = (0..11)
+            .map(|i| {
+                if i < shared {
+                    format!("Species{i} bird_Bird {i}")
+                } else {
+                    format!("Unshared{i} bird_Other {i}")
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&labels_second, second_names).unwrap();
         let v24 = dir.join("v24.onnx");
         let v30 = dir.join("v30.onnx");
         std::fs::write(&v24, TINY_V24).unwrap();
@@ -1064,7 +1109,8 @@ mod tests {
     fn a_classifier_without_the_species_says_so_and_scores_nothing() {
         use crate::detection::types::AnswerState::{Heard, NoLabel};
         let tmp = tempfile::tempdir().unwrap();
-        // v3 is named for only its first 8 classes; outputs 8..10 have no label.
+        // v3 shares only the primary's first 8 species; Species9 is not one
+        // of its classes.
         let mut registry = two_classifiers_with(tmp.path(), (None, None), 8);
         let out = infer_chunk(&mut registry, &[0, 1], &chunk_scoring(&[0.9]), 20).unwrap();
         let s9 = out
@@ -1177,10 +1223,11 @@ mod tests {
         assert!((info[0].window_secs - 3.0).abs() < 1e-6, "{:?}", info[0]);
         assert_eq!((info[0].sample_rate, info[0].labels), (48_000, 11));
         assert!((info[0].bar - 0.60).abs() < 1e-6);
-        // v3 is declared 48 kHz over 96 000 samples: a 2 s window; named for 8 classes.
+        // v3 is declared 48 kHz over 96 000 samples: a 2 s window; 11 classes,
+        // each named (a labels file of another length is refused at load).
         assert_eq!(info[1].id, "v3");
         assert!((info[1].window_secs - 2.0).abs() < 1e-6, "{:?}", info[1]);
-        assert_eq!((info[1].sample_rate, info[1].labels), (48_000, 8));
+        assert_eq!((info[1].sample_rate, info[1].labels), (48_000, 11));
         assert!((info[1].bar - 0.70).abs() < 1e-6);
     }
 
