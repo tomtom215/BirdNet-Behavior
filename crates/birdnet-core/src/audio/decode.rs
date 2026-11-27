@@ -430,15 +430,22 @@ fn report_cancellation(path: &Path, provenance: &ChannelProvenance) {
     );
 }
 
-#[allow(clippy::cast_precision_loss, clippy::too_many_lines)]
-fn decode_file_inner(
-    path: &Path,
-    max_samples: Option<usize>,
-    select: Select,
-) -> Result<Decoded, DecodeError> {
-    use symphonia::core::audio::GenericAudioBufferRef;
+/// What [`decode_file_inner`] reads before the first packet: the reader and
+/// decoder for the file's audio track, and what its header says.
+struct Opened {
+    format: Box<dyn symphonia::core::formats::FormatReader>,
+    decoder: Box<dyn symphonia::core::codecs::audio::AudioDecoder>,
+    track_id: u32,
+    sample_rate: u32,
+    time_base: Option<(u32, u32)>,
+    sample_format: Option<String>,
+    bits_per_sample: Option<u32>,
+    declared_channels: Option<usize>,
+}
+
+/// Open `path`'s audio track for [`decode_file_inner`].
+fn open_audio(path: &Path) -> Result<Opened, DecodeError> {
     use symphonia::core::codecs::audio::AudioDecoderOptions;
-    use symphonia::core::errors::Error as SymphoniaError;
     use symphonia::core::formats::probe::Hint;
     use symphonia::core::formats::{FormatOptions, TrackType};
     use symphonia::core::io::{MediaSourceStream, MediaSourceStreamOptions};
@@ -454,7 +461,7 @@ fn decode_file_inner(
 
     // Symphonia 0.6: `probe` takes options by value and returns the
     // `FormatReader` directly (no more `ProbeResult` wrapper).
-    let mut format = symphonia::default::get_probe()
+    let format = symphonia::default::get_probe()
         .probe(
             &hint,
             mss,
@@ -488,9 +495,41 @@ fn decode_file_inner(
 
     // `make_audio_decoder` now takes the audio-specific codec params
     // (previously `make` accepted the whole CodecParameters struct).
-    let mut decoder = symphonia::default::get_codecs()
+    let decoder = symphonia::default::get_codecs()
         .make_audio_decoder(audio_params, &AudioDecoderOptions::default())
         .map_err(|e| DecodeError::Format(e.to_string()))?;
+
+    Ok(Opened {
+        format,
+        decoder,
+        track_id,
+        sample_rate,
+        time_base,
+        sample_format,
+        bits_per_sample,
+        declared_channels,
+    })
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn decode_file_inner(
+    path: &Path,
+    max_samples: Option<usize>,
+    select: Select,
+) -> Result<Decoded, DecodeError> {
+    use symphonia::core::audio::GenericAudioBufferRef;
+    use symphonia::core::errors::Error as SymphoniaError;
+
+    let Opened {
+        mut format,
+        mut decoder,
+        track_id,
+        sample_rate,
+        time_base,
+        sample_format,
+        bits_per_sample,
+        declared_channels,
+    } = open_audio(path)?;
 
     // One output, or one per channel once the count is known.
     let mut outputs: Vec<Vec<f32>> = match select {
@@ -728,10 +767,16 @@ pub(crate) mod tests {
         };
         let mut w = WavWriter::create(path, spec).unwrap();
         for i in 0..48_000 {
-            #[allow(clippy::cast_precision_loss)]
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "a frame index below 48 000, exact in f32"
+            )]
             let tone = (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / 48_000.0).sin() * 0.5;
             for g in gain {
-                #[allow(clippy::cast_possible_truncation)]
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "a test tone scaled into the 16-bit range"
+                )]
                 w.write_sample((g * tone * 32_767.0) as i16).unwrap();
             }
         }

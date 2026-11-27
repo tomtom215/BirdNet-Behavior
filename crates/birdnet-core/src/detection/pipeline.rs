@@ -517,7 +517,8 @@ pub fn process_file_channels(
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    reason = "sample counts and second offsets of one recording, far inside f32's exact range"
 )]
 fn chunks_of(
     recording: &RecordingFile,
@@ -1115,7 +1116,10 @@ pub(crate) mod channel_tests {
         let mut x: u32 = 1;
         for _ in 0..48_000 * 6 {
             x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
-            #[allow(clippy::cast_possible_wrap)]
+            #[allow(
+                clippy::cast_possible_wrap,
+                reason = "a test noise generator, wrapped on purpose"
+            )]
             let n = ((x >> 16) as i16) / 8;
             for &g in gain {
                 w.write_sample(n.saturating_mul(g)).unwrap();
@@ -1147,7 +1151,11 @@ pub(crate) mod channel_tests {
         };
         let mut w = hound::WavWriter::create(&path, spec).unwrap();
         for i in 0..8_000 * secs {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_possible_wrap,
+                reason = "i % 97 fits an i16"
+            )]
             w.write_sample(((i % 97) as i16) - 48).unwrap();
         }
         w.finalize().unwrap();

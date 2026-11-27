@@ -665,7 +665,10 @@ pub fn process_and_infer_filtered(
 ///
 /// As [`process_and_infer_filtered`]; a channel whose every window failed
 /// fails the call.
-#[allow(clippy::too_many_arguments)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the same inputs as process_and_infer_filtered, which it serves"
+)]
 pub fn process_and_infer_channels(
     path: &Path,
     pipeline_config: &PipelineConfig,

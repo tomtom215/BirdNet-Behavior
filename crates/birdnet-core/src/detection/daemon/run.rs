@@ -1791,7 +1791,11 @@ mod tests {
             let mut w = hound::WavWriter::create(&long, spec).unwrap();
             let secs = u32::try_from(crate::audio::admission::LIVE_MAX_FILE_SECS).unwrap() + 1;
             for i in 0..8_000 * secs {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_possible_wrap,
+                    reason = "i % 97 fits an i16"
+                )]
                 w.write_sample(((i % 97) as i16) - 48).unwrap();
             }
             w.finalize().unwrap();
