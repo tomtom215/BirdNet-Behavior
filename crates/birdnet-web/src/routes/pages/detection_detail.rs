@@ -85,20 +85,25 @@ async fn detection_detail_page(
             };
             let verdict = birdnet_db::sqlite::get_detection_review(conn, &key)?.map(|r| r.status);
             // Multi-stream corroboration: other sources that heard this species
-            // near the same time. Only meaningful for rows with a known source
-            // (historical / imported rows are NULL → no corroboration shown).
-            // A failed read is `None`, rendered as a failure: an empty list
-            // would say "only this microphone heard it" (MSC-20).
+            // at the same instant, by the event rule's tolerance (MSC-20).
+            // Only meaningful for rows with a known source (historical /
+            // imported rows are NULL → no corroboration shown). A failed read
+            // is `None`, rendered as a failure: an empty list would say "only
+            // this microphone heard it". So is a row with no instant, which
+            // cannot be compared with anything.
             let corroboration = det.source.as_deref().map_or_else(
                 || Some(Vec::new()),
                 |src| {
+                    let Some(at) = det.detected_at_utc else {
+                        tracing::warn!("detection detail: the row has no instant to compare");
+                        return None;
+                    };
                     birdnet_db::sqlite::concurrent_detections_from_other_sources(
                         conn,
-                        &det.date,
-                        &det.time,
+                        at,
                         &det.sci_name,
                         src,
-                        30.0,
+                        birdnet_db::sqlite::queries::events::DEFAULT_TOLERANCE_SECS,
                         8,
                     )
                     .inspect_err(|e| {
@@ -352,13 +357,14 @@ fn build_corroboration_section(hits: Option<&[birdnet_db::sqlite::ConcurrentDete
     format!(
         r#"<div class="bnb-card pad">
   <div class="section-header"><div><div class="bnb-eyebrow">Multi-stream</div><h2 class="sh-h">Also heard by</h2></div><span class="bnb-pill moss">{n} {label}</span></div>
-  <p class="bnb-meta">Other audio sources detected this species at nearly the same time — corroboration that it's a real detection.</p>
+  <p class="bnb-meta">Other audio sources detected this species within {tol:.0} seconds of this one, by the station's clock — corroboration that it's a real detection.</p>
   <table>
     <tr><td class="bnb-meta">Source</td><td class="bnb-meta">Time</td><td class="bnb-meta">Confidence</td></tr>
     {rows}
   </table>
 </div>"#,
         n = hits.len(),
+        tol = birdnet_db::sqlite::queries::events::DEFAULT_TOLERANCE_SECS,
     )
 }
 

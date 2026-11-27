@@ -256,38 +256,55 @@ pub fn best_detections_for_date(
     Ok(rows)
 }
 
-/// Detections of the same species from **other** audio sources within
-/// `window_secs` of the given detection's instant.
+/// Detections of the same species from **other** audio sources at the same
+/// instant, by the event rule's measure of "the same" (MSC-20).
 ///
 /// Powers the multi-stream "also heard by" corroboration display — purely
-/// read-only, never collapses or hides anything. Only rows with a non-NULL
-/// `Source` different from `exclude_source` are returned, ordered by closeness
-/// in time. A ±1-day `Date` bound keeps the scan tight (and correct across a
-/// midnight-straddling window) so a very common species stays cheap.
+/// read-only, never collapses or hides anything. A row qualifies when its
+/// `detected_at_utc` lies within `tolerance_secs` of `instant`, taken as whole
+/// seconds as [`crate::sqlite::queries::events`] takes it (instants are whole seconds),
+/// its `Source` is recorded and is not `exclude_source`, and a reviewer has
+/// not rejected it (`detections_analytic`, as the event rule reads). Rows are
+/// ordered by closeness in time.
+///
+/// It used to compare the local `Date`/`Time` within a fixed 30 s, so the two
+/// passes of a repeated autumn hour, an hour apart, read as one moment, and a
+/// row twenty seconds away was listed as the same call. A row without an
+/// instant is never listed: it cannot be placed. A tolerance that is not
+/// finite or is negative lists only rows at the very instant.
 ///
 /// # Errors
 ///
 /// Returns `DbError` on query failure.
+#[allow(
+    clippy::cast_possible_truncation,
+    reason = "the tolerance is bounded to ten minutes before the cast"
+)]
 pub fn concurrent_detections_from_other_sources(
     conn: &Connection,
-    date: &str,
-    time: &str,
+    instant: i64,
     sci_name: &str,
     exclude_source: &str,
-    window_secs: f64,
+    tolerance_secs: f64,
     limit: u32,
 ) -> Result<Vec<ConcurrentDetection>, DbError> {
-    let sql = "SELECT Source, Time, Confidence FROM detections \
+    let tol = if tolerance_secs.is_finite() && tolerance_secs >= 0.0 {
+        tolerance_secs
+            .min(crate::sqlite::queries::events::MAX_TOLERANCE_SECS)
+            .floor() as i64
+    } else {
+        0
+    };
+    let sql = "SELECT Source, Time, Confidence FROM detections_analytic \
                WHERE Sci_Name = ?1 \
                  AND Source IS NOT NULL AND Source <> ?2 \
-                 AND Date >= date(?3, '-1 day') AND Date <= date(?3, '+1 day') \
-                 AND ABS((julianday(Date || ' ' || Time) - julianday(?3 || ' ' || ?4)) * 86400.0) <= ?5 \
-               ORDER BY ABS(julianday(Date || ' ' || Time) - julianday(?3 || ' ' || ?4)) ASC, Source \
-               LIMIT ?6";
+                 AND detected_at_utc BETWEEN ?3 - ?4 AND ?3 + ?4 \
+               ORDER BY ABS(detected_at_utc - ?3) ASC, Source \
+               LIMIT ?5";
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt
         .query_map(
-            params![sci_name, exclude_source, date, time, window_secs, limit],
+            params![sci_name, exclude_source, instant, tol, limit],
             |row| {
                 Ok(ConcurrentDetection {
                     source: row.get(0)?,
@@ -1487,16 +1504,16 @@ mod tests {
         insert("06:00:03", "Pica pica", Some("cam1"), 0.70);
         insert("06:00:04", "Erithacus rubecula", Some("cam2"), 0.95);
 
-        let hits = concurrent_detections_from_other_sources(
-            &conn,
-            "2026-05-19",
-            "06:00:00",
-            "Pica pica",
-            "cam1",
-            30.0,
-            8,
-        )
-        .unwrap();
+        let at: i64 = conn
+            .query_row(
+                "SELECT detected_at_utc FROM detections WHERE Source = 'cam1' AND Time = '06:00:00'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let hits =
+            concurrent_detections_from_other_sources(&conn, at, "Pica pica", "cam1", 30.0, 8)
+                .unwrap();
         assert_eq!(
             hits.len(),
             1,
@@ -1504,6 +1521,19 @@ mod tests {
         );
         assert_eq!(hits[0].source, "cam2");
         assert_eq!(hits[0].time, "06:00:05");
+        // The edge is inclusive and whole seconds: 5 s qualifies at 5.9, not
+        // at 4.9.
+        assert_eq!(
+            concurrent_detections_from_other_sources(&conn, at, "Pica pica", "cam1", 5.9, 8)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert!(
+            concurrent_detections_from_other_sources(&conn, at, "Pica pica", "cam1", 4.9, 8)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

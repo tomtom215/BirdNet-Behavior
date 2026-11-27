@@ -265,7 +265,7 @@ handled	crates/birdnet-web/src/routes/admin/audio.rs	create	match-err	match stat
 handled	crates/birdnet-web/src/routes/admin/audio.rs	update	match-err	match state.with_read_db(AudioSourceStore::list) { Err .. }
 handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	render_thread	match-err	match state .with_read_db(|conn| detection_comments::list(conn, date, time, sci_name, file_name)) { Err .. }
 handled	crates/birdnet-web/src/routes/pages/detection_comments.rs	thread_partial	unwrap_or_else	tokio::task::spawn_blocking(move || { render_thread(&st, &date, &time, &sci_name, file_name.as_deref(), None) 
-handled	crates/birdnet-web/src/routes/pages/detection_detail.rs	detection_detail_page	ok	birdnet_db::sqlite::concurrent_detections_from_other_sources( conn, &det.date, &det.time, &det.sci_name, src, 
+handled	crates/birdnet-web/src/routes/pages/detection_detail.rs	detection_detail_page	ok	birdnet_db::sqlite::concurrent_detections_from_other_sources( conn, at, &det.sci_name, src, birdnet_db::sqlite
 omitted	crates/birdnet-web/src/routes/pages/year_in_review.rs	read_year	ok	super::listening::effort_by_date(conn, start, today).ok()
 fail-closed	src/capture/sources.rs	table_ever_used	ok	state .with_db(|conn| { conn.query_row("SELECT EXISTS (SELECT 1 FROM audio_sources)", [], |r| { r.get::<_, boo
 handled	src/integrations/effort.rs	flush_analysed	match-err	match state.with_db(|conn| credit_analysed(conn, &credits)) { Err .. }

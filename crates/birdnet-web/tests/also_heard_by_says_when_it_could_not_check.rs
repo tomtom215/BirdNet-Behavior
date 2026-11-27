@@ -3,6 +3,10 @@
 //! did. A failed read of the other sources' rows must therefore say so, rather
 //! than render as "only this microphone heard it", which a reviewer reads as
 //! evidence.
+//!
+//! Which rows count as "the same time" is the event rule's: the instant
+//! (`detected_at_utc`), within the event tolerance (`events.rs`), not a fixed
+//! 30 s on the local wall clock.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -65,7 +69,7 @@ async fn a_failed_read_of_the_other_sources_is_reported_as_a_failure() {
     add(
         &state,
         "src_b",
-        "06:00:05",
+        "06:00:03",
         &"unreadable".to_string().into(),
     );
     let page = detail(&state).await;
@@ -85,7 +89,7 @@ async fn a_failed_read_of_the_other_sources_is_reported_as_a_failure() {
 async fn a_readable_other_source_is_listed_without_a_failure_note() {
     let (_dir, state) = station();
     add(&state, "src_a", TIME, &0.9.into());
-    add(&state, "src_b", "06:00:05", &0.8.into());
+    add(&state, "src_b", "06:00:03", &0.8.into());
     let page = detail(&state).await;
     assert!(page.contains("Also heard by"), "card missing");
     assert!(page.contains("src_b"), "the other source is not listed");
@@ -103,4 +107,57 @@ async fn a_lone_source_shows_neither_card_nor_failure() {
     let page = detail(&state).await;
     assert!(!page.contains("Also heard by"));
     assert!(!page.contains(FAILED));
+}
+
+/// Move `source`'s row to `instant` without touching its local `Date`/`Time`:
+/// what the second pass of a repeated autumn hour looks like.
+fn set_instant(state: &AppState, source: &str, instant: i64) {
+    state.with_db(|conn| {
+        conn.execute(
+            "UPDATE detections SET detected_at_utc = ?2 WHERE Source = ?1",
+            rusqlite::params![source, instant],
+        )
+        .expect("set instant");
+    });
+}
+
+fn instant_of(state: &AppState, source: &str) -> i64 {
+    state.with_db(|conn| {
+        conn.query_row(
+            "SELECT detected_at_utc FROM detections WHERE Source = ?1",
+            [source],
+            |r| r.get(0),
+        )
+        .expect("instant")
+    })
+}
+
+/// MSC-20: the same local time an hour apart (the repeated autumn hour) is
+/// not the same call, and the card must not say another source heard it.
+#[tokio::test]
+async fn the_same_wall_clock_an_hour_apart_is_not_also_heard() {
+    let (_dir, state) = station();
+    add(&state, "src_a", TIME, &0.9.into());
+    add(&state, "src_b", TIME, &0.8.into());
+    let a = instant_of(&state, "src_a");
+    set_instant(&state, "src_b", a + 3600);
+    let page = detail(&state).await;
+    assert!(
+        !page.contains("Also heard by"),
+        "a row an hour later by the instant was listed because its local time matched"
+    );
+}
+
+/// MSC-20: twenty seconds apart is outside the event tolerance (4 s for
+/// V2.4), so it is not listed; the fixed 30 s window listed it.
+#[tokio::test]
+async fn twenty_seconds_apart_is_outside_the_event_tolerance() {
+    let (_dir, state) = station();
+    add(&state, "src_a", TIME, &0.9.into());
+    add(&state, "src_b", "06:00:20", &0.8.into());
+    let page = detail(&state).await;
+    assert!(
+        !page.contains("Also heard by"),
+        "a row 20 s away was listed: the window is not the event tolerance"
+    );
 }
