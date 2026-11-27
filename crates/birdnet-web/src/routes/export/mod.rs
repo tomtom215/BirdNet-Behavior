@@ -10,6 +10,8 @@
 //! | `birddb`  | BirdNET-Pi BirdDB.txt legacy export       |
 //! | `model_scores` | Each classifier's own score per detection |
 //! | `effort`  | The hourly effort ledger, and a species' detection history |
+//! | `study`   | The study bundle: a deterministic ZIP with a manifest (RES-08) |
+//! | `zip`     | The deterministic ZIP writer the bundle uses |
 
 mod birddb;
 mod csv;
@@ -17,6 +19,8 @@ mod ebird;
 mod effort;
 mod model_scores;
 mod raven;
+mod study;
+pub(crate) mod zip;
 
 use axum::{Router, routing::get};
 
@@ -47,6 +51,7 @@ pub fn router() -> Router<AppState> {
             "/detections/export/model-scores",
             get(model_scores::export_model_scores),
         )
+        .route("/detections/export/study", get(study::export_study))
         .route("/recordings/{filename}/raven.txt", get(raven::clip_raven))
         .route("/recordings/{filename}/labels.txt", get(raven::clip_labels))
 }

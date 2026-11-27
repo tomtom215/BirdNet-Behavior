@@ -21,6 +21,7 @@ pub mod quarantine;
 pub mod run_config;
 pub mod site_effort;
 pub mod species;
+pub mod study;
 pub mod validation;
 
 pub use analysis_runs::{

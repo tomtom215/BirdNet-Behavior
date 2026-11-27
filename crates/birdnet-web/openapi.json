@@ -7733,6 +7733,61 @@
         }
       }
     },
+    "/detections/export/study": {
+      "get": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Export a study bundle",
+        "description": "One ZIP for a methods section (RES-08): every column of every detection row of the local dates (rejected ones included), each classifier's answers, the review history, every analysis run with its deciding configuration and taxonomy edition, every classifier of every run, effort per source and per site (as bounds), events with their policy version, weather with its provenance where recorded, a README and a manifest.json with the format version, generator version, parameters, policies and the SHA-256 of every other member. Deterministic: the same database and parameters give a byte-identical archive. Real numbers are written in their shortest round-trip form. No licence is applied; the manifest says so.",
+        "operationId": "exportStudyBundle",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          },
+          {
+            "name": "tolerance_secs",
+            "in": "query",
+            "required": false,
+            "description": "Event tolerance, seconds, 0 to 600 (default 4).",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "sites",
+            "in": "query",
+            "required": false,
+            "description": "Site map, `source:site` pairs separated by commas; a source not named is its own site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The bundle.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "413": {
+            "description": "A table of the range holds more than 1,000,000 rows."
+          }
+        }
+      }
+    },
     "/detections/export/history": {
       "get": {
         "tags": [

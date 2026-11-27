@@ -83,7 +83,7 @@ fn internal<E: std::fmt::Display>(e: &E) -> Response {
 /// Parse `sites`: `source:site` pairs, comma-separated, split at the last colon
 /// so a source name may contain one. A source named twice with different sites
 /// is refused.
-fn parse_sites(raw: Option<&str>) -> Result<SiteMap, String> {
+pub(crate) fn parse_sites(raw: Option<&str>) -> Result<SiteMap, String> {
     raw.map_or_else(|| Ok(SiteMap::identity()), SiteMap::parse)
 }
 
