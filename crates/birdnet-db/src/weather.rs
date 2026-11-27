@@ -119,7 +119,9 @@ impl WeatherStore for Connection {
                 pressure_hpa = excluded.pressure_hpa,
                 cloud_pct    = excluded.cloud_pct,
                 code         = excluded.code,
-                fetched_at   = datetime('now')",
+                fetched_at   = datetime('now'),
+                provider     = NULL,
+                product      = NULL",
             params![
                 row.at,
                 row.temp_c.map(f64::from),
@@ -191,6 +193,101 @@ fn row_to_weather(row: &rusqlite::Row<'_>) -> rusqlite::Result<WeatherRow> {
         cloud_pct: row.get(6)?,
         code: row.get(7)?,
     })
+}
+
+/// What an hour of weather is (RES-21): a value a station measured, or one a
+/// model produced. A forecast endpoint's past hours are still model output.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WeatherProduct {
+    /// Measured by a weather station (a personal weather station's reading).
+    StationObservation,
+    /// Produced by a numerical weather model, served by a forecast endpoint.
+    ForecastModel,
+}
+
+impl WeatherProduct {
+    /// The stored word.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::StationObservation => "station_observation",
+            Self::ForecastModel => "forecast_model",
+        }
+    }
+}
+
+/// Upsert `row` and record where it came from: `provider` (the provider's
+/// settings key, e.g. `open-meteo`) and what it is.
+///
+/// A row written by [`WeatherStore::upsert`] instead has no provenance, and an
+/// upsert without it over an hour that had one clears it: the hour's values
+/// were replaced by ones whose origin was not given.
+///
+/// # Errors
+///
+/// Returns [`WeatherError::Sqlite`] on database failure.
+pub fn upsert_with_provenance(
+    conn: &Connection,
+    row: &WeatherRow,
+    provider: &str,
+    product: WeatherProduct,
+) -> Result<(), WeatherError> {
+    let tx = conn.unchecked_transaction()?;
+    tx.upsert(row)?;
+    tx.execute(
+        "UPDATE weather SET provider = ?2, product = ?3 WHERE at = ?1",
+        params![row.at, provider, product.as_str()],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod provenance_tests {
+    use super::*;
+    use crate::migration;
+
+    fn provenance(conn: &Connection, at: &str) -> (Option<String>, Option<String>) {
+        conn.query_row(
+            "SELECT provider, product FROM weather WHERE at = ?1",
+            [at],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_hour_says_where_it_came_from_until_its_values_are_replaced_without_saying() {
+        let conn = Connection::open_in_memory().unwrap();
+        migration::migrate(&conn).unwrap();
+        let row = WeatherRow {
+            at: "2026-05-28T12:00:00Z".into(),
+            temp_c: Some(18.0),
+            precip_mm: None,
+            wind_kt: None,
+            wind_dir_deg: None,
+            pressure_hpa: None,
+            cloud_pct: None,
+            code: None,
+        };
+        upsert_with_provenance(&conn, &row, "open-meteo", WeatherProduct::ForecastModel).unwrap();
+        assert_eq!(
+            provenance(&conn, &row.at),
+            (Some("open-meteo".into()), Some("forecast_model".into()))
+        );
+        // The same hour rewritten by a writer that does not say where its
+        // values came from: the old provenance would now describe new values.
+        conn.upsert(&WeatherRow {
+            temp_c: Some(21.0),
+            ..row.clone()
+        })
+        .unwrap();
+        assert_eq!(
+            provenance(&conn, &row.at),
+            (None, None),
+            "provenance outlived the values it described"
+        );
+    }
 }
 
 #[cfg(test)]

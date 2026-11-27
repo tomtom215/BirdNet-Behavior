@@ -219,7 +219,7 @@ omitted	src/integrations/station_health.rs	sample_metric	ok	birdnet_db::sqlite::
 omitted	src/integrations/station_health.rs	sample_metric	ok	birdnet_db::sqlite::seconds_since_last_detection(conn) .ok()
 handled	src/integrations/station_health.rs	spawn_station_health	let-ok	let Ok(..) = tokio::task::spawn_blocking(move || evaluate(&probe_state)).await
 handled	src/integrations/store_forward.rs	apply_disposition	match-err	match birdnet_db::outbound_queue::mark_failure(conn, id, &error, now) { Err .. }
-write-outcome	src/integrations/weather.rs	poll_loop	is_ok	conn.upsert(row).is_ok()
+write-outcome	src/integrations/weather.rs	poll_loop	is_ok	upsert_with_provenance(conn, row, provider, product).is_ok()
 write-outcome	src/integrations/weather.rs	poll_loop	unwrap_or	conn.prune_older_than_days(RETENTION_DAYS).unwrap_or(0)
 handled	src/weekly_report.rs	weekly_report_loop	match-err	match state.run_blocking(build_weekly_report).await { Err .. }
 handled	src/weekly_report.rs	weekly_report_loop	match-err	match state.run_blocking(move |s| already_sent(s, now_secs)).await { Err .. }

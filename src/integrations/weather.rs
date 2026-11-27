@@ -26,7 +26,7 @@
 use std::time::Duration;
 
 use birdnet_core::config::Config;
-use birdnet_db::weather::{WeatherRow, WeatherStore};
+use birdnet_db::weather::{WeatherProduct, WeatherRow, WeatherStore, upsert_with_provenance};
 use birdnet_integrations::weather as upstream;
 use birdnet_web::state::AppState;
 
@@ -95,6 +95,18 @@ pub fn spawn_weather_poll(
     }))
 }
 
+/// What a provider's hours are (RES-21): a personal weather station's
+/// readings are observations; every other provider here serves a forecast
+/// model's output, its past hours included.
+const fn product_of(provider: &upstream::Provider) -> WeatherProduct {
+    match provider {
+        upstream::Provider::Wunderground { .. } => WeatherProduct::StationObservation,
+        upstream::Provider::OpenMeteo
+        | upstream::Provider::MetNorway
+        | upstream::Provider::PirateWeather { .. } => WeatherProduct::ForecastModel,
+    }
+}
+
 /// The poll loop body. Public-crate so it can be exercised with a stub
 /// `AppState` if a future test wants to.
 async fn poll_loop(
@@ -109,12 +121,14 @@ async fn poll_loop(
             Ok(rows) if !rows.is_empty() => {
                 let normalised: Vec<WeatherRow> = rows.into_iter().map(normalise_row).collect();
                 let row_count = normalised.len();
+                let provider = client.provider().key();
+                let product = product_of(client.provider());
                 let state2 = state.clone();
                 let res = tokio::task::spawn_blocking(move || -> (usize, usize) {
                     state2.with_db(|conn| {
                         let mut written = 0;
                         for row in &normalised {
-                            if conn.upsert(row).is_ok() {
+                            if upsert_with_provenance(conn, row, provider, product).is_ok() {
                                 written += 1;
                             }
                         }
