@@ -1151,6 +1151,7 @@ fn seed_models(conn: &Connection) {
             bar: own_bar,
             window_start_secs: score.map(|_| start),
             window_end_secs: score.map(|_| end),
+            padded_secs: score.map(|_| 0.0),
         }
     };
 

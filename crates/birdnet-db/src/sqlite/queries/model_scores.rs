@@ -78,8 +78,13 @@ pub struct ModelScore {
     /// Where in the recording its window started, seconds. Classifiers' windows
     /// differ in length, so "the same chunk" is not "the same instants".
     pub window_start_secs: Option<f64>,
-    /// Where its window ended, seconds.
+    /// Where its window ended, seconds: the end of the audio that exists, on
+    /// the last chunk of a recording.
     pub window_end_secs: Option<f64>,
+    /// How much of its window was zero padding past the recording's end,
+    /// seconds (review F09). `None` for an answer stored before migration 68,
+    /// when it was not recorded.
+    pub padded_secs: Option<f64>,
 }
 
 /// Store one classifier's answer for a detection.
@@ -102,8 +107,8 @@ pub fn insert_model_score(
     conn.execute(
         "INSERT INTO detection_model_scores
              (Date, Time, Sci_Name, File_Name, model_id, state, score, bar,
-              window_start_secs, window_end_secs)
-         VALUES (?1, ?2, ?3, COALESCE(?4, ''), ?5, ?6, ?7, ?8, ?9, ?10)",
+              window_start_secs, window_end_secs, padded_secs)
+         VALUES (?1, ?2, ?3, COALESCE(?4, ''), ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             key.date,
             key.time,
@@ -115,6 +120,7 @@ pub fn insert_model_score(
             score.bar,
             score.window_start_secs,
             score.window_end_secs,
+            score.padded_secs,
         ],
     )?;
     Ok(())
@@ -166,7 +172,7 @@ pub fn model_scores_for_detection(
     key: &DetectionKey<'_>,
 ) -> Result<Vec<ModelScore>, DbError> {
     let mut stmt = conn.prepare(
-        "SELECT model_id, state, score, bar, window_start_secs, window_end_secs
+        "SELECT model_id, state, score, bar, window_start_secs, window_end_secs, padded_secs
            FROM detection_model_scores
           WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3
             AND File_Name = COALESCE(?4, '')
@@ -192,6 +198,7 @@ pub fn model_scores_for_detection(
                     bar: row.get(3)?,
                     window_start_secs: row.get(4)?,
                     window_end_secs: row.get(5)?,
+                    padded_secs: row.get(6)?,
                 })
             },
         )?
@@ -240,7 +247,7 @@ pub fn model_scores_between(
 ) -> Result<(Vec<DetectionModelScore>, bool), DbError> {
     let mut stmt = conn.prepare(
         "SELECT s.Date, s.Time, s.Sci_Name, s.File_Name, s.model_id, s.state, s.score, s.bar,
-                s.window_start_secs, s.window_end_secs
+                s.window_start_secs, s.window_end_secs, s.padded_secs
            FROM detection_model_scores s
           WHERE (?1 IS NULL OR s.Date >= ?1) AND (?2 IS NULL OR s.Date <= ?2)
             AND EXISTS (SELECT 1 FROM detections_analytic d
@@ -272,6 +279,7 @@ pub fn model_scores_between(
                     bar: row.get(7)?,
                     window_start_secs: row.get(8)?,
                     window_end_secs: row.get(9)?,
+                    padded_secs: row.get(10)?,
                 },
             })
         })?
@@ -449,6 +457,7 @@ mod tests {
             bar: s.map(|_| 0.7),
             window_start_secs: Some(0.0),
             window_end_secs: Some(3.0),
+            padded_secs: Some(0.0),
         }
     }
 
@@ -461,6 +470,41 @@ mod tests {
             r.get(0)
         })
         .expect("count")
+    }
+
+    /// Review F09: the padding of a classifier's window is stored with its
+    /// answer and read back, in the detection's answers and in the export.
+    #[test]
+    fn a_window_s_padding_is_stored_with_its_answer() {
+        let conn = db();
+        add_detection(&conn, "Turdus merula", None);
+        let k = key("Turdus merula", None);
+        let mut padded = score("tail", ModelScoreState::Heard, Some(0.8));
+        padded.window_start_secs = Some(6.0);
+        padded.window_end_secs = Some(7.5);
+        padded.padded_secs = Some(1.5);
+        insert_model_score(&conn, &k, &padded).expect("insert score");
+        assert_eq!(answers_for(&conn, &k)[0].padded_secs, Some(1.5));
+        let (rows, _) = model_scores_between(&conn, None, None, 10).expect("read");
+        assert_eq!(
+            rows[0].answer.padded_secs,
+            Some(1.5),
+            "the export carries it"
+        );
+    }
+
+    /// The counterpart: an answer stored before migration 68 has no padding
+    /// recorded, and reads as unknown, not as none.
+    #[test]
+    fn an_answer_stored_before_padding_was_recorded_reads_as_unknown() {
+        let conn = db();
+        add_detection(&conn, "Turdus merula", None);
+        let k = key("Turdus merula", None);
+        insert_model_score(&conn, &k, &score("old", ModelScoreState::Heard, Some(0.8)))
+            .expect("insert score");
+        conn.execute("UPDATE detection_model_scores SET padded_secs = NULL", [])
+            .expect("as before 68");
+        assert_eq!(answers_for(&conn, &k)[0].padded_secs, None);
     }
 
     #[test]

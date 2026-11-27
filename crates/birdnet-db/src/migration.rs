@@ -2936,6 +2936,19 @@ pub const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (run_id, model_id)
         );",
     },
+    Migration {
+        version: 68,
+        description: "How much of each classifier's window was padding",
+        // Review F09. On the last chunk of a recording each classifier's window
+        // runs past the recording's end and is filled with zeros. The answer's
+        // `window_end_secs` is clamped to the audio that exists, and this says
+        // how much of the window was padding, so a reader comparing classifiers
+        // can tell a score given mostly to silence.
+        //
+        // NULL for an answer stored before this migration: how much of its
+        // window was padding was not recorded, and is not inferred. Additive.
+        up_sql: "ALTER TABLE detection_model_scores ADD COLUMN padded_secs REAL;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

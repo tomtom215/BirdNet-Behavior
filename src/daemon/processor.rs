@@ -364,6 +364,7 @@ pub(super) fn db_model_scores(
             bar: a.bar.map(as_typed),
             window_start_secs: Some(f64::from(a.window_start_secs)),
             window_end_secs: Some(f64::from(a.window_end_secs)),
+            padded_secs: Some(f64::from(a.padded_secs)),
         })
         .collect()
 }
@@ -2490,6 +2491,7 @@ mod tests {
         use birdnet_core::detection::types::{AnswerState, ModelAnswer};
         use birdnet_db::sqlite::ModelScoreState;
         let answer = |id: &str, state, score, bar| ModelAnswer {
+            padded_secs: 0.0,
             model_id: id.to_owned(),
             state,
             score,
@@ -2555,6 +2557,7 @@ mod tests {
             );
         }
         let answers = [birdnet_core::detection::types::ModelAnswer {
+            padded_secs: 0.0,
             model_id: "m".into(),
             state: birdnet_core::detection::types::AnswerState::Heard,
             score: Some(0.7_f32),
@@ -2569,6 +2572,22 @@ mod tests {
             Some(f64::from(0.7_f32)),
             "the score is not retyped"
         );
+    }
+
+    /// Review F09: the padding a classifier's window held reaches the row that
+    /// stores its answer.
+    #[test]
+    fn a_window_s_padding_reaches_its_stored_answer() {
+        let answers = [birdnet_core::detection::types::ModelAnswer {
+            padded_secs: 1.5,
+            model_id: "m".into(),
+            state: birdnet_core::detection::types::AnswerState::Heard,
+            score: Some(0.7_f32),
+            bar: Some(0.7_f32),
+            window_start_secs: 6.0,
+            window_end_secs: 7.5,
+        }];
+        assert_eq!(db_model_scores(&answers)[0].padded_secs, Some(1.5));
     }
 
     use super::*;
@@ -4540,6 +4559,7 @@ mod tests {
         bar: Option<f32>,
     ) -> birdnet_core::detection::types::ModelAnswer {
         birdnet_core::detection::types::ModelAnswer {
+            padded_secs: 0.0,
             model_id: id.into(),
             state,
             score,

@@ -10189,7 +10189,14 @@
               "number",
               "null"
             ],
-            "description": "Where it ended. Classifiers' windows differ in length."
+            "description": "Where it ended. Classifiers' windows differ in length. On the last chunk of a recording, the end of the audio that exists."
+          },
+          "padded_secs": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "How much of this classifier's window was zero padding past the recording's end, seconds. Null for an answer stored before migration 68, when it was not recorded."
           }
         },
         "required": [

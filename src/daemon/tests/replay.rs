@@ -670,6 +670,7 @@ fn rows_without_answers(state: &birdnet_web::state::AppState) -> i64 {
 
 fn heard(det: &mut Detection) {
     det.model_scores = vec![birdnet_core::detection::types::ModelAnswer {
+        padded_secs: 0.0,
         model_id: "birdnet".into(),
         state: birdnet_core::detection::types::AnswerState::Heard,
         score: Some(det.confidence),

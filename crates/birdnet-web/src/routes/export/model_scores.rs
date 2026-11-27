@@ -112,13 +112,13 @@ pub(super) async fn export_model_scores(
 fn scores_to_csv(rows: &[birdnet_db::sqlite::DetectionModelScore]) -> String {
     let mut csv = String::with_capacity(rows.len() * 90);
     csv.push_str(
-        "Date,Time,Sci_Name,File_Name,Model_Id,State,Score,Bar,Window_Start_Secs,Window_End_Secs\n",
+        "Date,Time,Sci_Name,File_Name,Model_Id,State,Score,Bar,Window_Start_Secs,Window_End_Secs,Padded_Secs\n",
     );
     let num = |v: Option<f64>, places: usize| v.map_or(String::new(), |x| format!("{x:.places$}"));
     for r in rows {
         let _ = writeln!(
             csv,
-            "{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{},{},{}",
             escape_csv(&r.date),
             escape_csv(&r.time),
             escape_csv(&r.sci_name),
@@ -129,6 +129,7 @@ fn scores_to_csv(rows: &[birdnet_db::sqlite::DetectionModelScore]) -> String {
             num(r.answer.bar, 4),
             num(r.answer.window_start_secs, 2),
             num(r.answer.window_end_secs, 2),
+            num(r.answer.padded_secs, 2),
         );
     }
     csv
@@ -152,6 +153,7 @@ mod tests {
                 bar: score.map(|_| 0.7),
                 window_start_secs: Some(3.0),
                 window_end_secs: Some(7.5),
+                padded_secs: Some(0.0),
             },
         }
     }
@@ -165,15 +167,15 @@ mod tests {
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(
             lines[0],
-            "Date,Time,Sci_Name,File_Name,Model_Id,State,Score,Bar,Window_Start_Secs,Window_End_Secs"
+            "Date,Time,Sci_Name,File_Name,Model_Id,State,Score,Bar,Window_Start_Secs,Window_End_Secs,Padded_Secs"
         );
         assert_eq!(
             lines[1],
-            "2026-11-01,06:30:00,Pica pica,pond.wav,v3,heard,0.8700,0.7000,3.00,7.50"
+            "2026-11-01,06:30:00,Pica pica,pond.wav,v3,heard,0.8700,0.7000,3.00,7.50,0.00"
         );
         assert_eq!(
             lines[2],
-            "2026-11-01,06:30:00,Pica pica,pond.wav,perch,below_bar,0.4100,0.7000,3.00,7.50"
+            "2026-11-01,06:30:00,Pica pica,pond.wav,perch,below_bar,0.4100,0.7000,3.00,7.50,0.00"
         );
     }
 
@@ -186,11 +188,11 @@ mod tests {
         let lines: Vec<&str> = csv.lines().collect();
         assert_eq!(
             lines[1],
-            "2026-11-01,06:30:00,Pica pica,pond.wav,regional,no_label,,,3.00,7.50"
+            "2026-11-01,06:30:00,Pica pica,pond.wav,regional,no_label,,,3.00,7.50,0.00"
         );
         assert_eq!(
             lines[2],
-            "2026-11-01,06:30:00,Pica pica,pond.wav,flaky,failed,,,3.00,7.50"
+            "2026-11-01,06:30:00,Pica pica,pond.wav,flaky,failed,,,3.00,7.50,0.00"
         );
     }
 
@@ -223,7 +225,7 @@ mod tests {
         let csv = scores_to_csv(&[r]);
         assert_eq!(
             csv.lines().nth(1).unwrap(),
-            "2026-11-01,06:30:00,Pica pica,,v3,heard,0.9000,0.7000,3.00,7.50"
+            "2026-11-01,06:30:00,Pica pica,,v3,heard,0.9000,0.7000,3.00,7.50,0.00"
         );
     }
 }

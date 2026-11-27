@@ -359,6 +359,7 @@ mod tests {
             bar: own_bar,
             window_start_secs: None,
             window_end_secs: None,
+            padded_secs: None,
         }
     }
 
