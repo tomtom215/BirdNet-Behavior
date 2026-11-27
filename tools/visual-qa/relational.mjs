@@ -81,7 +81,8 @@ async function open(route, { width = 1440, theme = 'light', touch = false } = {}
   if (MUTATE === 'rankall') {
     await context.route('**/pages/acoustic-network*', async (r) => {
       const res = await r.fetch();
-      const body = (await res.text()).replace('<ol class="co-rank">', '<ol class="co-rank"><li class="co-rank-row">A × B</li>');
+      // A row the figure did not draw, whether or not it drew a list (the fixture's 30 days have none).
+      const body = (await res.text()).replace('<div class="co-aside">', '<div class="co-aside"><ol class="co-rank"><li class="co-rank-row">A × B</li></ol>');
       await r.fulfill({ response: res, body });
     });
   }
