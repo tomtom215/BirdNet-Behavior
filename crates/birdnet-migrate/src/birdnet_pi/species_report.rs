@@ -241,8 +241,10 @@ fn query_species_counts(
             Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
         })
         .map_err(|e| MigrateError::Query(e.to_string()))?
-        .filter_map(std::result::Result::ok)
-        .collect();
+        // A row that fails to read fails the report (N25-07): left out, its
+        // species would read as absent from the source.
+        .collect::<Result<_, _>>()
+        .map_err(|e| MigrateError::Query(e.to_string()))?;
 
     Ok(map)
 }

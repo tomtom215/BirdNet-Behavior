@@ -221,7 +221,11 @@ async fn run_loop(
             // After the passes that delete on purpose: whatever else deleted a
             // clip — the disk-full purge, a hand on the card — is found here.
             let found = run_clip_reconciliation(&db_path, &recordings_dir).await;
-            if let Some(m) = metrics {
+            // A pass that failed measured nothing: the gauge keeps the last
+            // count a pass did make, rather than reading 0 (N25-07).
+            if let Some(m) = metrics
+                && !found.failed
+            {
                 m.set_orphaned_clips(u64::try_from(found.orphans_stamped).unwrap_or(u64::MAX));
             }
             mark_ran(&db_path, JOB_SPECIES_CAP, &mut attempted).await;
@@ -877,6 +881,24 @@ pub struct Reconciliation {
     /// than thinned: unreadable, empty while detections reference clips, or
     /// missing most of them at once (see [`looks_unmounted`]).
     pub refused: bool,
+    /// The pass did not finish: the database could not be read, so the
+    /// counts above say nothing (N25-07). The orphaned-clips gauge is left as
+    /// it was rather than set to a zero nobody measured.
+    pub failed: bool,
+}
+
+/// Every row of a one-column `File_Name` query, or the first read error.
+///
+/// `.filter_map(Result::ok)` used to stand here, at each maintenance read: a
+/// row that failed to read was dropped and the pass went on as though it were
+/// not there, so a clip was neither kept nor deleted on purpose, nor checked,
+/// and the pass reported success (N25-07). A failed read now fails the pass,
+/// which says so.
+fn all_file_names(
+    rows: impl Iterator<Item = rusqlite::Result<String>>,
+) -> Result<Vec<String>, String> {
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| format!("a detection's clip name could not be read: {e}"))
 }
 
 /// How many referenced clips must be missing, and what share of them, before
@@ -925,11 +947,10 @@ async fn run_clip_reconciliation(db_path: &Path, recordings_dir: &Path) -> Recon
                    AND Clip_Pruned_At IS NULL",
             )
             .map_err(|e| e.to_string())?;
-        let referenced: Vec<String> = stmt
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| e.to_string())?
-            .filter_map(Result::ok)
-            .collect();
+        let referenced: Vec<String> = all_file_names(
+            stmt.query_map([], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?,
+        )?;
         drop(stmt);
 
         let mut out = Reconciliation::default();
@@ -1041,11 +1062,17 @@ async fn run_clip_reconciliation(db_path: &Path, recordings_dir: &Path) -> Recon
         }
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "clip reconciliation failed");
-            Reconciliation::default()
+            Reconciliation {
+                failed: true,
+                ..Reconciliation::default()
+            }
         }
         Err(e) => {
             tracing::warn!(error = %e, "clip reconciliation task panicked");
-            Reconciliation::default()
+            Reconciliation {
+                failed: true,
+                ..Reconciliation::default()
+            }
         }
     }
 }
@@ -1113,11 +1140,10 @@ async fn run_clip_retention(
                 kept = birdnet_db::sqlite::clip_kept_back_sql(retain_reviewed),
             ))
             .map_err(|e| e.to_string())?;
-        let expired: Vec<String> = stmt
-            .query_map([&cutoff], |row| row.get::<_, String>(0))
-            .map_err(|e| e.to_string())?
-            .filter_map(Result::ok)
-            .collect();
+        let expired: Vec<String> = all_file_names(
+            stmt.query_map([&cutoff], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?,
+        )?;
         drop(stmt);
 
         Ok(reclaim_clips(
@@ -1214,11 +1240,10 @@ async fn run_recording_species_cap(
                 kept = birdnet_db::sqlite::clip_kept_back_sql(retain_reviewed),
             ))
             .map_err(|e| e.to_string())?;
-        let over: Vec<String> = stmt
-            .query_map([cap], |row| row.get::<_, String>(0))
-            .map_err(|e| e.to_string())?
-            .filter_map(Result::ok)
-            .collect();
+        let over: Vec<String> = all_file_names(
+            stmt.query_map([cap], |row| row.get::<_, String>(0))
+                .map_err(|e| e.to_string())?,
+        )?;
         drop(stmt);
 
         Ok(reclaim_clips(&conn, &recordings_dir, over, "species cap"))
@@ -2631,6 +2656,40 @@ mod tests {
             )
             .unwrap();
         seed_clip(conn, dir, com, &date, file);
+    }
+
+    /// N25-07: a clip name that cannot be read fails the reconciliation pass,
+    /// which then says it failed, rather than leaving that row out and
+    /// reporting a clean pass whose count would be published as fact. The
+    /// counterpart: the same station without that row passes.
+    #[tokio::test]
+    async fn an_unreadable_clip_name_fails_the_pass_instead_of_vanishing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recs = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recs).unwrap();
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            seed_clip(&conn, &recs, "European Robin", "2026-05-01", "present.wav");
+        }
+        let clean = run_clip_reconciliation(&db, &recs).await;
+        assert!(!clean.failed, "precondition: the station reconciles");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            // A name stored as a BLOB: the read of that row fails.
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES ('2026-05-02', '06:00:00', 'Parus major', 'Great Tit', 0.9, X'6869')",
+                [],
+            )
+            .unwrap();
+        }
+        let found = run_clip_reconciliation(&db, &recs).await;
+        assert!(
+            found.failed,
+            "a row that cannot be read must fail the pass, not drop out of it: {found:?}"
+        );
     }
 
     /// The gate for S-14: a clip deleted behind the database's back — by the
