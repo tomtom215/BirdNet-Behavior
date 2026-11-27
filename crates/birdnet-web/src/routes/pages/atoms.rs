@@ -247,9 +247,65 @@ pub(crate) fn sparkline(data: &[i64], width: f64, height: f64, accent: Option<&s
     )
 }
 
+/// Below this many detections over a row's days, a species' sparkline is a dot per day it was
+/// heard, not a line (CHT-01).
+pub(crate) const SPARSE_BELOW: i64 = 10;
+
+/// A species' sparkline in a list: each row is scaled to that bird's own busiest day, so a line
+/// through counts of 0, 1 and 2 is drawn as tall as one through 0, 100 and 200 and reads as a big
+/// week. A row with fewer than [`SPARSE_BELOW`] detections in all is drawn as a dot on each day it
+/// was heard, on its floor, so a handful of detections is a handful of marks and not a shape;
+/// anything more is the [`sparkline`]. The list says what the scale is
+/// ([`SPARK_SCALE_NOTE`]).
+#[allow(clippy::cast_precision_loss)] // a row is a fortnight of days
+pub(crate) fn species_sparkline(
+    data: &[i64],
+    width: f64,
+    height: f64,
+    accent: Option<&str>,
+) -> String {
+    let total: i64 = data.iter().copied().filter(|v| *v > 0).sum();
+    if data.is_empty() || total >= SPARSE_BELOW {
+        return sparkline(data, width, height, accent);
+    }
+    let n = data.len();
+    let step = if n > 1 { width / (n - 1) as f64 } else { width };
+    let stroke = accent.unwrap_or("var(--chart-1)");
+    let cy = height - 3.0;
+    let mut dots = String::new();
+    for (i, &v) in data.iter().enumerate() {
+        if v > 0 {
+            let cx = (i as f64 * step).clamp(2.0, width - 2.0);
+            let _ = write!(
+                dots,
+                r#"<circle class="day" cx="{cx:.1}" cy="{cy:.1}" r="1.9" fill="{stroke}"/>"#
+            );
+        }
+    }
+    format!(
+        r#"<svg class="bnb-spark bnb-spark--sparse" data-style="--c:{stroke}" width="{width:.0}" height="{height:.0}" viewBox="0 0 {width:.0} {height:.0}" aria-hidden="true"><line class="floor" x1="0" y1="{fy:.1}" x2="{width:.1}" y2="{fy:.1}" stroke="var(--hairline)" stroke-width="1"/>{dots}</svg>"#,
+        fy = height - 0.5,
+    )
+}
+
+/// What a list of species sparklines says about their scale, once, under or beside the list.
+pub(crate) const SPARK_SCALE_NOTE: &str = "Each line is scaled to that bird's own busiest day; a bird heard fewer than ten times is a dot for each day it was heard.";
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// CHT-01: a row of a handful of detections draws no line, a dot for each day it was heard;
+    /// a row with as many detections as the floor still draws its line (counterpart).
+    #[test]
+    fn a_sparse_species_row_is_dots_not_a_line() {
+        let sparse = species_sparkline(&[0, 2, 1, 0, 2, 0, 0], 84.0, 22.0, None);
+        assert!(!sparse.contains("class=\"line\""), "{sparse}");
+        assert_eq!(sparse.matches("class=\"day\"").count(), 3, "{sparse}");
+        let busy = species_sparkline(&[0, 4, 1, 0, 5, 0, 0], 84.0, 22.0, None);
+        assert!(busy.contains("class=\"line\""), "{busy}");
+        assert!(!busy.contains("class=\"day\""), "{busy}");
+    }
 
     #[test]
     fn banding_codes_match_convention() {

@@ -6,7 +6,7 @@ use axum::extract::State;
 use axum::http::{StatusCode, header};
 use serde::Deserialize;
 
-use crate::routes::pages::atoms::{avatar, conf_bar, sparkline};
+use crate::routes::pages::atoms::{SPARK_SCALE_NOTE, avatar, conf_bar, species_sparkline};
 use crate::routes::pages::charts::{
     render_confidence_chart, render_daily_chart, render_hourly_chart,
 };
@@ -342,7 +342,7 @@ pub(super) async fn top_species_partial(
                 let color = slots.colour(com_name);
                 let spark = sparklines
                     .get(com_name)
-                    .map_or_default(|data| sparkline(data, 56.0, 16.0, Some(&color)));
+                    .map_or_default(|data| species_sparkline(data, 56.0, 16.0, Some(&color)));
                 // Banding code under the name (not the scientific name) — the
                 // rail teaches the codes the rest of the UI speaks (v3 spine).
                 let _ = write!(
@@ -354,6 +354,11 @@ pub(super) async fn top_species_partial(
                     c = count,
                 );
             }
+            // What the lines' scale is, said once (CHT-01).
+            let _ = write!(
+                html,
+                r#"<p class="bnb-meta x-top-note">{SPARK_SCALE_NOTE}</p>"#
+            );
             (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
         }
         // See `error_states::failed_partial` for why this is a 200.
@@ -427,7 +432,7 @@ pub(super) async fn species_list_partial(
                 let color = slots.colour(&s.com_name);
                 let spark = sparklines
                     .get(&s.com_name)
-                    .map_or_default(|data| sparkline(data, 84.0, 22.0, Some(&color)));
+                    .map_or_default(|data| species_sparkline(data, 84.0, 22.0, Some(&color)));
                 let _ = write!(
                     html,
                     r#"<tr><td class="mono dp-rank">{rank}</td><td><div class="dp-cell">{avatar}<div class="dp-min0"><div class="dp-name-strong"><a href="/species/detail?name={enc}" class="dp-link">{n}</a></div><div class="sci mono bnb-meta">{sci}</div></div></div></td><td>{spark}</td><td class="mono tabular">{c}</td><td>{conf}</td></tr>"#,

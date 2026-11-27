@@ -9,7 +9,7 @@ use axum::response::Html;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
-use super::atoms::{avatar, conf_bar, conf_pill, sparkline, species_code, species_color};
+use super::atoms::{avatar, conf_bar, conf_pill, species_code, species_color, species_sparkline};
 use super::charts::{render_daily_chart_pair, render_hourly_chart};
 use super::{SPECIES_DETAIL_HTML, escape_html, simple_url_encode};
 use crate::state::AppState;
@@ -375,7 +375,7 @@ fn list_view(
         let color = slots.colour(&s.com_name);
         let spark = sparks
             .get(&s.com_name)
-            .map_or_default(|d| sparkline(d, 84.0, 22.0, Some(&color)));
+            .map_or_default(|d| species_sparkline(d, 84.0, 22.0, Some(&color)));
         let enc = simple_url_encode(&s.com_name);
         let shown = state.names().name(&s.sci_name, &s.com_name);
         let _ = write!(
