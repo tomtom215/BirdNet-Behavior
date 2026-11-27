@@ -36,7 +36,7 @@ pub(crate) fn render_hourly_chart(id: &str, hours: &[birdnet_db::sqlite::HourlyC
         top: None,
         stack: None,
         temps: &[],
-        table: false,
+        table: true,
         class: "",
         compact: false,
     })
@@ -149,7 +149,7 @@ fn daily_chart(
         mean_line: true,
         future_from: None,
         weekday_labels: false,
-        table: false,
+        table: true,
         class: layout.class,
     })
 }

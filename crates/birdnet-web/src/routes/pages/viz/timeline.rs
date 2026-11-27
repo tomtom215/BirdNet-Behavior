@@ -691,7 +691,7 @@ pub fn day_strip(
             top: Some(top),
             stack,
             temps,
-            table: false,
+            table: true,
             class,
             compact,
         })
