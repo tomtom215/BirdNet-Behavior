@@ -269,6 +269,73 @@ mod tests {
         detection_count, detections_by_species, recent_detections,
     };
 
+    /// Review F02: a replayed detection is known to be stored when, and only
+    /// when, a row of the same analysis says so: date, time, species, source,
+    /// window and correlation id (mutation survivors `Ok(true)` and
+    /// `Ok(false)` in `detection_recorded`, PR #313).
+    #[test]
+    fn a_detection_is_recorded_only_when_its_own_row_is_there() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        insert_detection(
+            &conn,
+            &DetectionRecord {
+                model_id: None,
+                model_agreement: None,
+                date: "2026-03-11",
+                time: "08:30:00",
+                sci_name: "Turdus merula",
+                com_name: "Eurasian Blackbird",
+                confidence: 0.87,
+                lat: None,
+                lon: None,
+                cutoff: None,
+                week: None,
+                sensitivity: None,
+                overlap: None,
+                file_name: "a.wav",
+                chunk_offset_secs: Some(6.0),
+                correlation_id: Some("c1"),
+                source: Some("north"),
+                duration_secs: None,
+                detected_at_utc: None,
+                run_id: None,
+                clip_offset_secs: None,
+                detection_secs: None,
+            },
+        )
+        .unwrap();
+        let key = RecordedDetection {
+            date: "2026-03-11",
+            time: "08:30:00",
+            sci_name: "Turdus merula",
+            source: "north",
+            chunk_offset_secs: 6.0,
+            correlation_id: "c1",
+        };
+        assert!(detection_recorded(&conn, &key).unwrap());
+        for other in [
+            RecordedDetection {
+                correlation_id: "c2",
+                ..key
+            },
+            RecordedDetection {
+                source: "south",
+                ..key
+            },
+            RecordedDetection {
+                chunk_offset_secs: 9.0,
+                ..key
+            },
+            RecordedDetection {
+                sci_name: "Pica pica",
+                ..key
+            },
+        ] {
+            assert!(!detection_recorded(&conn, &other).unwrap(), "{other:?}");
+        }
+    }
+
     /// DD-32: the id lands on the row the rowid names, and only there.
     #[test]
     fn the_soundscape_id_is_written_by_rowid() {

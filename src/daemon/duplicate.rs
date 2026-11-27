@@ -309,6 +309,27 @@ mod tests {
         g.admit(sci, t(hms)) == DuplicateVerdict::Admit
     }
 
+    /// The gate remembers exactly the latest `REMEMBERED` times per species
+    /// and source: not one fewer, so a backlog that far out of order is still
+    /// judged, and not without bound (mutation survivors `>` to `>=` and `==`
+    /// in `record`, PR #313).
+    #[test]
+    fn the_gate_remembers_the_latest_times_and_no_more() {
+        let mut g = DuplicateGate::new(30);
+        let n = i64::try_from(super::REMEMBERED).unwrap();
+        for i in 0..n + 10 {
+            g.record("north", "Pica pica", 1_000 + i);
+        }
+        let times = &g.last_admitted[&super::key("north", "Pica pica")];
+        assert_eq!(times.len(), super::REMEMBERED);
+        assert_eq!(
+            times.first(),
+            Some(&(1_010)),
+            "the oldest are the ones let go"
+        );
+        assert_eq!(times.last(), Some(&(1_000 + n + 9)));
+    }
+
     // ── the interval ────────────────────────────────────────────────────
 
     #[test]

@@ -2592,6 +2592,39 @@ mod tests {
         );
     }
 
+    /// A detection kept at a stop is held to its own classifier's threshold,
+    /// and one from a classifier without its own to the station's (mutation
+    /// survivors in `RunProvenance::floor_for`, which only the stop reaches,
+    /// PR #313).
+    #[test]
+    fn a_detection_kept_at_a_stop_is_held_to_its_own_classifier_s_bar() {
+        let provenance = super::RunProvenance {
+            run_id: 1,
+            algorithm: None,
+            lat: None,
+            lon: None,
+            sensitivity: 1.0,
+            overlap: 0.0,
+            model_thresholds: HashMap::from([("v3".to_owned(), 0.5_f32)]),
+        };
+        let kept_by = |model: &str| {
+            let mut event = make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.9,
+                PathBuf::from("/nonexistent/a.wav"),
+                "c1",
+            );
+            event.detection.model_id = Some(model.to_owned());
+            super::freeze_for_queue(event, &HashMap::new(), &provenance, 0.8, None)
+                .bars
+                .expect("a kept detection carries its bars")
+                .global_bar
+        };
+        assert!((kept_by("v3") - f64::from(0.5_f32)).abs() < f64::EPSILON);
+        assert!((kept_by("birdnet") - f64::from(0.8_f32)).abs() < f64::EPSILON);
+    }
+
     /// Review F09: the padding a classifier's window held reaches the row that
     /// stores its answer.
     #[test]

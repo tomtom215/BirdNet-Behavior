@@ -212,7 +212,10 @@ fn throughput_observer(
     reason = "window counts are far below 2^52"
 )]
 fn answered_share(tally: &birdnet_core::detection::FilterTally) -> f64 {
-    if tally.windows == 0 || tally.failed_windows == 0 {
+    // With none failed the division below is exactly 1.0, so only an empty
+    // tally needs its own answer: a second condition here was one no test
+    // could tell from its absence (a surviving mutant, PR #313).
+    if tally.windows == 0 {
         return 1.0;
     }
     tally.windows.saturating_sub(tally.failed_windows) as f64 / tally.windows as f64
@@ -1407,6 +1410,24 @@ mod liveness_mirror_tests {
 
 #[cfg(test)]
 mod tests {
+    /// The share of a file's windows answered, and its seconds decoded, as the
+    /// effort ledger credits them (review F10, F18; mutation survivors in
+    /// `answered_share` and `decoded_secs`, PR #313).
+    #[test]
+    fn a_file_is_credited_the_windows_answered_and_the_audio_decoded() {
+        use birdnet_core::detection::FilterTally;
+        let tally = |windows, failed_windows, decoded_ms| FilterTally {
+            windows,
+            failed_windows,
+            decoded_ms,
+            ..FilterTally::default()
+        };
+        assert!((super::answered_share(&tally(10, 3, 0)) - 0.7).abs() < 1e-12);
+        assert!((super::answered_share(&tally(10, 0, 0)) - 1.0).abs() < f64::EPSILON);
+        assert!((super::answered_share(&tally(0, 0, 0)) - 1.0).abs() < f64::EPSILON);
+        assert!((super::decoded_secs(&tally(0, 0, 1_500)) - 1.5).abs() < f64::EPSILON);
+        assert!(super::decoded_secs(&tally(0, 0, 0)).abs() < f64::EPSILON);
+    }
     /// A 15 s, 48 kHz mono silent WAV at `path`.
     fn write_segment(path: &std::path::Path) {
         let spec = hound::WavSpec {

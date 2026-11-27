@@ -676,17 +676,19 @@ fn write_batch(
             };
             need(source, start.max(0.0), stop.min(d), len, rate);
             if !window.own_segment_only {
+                // What the clip reaches into either neighbour, as a range that
+                // is empty when it reaches nothing. Unguarded on purpose: a
+                // `start < 0.0` test in front only saved a header read, and
+                // was a condition no test could tell from `<=` (PR #313).
                 let (before, after) = neighbours(source);
-                if start < 0.0
-                    && let Some(prev) = before
+                if let Some(prev) = before
                     && let Some((plen, prate)) = length(&prev)
                 {
                     let pd = secs_of(plen, prate);
-                    let take = (-start).min(pd);
+                    let take = (-start).clamp(0.0, pd);
                     need(&prev, pd - take, pd, plen, prate);
                 }
-                if stop > d
-                    && let Some(next) = after
+                if let Some(next) = after
                     && let Some((nlen, nrate)) = length(&next)
                 {
                     need(&next, 0.0, (stop - d).max(0.0), nlen, nrate);
@@ -1296,6 +1298,16 @@ mod tests {
             "offered after {MAX_ATTEMPTS} failures"
         );
         assert_eq!(replay.held(), 1);
+        // Said at every start while it is held, and only then (mutation
+        // survivors in `take`'s `held > 0`, PR #313).
+        let held = "held in the queue for an operator";
+        let (_, said) = crate::daemon::test_support::logged(tracing::Level::ERROR, || queue.take());
+        assert!(said.contains(held) && said.contains("held=1"), "{said}");
+        let clean = tempfile::tempdir().unwrap();
+        let other = ClipQueue::beside(&clean.path().join("birds.db"), window());
+        other.keep(&[kept(&src, "Pica pica", 0.0)]).unwrap();
+        let (_, said) = crate::daemon::test_support::logged(tracing::Level::ERROR, || other.take());
+        assert!(!said.contains(held), "{said}");
         let batches = std::fs::read_dir(data.path().join(DIR_NAME))
             .unwrap()
             .count();
@@ -1450,6 +1462,134 @@ mod tests {
         }
     }
 
+    /// Review F03: from the next recording the queue keeps only the samples a
+    /// clip reaches into it, and zeros the rest; a recording a clip does not
+    /// reach into is not kept at all. (Mutation survivors in `write_batch`'s
+    /// neighbour arithmetic, PR #313: the clip-equality test passes when more
+    /// is kept than the clip reads.)
+    #[test]
+    fn from_a_neighbour_only_what_the_clip_reaches_is_kept() {
+        let data = tempfile::tempdir().unwrap();
+        let stream = tempfile::tempdir().unwrap();
+        let name = |t: &str| stream.path().join(format!("2026-05-19-birdnet-{t}.wav"));
+        for (i, t) in [(0, "09:00:45"), (1, "09:01:00"), (2, "09:01:15")] {
+            ramp(&name(t), i * 1000);
+        }
+        let w = window();
+        let queue = ClipQueue::beside(&data.path().join("birds.db"), w);
+        let start = 11.5_f32;
+        queue
+            .keep(&[kept(&name("09:01:00"), "Pica pica", start)])
+            .unwrap();
+        let mut replay = queue.take();
+        let (_, k) = replay.next().unwrap();
+        let batch = k.event.source_file.parent().unwrap().to_path_buf();
+        let next =
+            birdnet_core::audio::decode::decode_file(&batch.join(kept_name(&name("09:01:15"))))
+                .expect("the next recording is kept: the clip reaches into it");
+        let reach = start + 3.0 + w.spacer - 15.0;
+        assert!(
+            reach > 0.1,
+            "precondition: the clip reaches into the next recording"
+        );
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_precision_loss,
+            reason = "a few seconds of samples at 48 kHz, exact in f32"
+        )]
+        let edge = (reach * SR as f32) as usize;
+        assert!(
+            next.samples[..edge - 2].iter().all(|&x| x != 0.0),
+            "what the clip reads is kept"
+        );
+        assert!(
+            next.samples[edge + 2..].iter().all(|&x| x == 0.0),
+            "past {reach} s into the next recording nothing is kept"
+        );
+        assert!(
+            !batch.join(kept_name(&name("09:00:45"))).exists(),
+            "the clip does not reach back into the recording before"
+        );
+    }
+
+    /// A recording that decodes to no samples keeps nothing, and nothing of
+    /// its neighbours either (mutation survivor in the empty-recording guard,
+    /// PR #313).
+    #[test]
+    fn an_empty_recording_keeps_no_audio_of_its_own_or_its_neighbours() {
+        let data = tempfile::tempdir().unwrap();
+        let stream = tempfile::tempdir().unwrap();
+        let name = |t: &str| stream.path().join(format!("2026-05-19-birdnet-{t}.wav"));
+        ramp(&name("09:00:45"), 0);
+        ramp(&name("09:01:15"), 2000);
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: SR,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        hound::WavWriter::create(name("09:01:00"), spec)
+            .unwrap()
+            .finalize()
+            .unwrap();
+        let queue = ClipQueue::beside(&data.path().join("birds.db"), window());
+        queue
+            .keep(&[kept(&name("09:01:00"), "Pica pica", 0.0)])
+            .unwrap();
+        let mut replay = queue.take();
+        let (_, k) = replay.next().expect("the detection is kept without audio");
+        let audio = std::fs::read_dir(k.event.source_file.parent().unwrap())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".wav"))
+            .count();
+        assert_eq!(audio, 0, "no audio is kept for an empty recording");
+    }
+
+    /// A clip's lead-in is its spacer and its pre-capture together (mutation
+    /// survivor in `ClipWindow::of`, PR #313).
+    #[test]
+    fn a_clip_s_lead_in_is_its_spacer_and_its_pre_capture() {
+        let config = ExtractionConfig {
+            pre_capture_secs: 1.5,
+            ..ExtractionConfig::default()
+        };
+        let w = ClipWindow::of(&config);
+        assert!(
+            (w.lead_in - (config.spacer() + 1.5)).abs() < 1e-6,
+            "{}",
+            w.lead_in
+        );
+        assert!((w.spacer - config.spacer()).abs() < f32::EPSILON);
+    }
+
+    /// Syncing a directory that is not there is an error, so a commit into a
+    /// queue whose directory vanished reports failure instead of durability
+    /// (mutation survivor `sync_dir -> Ok(())`, PR #313).
+    #[test]
+    fn syncing_a_missing_directory_is_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        assert!(sync_dir(tmp.path()).is_ok());
+        assert!(sync_dir(&tmp.path().join("gone")).is_err());
+    }
+
+    /// A start says when a queue it cannot list holds detections it will not
+    /// replay, and says nothing when there is simply no queue (mutation
+    /// survivors in `take`'s not-found guard, PR #313).
+    #[test]
+    fn a_queue_that_cannot_be_listed_is_reported_and_a_missing_one_is_not() {
+        const SAID: &str = "cannot be listed";
+        let data = tempfile::tempdir().unwrap();
+        let db = data.path().join("birds.db");
+        let queue = ClipQueue::beside(&db, window());
+        let (_, said) = crate::daemon::test_support::logged(tracing::Level::ERROR, || queue.take());
+        assert!(!said.contains(SAID), "no queue is not an error: {said}");
+        std::fs::write(data.path().join(DIR_NAME), b"not a directory").unwrap();
+        let (_, said) = crate::daemon::test_support::logged(tracing::Level::ERROR, || queue.take());
+        assert!(said.contains(SAID), "{said}");
+    }
+
     /// Two batches started in the same nanosecond are two batches: the
     /// second takes the next free name instead of failing or writing into the
     /// first. The call runs on its own thread so a loop that never ends
@@ -1533,7 +1673,15 @@ mod tests {
         let src = data.path().join("2026-05-19-birdnet-09:01:00.wav");
         ramp(&src, 0);
         let queue = ClipQueue::beside(&db, window());
-        assert_eq!(queue.keep(&[kept(&src, "Pica pica", 0.0)]).unwrap(), 1);
+        assert_eq!(
+            queue
+                .keep(&[
+                    kept(&src, "Pica pica", 0.0),
+                    kept(&src, "Turdus merula", 6.0)
+                ])
+                .unwrap(),
+            2
+        );
 
         let (_stop, stopping) = tokio::sync::watch::channel(true);
         let mut inbox = Inbox::new(&db, window(), stopping, Box::new(|| true));
@@ -1546,17 +1694,30 @@ mod tests {
         let got = inbox.next(&rx, Duration::from_millis(1), &mut || idled = true);
         assert!(matches!(got, Next::Stopping), "{got:?}");
         assert!(!idled, "a stopping inbox does not wait for detections");
-        let n = inbox.keep_the_rest(&rx, &mut |event| Kept {
-            event,
-            run: None,
-            bars: None,
+        let (n, said) = crate::daemon::test_support::logged(tracing::Level::INFO, || {
+            inbox.keep_the_rest(&rx, &mut |event| Kept {
+                event,
+                run: None,
+                bars: None,
+            })
         });
         assert_eq!(n, 2);
+        // The stop says how many of the last stop's detections it leaves in
+        // the queue (mutation survivors in `keep_the_rest` and `Replay::len`,
+        // PR #313).
+        let line = said
+            .lines()
+            .find(|l| l.contains("not yet replayed stay in the queue"))
+            .unwrap_or_else(|| panic!("the stop says what it leaves: {said}"));
+        assert!(line.contains("detections=2"), "{line}");
 
         let mut replay = queue.take();
         let mut names = drain(&mut replay);
         names.sort();
-        assert_eq!(names, ["Corvus corax", "Parus major", "Pica pica"]);
+        assert_eq!(
+            names,
+            ["Corvus corax", "Parus major", "Pica pica", "Turdus merula"]
+        );
     }
 
     /// A stopping processor waits for the detection loop's channel no longer
@@ -1776,5 +1937,26 @@ mod tests {
         assert_eq!(queue.keep(&[]).unwrap(), 0);
         assert!(!data.path().join(DIR_NAME).exists());
         assert!(queue.take().next().is_none());
+    }
+
+    /// A stop with nothing left of the last one's detections says nothing
+    /// about them (the counterpart of the stop's count, PR #313).
+    #[test]
+    fn a_stop_with_no_replay_left_says_nothing_of_one() {
+        let data = tempfile::tempdir().unwrap();
+        let db = data.path().join("birds.db");
+        let (_stop, stopping) = tokio::sync::watch::channel(true);
+        let mut inbox = Inbox::new(&db, window(), stopping, Box::new(|| true));
+        let (tx, rx) = mpsc::channel::<DetectionEvent>();
+        drop(tx);
+        let (n, said) = crate::daemon::test_support::logged(tracing::Level::INFO, || {
+            inbox.keep_the_rest(&rx, &mut |event| Kept {
+                event,
+                run: None,
+                bars: None,
+            })
+        });
+        assert_eq!(n, 0);
+        assert!(!said.contains("not yet replayed"), "{said}");
     }
 }
