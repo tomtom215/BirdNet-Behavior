@@ -106,6 +106,9 @@ pub struct NoiseFilter {
     /// `0.0` — the default — means no window at all, and the filter behaves
     /// exactly as it did before `G-17`.
     remember_secs: f32,
+    /// Thresholds for named classifiers, on their own scales (review F09). A
+    /// classifier not named here is judged by [`Self::threshold`].
+    per_classifier: Vec<(String, f32)>,
 }
 
 impl NoiseFilter {
@@ -123,7 +126,36 @@ impl NoiseFilter {
                 .filter(|c| !c.trim().is_empty())
                 .collect(),
             remember_secs: 0.0,
+            per_classifier: Vec::new(),
         }
+    }
+
+    /// The same filter, with `model_id`'s watched classes judged against its
+    /// own `threshold` rather than the station's (review F09): classifiers'
+    /// scores are not on one scale. `0.0` switches the filter off for that
+    /// classifier. Naming a classifier twice keeps the last threshold. It binds
+    /// on evidence that names its classifier: a detection whose `model_id` is
+    /// that classifier, or that classifier's own loudest noise
+    /// ([`crate::detection::types::ClassifierEvidence::loudest_noise`]).
+    #[must_use]
+    pub fn with_classifier_threshold(
+        mut self,
+        model_id: impl Into<String>,
+        threshold: f32,
+    ) -> Self {
+        let model_id = model_id.into();
+        self.per_classifier.retain(|(id, _)| *id != model_id);
+        self.per_classifier.push((model_id, threshold));
+        self
+    }
+
+    /// The threshold evidence from `model_id` is judged against: that
+    /// classifier's own where one is set, else the station's.
+    #[must_use]
+    pub fn threshold_for(&self, model_id: Option<&str>) -> f32 {
+        model_id
+            .and_then(|m| self.per_classifier.iter().find(|(id, _)| id == m))
+            .map_or(self.threshold, |(_, t)| *t)
     }
 
     /// Keep suppressing a noisy chunk's species for `secs` afterwards.
@@ -162,7 +194,8 @@ impl NoiseFilter {
     /// Whether the filter will suppress anything.
     #[must_use]
     pub fn is_enabled(&self) -> bool {
-        self.threshold > 0.0 && !self.classes.is_empty()
+        !self.classes.is_empty()
+            && (self.threshold > 0.0 || self.per_classifier.iter().any(|(_, t)| *t > 0.0))
     }
 
     /// The configured threshold.
@@ -189,7 +222,9 @@ impl NoiseFilter {
             return None;
         }
         chunk.iter().find(|d| {
-            d.confidence >= self.threshold
+            let threshold = self.threshold_for(d.model_id.as_deref());
+            threshold > 0.0
+                && d.confidence >= threshold
                 && self.classes.iter().any(|class| names_detection(class, d))
         })
     }
@@ -203,12 +238,33 @@ impl NoiseFilter {
         chunk: &'a [Detection],
         loudest: Option<&'a Detection>,
     ) -> Option<&'a Detection> {
-        let unlisted = loudest.filter(|d| {
-            self.is_enabled()
-                && d.confidence >= self.threshold
+        self.firing_any(chunk, loudest.map_or(&[], std::slice::from_ref))
+    }
+
+    /// [`Self::firing`], with every classifier's own loudest watched noise
+    /// class as `loudest` (review F09): the chunk fires when any one of them,
+    /// or a watched class in its list, reaches the threshold of the classifier
+    /// that scored it ([`Self::threshold_for`]). Never the loudest across
+    /// classifiers against one bar.
+    #[must_use]
+    pub fn firing_any<'a>(
+        &self,
+        chunk: &'a [Detection],
+        loudest: &'a [Detection],
+    ) -> Option<&'a Detection> {
+        if !self.is_enabled() {
+            return None;
+        }
+        let fires = |d: &&Detection| {
+            let threshold = self.threshold_for(d.model_id.as_deref());
+            threshold > 0.0
+                && d.confidence >= threshold
                 && self.classes.iter().any(|class| names_detection(class, d))
-        });
-        self.offending(chunk).or(unlisted)
+        };
+        chunk
+            .iter()
+            .find(fires)
+            .or_else(|| loudest.iter().find(fires))
     }
 
     /// Drop every detection in each chunk a watched class was heard in, and —
@@ -245,6 +301,23 @@ impl NoiseFilter {
         predictions: &[Vec<Detection>],
         loudest: &[Option<Detection>],
     ) -> Vec<Vec<Detection>> {
+        let loudest: Vec<Vec<Detection>> = loudest
+            .iter()
+            .map(|l| l.iter().cloned().collect())
+            .collect();
+        self.filter_with_classifier_evidence(starts, predictions, &loudest)
+    }
+
+    /// [`Self::filter_with_evidence`], with each chunk's loudest watched noise
+    /// class from every classifier that answered it, each judged by
+    /// [`Self::firing_any`] (review F09).
+    #[must_use]
+    pub fn filter_with_classifier_evidence(
+        &self,
+        starts: &[f32],
+        predictions: &[Vec<Detection>],
+        loudest: &[Vec<Detection>],
+    ) -> Vec<Vec<Detection>> {
         if !self.is_enabled() {
             return predictions.to_vec();
         }
@@ -255,7 +328,7 @@ impl NoiseFilter {
         let mut suppressed_at: Vec<(f32, Vec<String>)> = Vec::new();
         let mut out: Vec<Vec<Detection>> = Vec::with_capacity(predictions.len());
         for (i, chunk) in predictions.iter().enumerate() {
-            if let Some(noise) = self.firing(chunk, loudest.get(i).and_then(Option::as_ref)) {
+            if let Some(noise) = self.firing_any(chunk, loudest.get(i).map_or(&[], Vec::as_slice)) {
                 tracing::debug!(
                     class = %noise.common_name,
                     confidence = noise.confidence,
@@ -546,6 +619,103 @@ mod tests {
         // `Noise` and `Environmental` score highly on ordinary quiet
         // recordings; defaulting to them would suppress most of the night.
         assert_eq!(DEFAULT_NOISE_CLASSES, ["Dog"]);
+    }
+}
+
+#[cfg(test)]
+mod per_classifier_tests {
+    use super::NoiseFilter;
+    use crate::detection::types::Detection;
+
+    /// A watched-class score from one classifier.
+    fn dog(model: &str, confidence: f32) -> Detection {
+        Detection {
+            date: "2026-03-14".into(),
+            time: "19:40:00".into(),
+            scientific_name: "Dog".into(),
+            common_name: "Dog".into(),
+            confidence,
+            start: 0.0,
+            stop: 3.0,
+            week: 11,
+            file_name_extr: None,
+            model_id: Some(model.to_owned()),
+            agreeing_models: None,
+            model_scores: Vec::new(),
+        }
+    }
+
+    /// Review F09: each classifier's noise score is judged against its own
+    /// threshold. Perch's 0.40 clears the 0.30 named for it though the
+    /// station's 0.80 is above both; a threshold named for BirdNET, which
+    /// scored 0.20, does not borrow Perch's score to fire.
+    #[test]
+    fn each_classifier_s_noise_is_judged_by_its_own_threshold() {
+        let loudest = [dog("birdnet", 0.20), dog("perch", 0.40)];
+        let station = NoiseFilter::with_default_classes(0.80);
+        assert!(station.firing_any(&[], &loudest).is_none(), "precondition");
+        let perch = station.clone().with_classifier_threshold("perch", 0.30);
+        assert!(
+            perch.firing_any(&[], &loudest).is_some(),
+            "perch's own threshold was not applied"
+        );
+        let birdnet = station.with_classifier_threshold("birdnet", 0.30);
+        assert!(
+            birdnet.firing_any(&[], &loudest).is_none(),
+            "birdnet's threshold fired on another classifier's score"
+        );
+        // The detection list likewise: a merged Dog detection is judged by the
+        // threshold of the classifier named on it.
+        let listed = [dog("perch", 0.40)];
+        assert!(perch.firing_any(&listed, &[]).is_some());
+        assert!(birdnet.firing_any(&listed, &[]).is_none());
+        // And the whole-file filter drops the chunk on that verdict.
+        let kept = perch.filter_with_classifier_evidence(
+            &[0.0],
+            &[vec![dog("perch", 0.40)]],
+            &[loudest.to_vec()],
+        );
+        assert!(kept[0].is_empty());
+    }
+
+    /// The default is unchanged: with no classifier threshold, judging every
+    /// classifier's loudest noise against the station's threshold fires
+    /// exactly when the loudest of them did.
+    #[test]
+    fn with_no_classifier_threshold_the_verdict_is_the_loudest_s() {
+        let levels = [0.0, 0.1, 0.3, 0.5, 0.9, 0.95];
+        let mut tried = 0;
+        for threshold in [0.0, 0.1, 0.3, 0.5] {
+            let filter = NoiseFilter::with_default_classes(threshold);
+            for &a in &levels {
+                for &b in &levels {
+                    let each = [dog("birdnet", a), dog("perch", b)];
+                    let loudest = if b > a { &each[1] } else { &each[0] };
+                    assert_eq!(
+                        filter.firing_any(&[], &each).is_some(),
+                        filter.firing(&[], Some(loudest)).is_some(),
+                        "t={threshold} a={a} b={b}"
+                    );
+                    tried += 1;
+                }
+            }
+        }
+        assert_eq!(tried, 4 * 36);
+    }
+
+    /// The one input on which the two readings differ, stated so it is not
+    /// found by accident: a classifier that answered NaN for its noise class
+    /// used to hide another's bark, because "the loudest" was whichever came
+    /// first when one of them was not a number. Each is judged on its own now.
+    #[test]
+    fn a_classifier_s_unusable_noise_score_no_longer_hides_another_s_bark() {
+        let filter = NoiseFilter::with_default_classes(0.3);
+        let each = [dog("birdnet", f32::NAN), dog("perch", 0.9)];
+        assert!(filter.firing_any(&[], &each).is_some());
+        assert!(
+            filter.firing(&[], Some(&each[0])).is_none(),
+            "NaN never fires alone"
+        );
     }
 }
 

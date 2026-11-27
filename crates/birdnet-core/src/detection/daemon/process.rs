@@ -195,10 +195,16 @@ fn record_window(
 /// against its own threshold, agreement counted rather than folded into the
 /// confidence.
 ///
-/// The human score is the **highest** any classifier reported, not the
-/// primary's. It drives the privacy gate, and if any model heard speech the
-/// safe reading is that there was speech: erring towards suppressing a bird is
-/// recoverable, erring towards publishing a conversation is not.
+/// Each answering classifier's own human score, human rank and loudest noise
+/// are carried in [`ChunkPrediction::by_classifier`], and the privacy and
+/// noise filters judge each against its own rule, flagging the chunk when
+/// **any** classifier's rule fires (review F09): if any model heard speech the
+/// safe reading is that there was speech, and erring towards suppressing a
+/// bird is recoverable where erring towards publishing a conversation is not.
+/// Scores are never compared across classifiers for that verdict; the
+/// highest score, best rank and loudest noise kept beside them are summaries
+/// for a reader of one number. With no per-classifier rule the verdict is the
+/// one the summaries gave against the station's rule.
 fn infer_chunk(
     registry: &mut ClassifierRegistry,
     route: &[usize],
@@ -219,6 +225,7 @@ fn infer_chunk(
     let mut human_score = 0.0_f32;
     let mut human_rank: Option<usize> = None;
     let mut loudest_noise = None;
+    let mut by_classifier = Vec::with_capacity(route.len());
     // Whether a classifier able to hear people failed this window (F08).
     let mut privacy_unassessed = false;
     // The first classifier error, returned only if no routed classifier
@@ -290,6 +297,19 @@ fn infer_chunk(
             }
         };
         windows.push((idx, true));
+        // Each classifier's own evidence, on its own scale, for filters that
+        // judge each by its own rule (review F09). The summaries below are
+        // kept for readers of one number; no filter decides on them while
+        // this is filled.
+        by_classifier.push(crate::detection::types::ClassifierEvidence {
+            model_id: model_id.clone(),
+            human_score: prediction.human_score,
+            human_rank: prediction.human_rank,
+            loudest_noise: prediction.loudest_noise.clone().map(|mut noise| {
+                noise.model_id = Some(model_id.clone());
+                noise
+            }),
+        });
         human_score = human_score.max(prediction.human_score);
         human_rank = match (human_rank, prediction.human_rank) {
             (Some(a), Some(b)) => Some(a.min(b)),
@@ -342,6 +362,7 @@ fn infer_chunk(
         human_rank,
         privacy_unassessed,
         loudest_noise,
+        by_classifier,
     })
 }
 
@@ -1455,6 +1476,56 @@ mod tests {
             [false],
             "a failure that cost no privacy coverage masked the window"
         );
+    }
+
+    /// Review F09, end to end through two real ONNX sessions: each answering
+    /// classifier's own human evidence is carried, so a privacy rule named for
+    /// a classifier is read against that classifier's score. The primary names
+    /// a human class and scores it sigmoid(0.9) = 0.71; v3 has none. A
+    /// station threshold of 0.80 masks nothing; a 0.50 rule for birdnet masks
+    /// the chunk; the same rule for v3, which heard nobody, does not.
+    #[test]
+    fn each_classifier_s_own_human_evidence_reaches_the_privacy_rule() {
+        use crate::detection::privacy::{ClassifierPrivacyRule, PrivacyFilter};
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers_naming(
+            tmp.path(),
+            (None, None),
+            11,
+            Some("Human vocal_Human vocal"),
+        );
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk_scoring(&[0.9]), 20).unwrap();
+        let ids: Vec<&str> = out
+            .by_classifier
+            .iter()
+            .map(|e| e.model_id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            ["birdnet", "v3"],
+            "each answering classifier, in route order"
+        );
+        assert!(
+            (out.by_classifier[0].human_score - 0.710_949_5).abs() < 1e-4,
+            "{:?}",
+            out.by_classifier
+        );
+        assert_eq!(
+            out.by_classifier[1].human_rank, None,
+            "v3 has no human class"
+        );
+        let rule = ClassifierPrivacyRule {
+            threshold: Some(0.50),
+            rank_cutoff: None,
+        };
+        let masks = |f: PrivacyFilter| f.masked_windows(std::slice::from_ref(&out))[0];
+        assert!(!masks(PrivacyFilter::new(0.80)), "precondition");
+        assert!(masks(
+            PrivacyFilter::new(0.80).with_classifier_rule("birdnet", rule)
+        ));
+        assert!(!masks(
+            PrivacyFilter::new(0.80).with_classifier_rule("v3", rule)
+        ));
     }
 
     /// Review F18: a window no classifier answered costs that window, not the

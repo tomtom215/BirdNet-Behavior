@@ -105,6 +105,21 @@ pub fn window_support(start: f32, window_secs: f32, audio_end: f32) -> (f32, f32
     (end, (nominal_end - end).max(0.0))
 }
 
+/// How many seconds of recorded audio two answers' windows share.
+///
+/// Classifiers' windows over one chunk all start at the chunk's start and
+/// differ in length, so two classifiers that "agree" on a species heard
+/// overlapping, not identical, audio, and on a padded tail less of it than
+/// their nominal windows suggest. This is the overlap of their supported spans
+/// ([`ModelAnswer::window_start_secs`] to [`ModelAnswer::window_end_secs`]),
+/// padding excluded; `0.0` when they do not overlap.
+#[must_use]
+pub fn shared_support_secs(a: &ModelAnswer, b: &ModelAnswer) -> f32 {
+    let start = a.window_start_secs.max(b.window_start_secs);
+    let end = a.window_end_secs.min(b.window_end_secs);
+    (end - start).max(0.0)
+}
+
 /// Every listening classifier's answer about one species, in the order given.
 #[must_use]
 pub fn answers_for(outcomes: &[WindowOutcome<'_>], scientific_name: &str) -> Vec<ModelAnswer> {
@@ -263,6 +278,43 @@ mod tests {
         assert!(close(window_support(6.0, 3.0, 9.0), (9.0, 0.0)));
         // Audio that ends before the window starts gives no support, all padding.
         assert!(close(window_support(6.0, 3.0, 5.0), (6.0, 3.0)));
+    }
+
+    /// Review F09: agreement is over overlapping windows. BirdNET's 3 s and
+    /// v3's 2 s from one chunk's start share 2 s; on a tail that ends after
+    /// one second they share one; answers from different chunks that do not
+    /// meet share nothing.
+    #[test]
+    fn two_answers_share_the_recorded_audio_their_windows_overlap() {
+        let answer = |start: f32, end: f32| ModelAnswer {
+            model_id: "m".into(),
+            state: AnswerState::Heard,
+            score: Some(0.9),
+            bar: Some(0.5),
+            window_start_secs: start,
+            window_end_secs: end,
+            padded_secs: 0.0,
+        };
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-6;
+        assert!(close(
+            shared_support_secs(&answer(6.0, 9.0), &answer(6.0, 8.0)),
+            2.0
+        ));
+        assert!(
+            close(
+                shared_support_secs(&answer(6.0, 8.0), &answer(6.0, 9.0)),
+                2.0
+            ),
+            "symmetric"
+        );
+        assert!(close(
+            shared_support_secs(&answer(6.0, 7.0), &answer(6.0, 7.0)),
+            1.0
+        ));
+        assert!(close(
+            shared_support_secs(&answer(0.0, 3.0), &answer(4.5, 9.5)),
+            0.0
+        ));
     }
 
     #[test]

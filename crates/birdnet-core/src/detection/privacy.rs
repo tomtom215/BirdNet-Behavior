@@ -46,6 +46,26 @@ pub struct PrivacyFilter {
     reach: ClipReach,
     /// Length of one analysed chunk, in seconds.
     chunk_secs: f32,
+    /// Rules for named classifiers, on their own scales (review F09). A
+    /// classifier not named here is judged by the station's rule.
+    per_classifier: Vec<(String, ClassifierPrivacyRule)>,
+}
+
+/// One classifier's own privacy rule, read on that classifier's own scale
+/// (review F09). Each half left `None` is the station's.
+///
+/// Classifiers do not share a score scale or a class count, so one station
+/// threshold or rank cutoff means a different thing for each: a human class
+/// ranked tenth among Perch's ~15 000 classes is not the claim the same rank
+/// makes among BirdNET's 6 000.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ClassifierPrivacyRule {
+    /// Its score threshold (`0.0` switches its score rule off); `None` is the
+    /// station's.
+    pub threshold: Option<f32>,
+    /// Its rank cutoff (`0` switches its rank rule off); `None` is the
+    /// station's.
+    pub rank_cutoff: Option<usize>,
 }
 
 impl PrivacyFilter {
@@ -63,6 +83,7 @@ impl PrivacyFilter {
                 after: 0.0,
             },
             chunk_secs: 3.0,
+            per_classifier: Vec::new(),
         }
     }
 
@@ -83,6 +104,38 @@ impl PrivacyFilter {
         self
     }
 
+    /// The same filter, with `model_id` judged by its own `rule` rather than
+    /// the station's (review F09). Naming a classifier twice keeps the last
+    /// rule. A rule only binds on a chunk that carries per-classifier evidence
+    /// ([`ChunkPrediction::by_classifier`]); with none set, the filter decides
+    /// every chunk exactly as it did before rules existed.
+    #[must_use]
+    pub fn with_classifier_rule(
+        mut self,
+        model_id: impl Into<String>,
+        rule: ClassifierPrivacyRule,
+    ) -> Self {
+        let model_id = model_id.into();
+        self.per_classifier.retain(|(id, _)| *id != model_id);
+        self.per_classifier.push((model_id, rule));
+        self
+    }
+
+    /// The score threshold and rank cutoff `model_id` is judged by: its own
+    /// rule where one is set, else the station's.
+    #[must_use]
+    pub fn rule_for(&self, model_id: &str) -> (f32, usize) {
+        let own = self
+            .per_classifier
+            .iter()
+            .find(|(id, _)| id == model_id)
+            .map_or_else(ClassifierPrivacyRule::default, |(_, rule)| *rule);
+        (
+            own.threshold.unwrap_or(self.threshold),
+            own.rank_cutoff.unwrap_or(self.rank_cutoff),
+        )
+    }
+
     /// The same filter, for chunks `chunk_secs` long (default 3 s).
     #[must_use]
     pub const fn with_chunk_secs(mut self, chunk_secs: f32) -> Self {
@@ -97,9 +150,15 @@ impl PrivacyFilter {
         self.chunk_secs
     }
 
-    /// Whether the privacy filter is enabled (either rule is on).
+    /// Whether the privacy filter is enabled: either of the station's rules
+    /// is on, or a classifier's own rule turns one on for it.
     pub fn is_enabled(&self) -> bool {
-        self.threshold > 0.0 || self.rank_cutoff > 0
+        let on = |threshold: f32, cutoff: usize| threshold > 0.0 || cutoff > 0;
+        on(self.threshold, self.rank_cutoff)
+            || self
+                .per_classifier
+                .iter()
+                .any(|(id, _)| on(self.rule_for(id).0, self.rule_for(id).1))
     }
 
     /// Get the current score threshold (`0.0` when the score rule is off).
@@ -113,10 +172,33 @@ impl PrivacyFilter {
     }
 
     /// Whether one chunk, on its own evidence, is to be suppressed.
+    ///
+    /// With per-classifier evidence ([`ChunkPrediction::by_classifier`]) each
+    /// classifier is judged by its own rule ([`Self::rule_for`]) on its own
+    /// score and rank, and the chunk is flagged when any of them fires (review
+    /// F09). Without it, the chunk's summaries are judged by the station's
+    /// rule. Both readings give the same verdict when no classifier has a rule
+    /// of its own.
     fn flags(&self, chunk: &ChunkPrediction) -> bool {
-        let by_score = self.threshold > 0.0 && chunk.human_score >= self.threshold;
-        let by_rank = chunk.human_rank.is_some_and(|rank| rank < self.rank_cutoff);
-        by_score || by_rank || chunk.privacy_unassessed
+        let fires = |threshold: f32, cutoff: usize, score: f32, rank: Option<usize>| {
+            let by_score = threshold > 0.0 && score >= threshold;
+            let by_rank = rank.is_some_and(|rank| rank < cutoff);
+            by_score || by_rank
+        };
+        let heard = if chunk.by_classifier.is_empty() {
+            fires(
+                self.threshold,
+                self.rank_cutoff,
+                chunk.human_score,
+                chunk.human_rank,
+            )
+        } else {
+            chunk.by_classifier.iter().any(|e| {
+                let (threshold, cutoff) = self.rule_for(&e.model_id);
+                fires(threshold, cutoff, e.human_score, e.human_rank)
+            })
+        };
+        heard || chunk.privacy_unassessed
     }
 
     /// Which chunks this filter masks: every chunk a human was heard in, and
@@ -334,6 +416,7 @@ mod tests {
             human_rank: None,
             privacy_unassessed: false,
             loudest_noise: None,
+            by_classifier: Vec::new(),
         }
     }
 
@@ -376,6 +459,7 @@ mod tests {
                 human_rank: None,
                 privacy_unassessed: false,
                 loudest_noise: None,
+                by_classifier: Vec::new(),
             })
             .collect();
         (starts, chunks)
@@ -466,6 +550,7 @@ mod tests {
             human_rank: None,
             privacy_unassessed: false,
             loudest_noise: None,
+            by_classifier: Vec::new(),
         }];
         assert!(
             !PrivacyFilter::new(0.05).filter_predictions(&human_in_list)[0].is_empty(),
@@ -633,5 +718,121 @@ mod tests {
             "chunk 2's clip reaches back into chunk 0"
         );
         assert!(!kept[3].is_empty(), "chunk 3's clip does not");
+    }
+
+    /// One classifier's evidence about people in a chunk.
+    fn heard_by(
+        id: &str,
+        score: f32,
+        rank: Option<usize>,
+    ) -> crate::detection::types::ClassifierEvidence {
+        crate::detection::types::ClassifierEvidence {
+            model_id: id.to_owned(),
+            human_score: score,
+            human_rank: rank,
+            loudest_noise: None,
+        }
+    }
+
+    /// A chunk two classifiers answered, with the summaries the daemon writes
+    /// beside the per-classifier evidence: the highest score and best rank.
+    fn heard_by_both(
+        a: crate::detection::types::ClassifierEvidence,
+        b: crate::detection::types::ClassifierEvidence,
+    ) -> ChunkPrediction {
+        ChunkPrediction {
+            human_score: a.human_score.max(b.human_score),
+            human_rank: match (a.human_rank, b.human_rank) {
+                (Some(x), Some(y)) => Some(x.min(y)),
+                (x, y) => x.or(y),
+            },
+            by_classifier: vec![a, b],
+            ..chunk(0.0)
+        }
+    }
+
+    /// Review F09: a classifier is judged against its own rule, on its own
+    /// scale. Perch's 0.30 clears the 0.25 its rule names, though the station's
+    /// 0.80 is far above every score; and a rule naming BirdNET, which heard
+    /// 0.10, does not borrow Perch's 0.30 to fire. The second is what a
+    /// "highest score against the lowest threshold" reading would get wrong.
+    #[test]
+    fn each_classifier_is_judged_by_its_own_privacy_rule() {
+        let chunk = heard_by_both(
+            heard_by("birdnet", 0.10, Some(300)),
+            heard_by("perch", 0.30, Some(40)),
+        );
+        let own = |id: &str, rule| {
+            PrivacyFilter::new(0.80)
+                .with_classifier_rule(id, rule)
+                .masked_windows(std::slice::from_ref(&chunk))[0]
+        };
+        let score = |t| ClassifierPrivacyRule {
+            threshold: Some(t),
+            rank_cutoff: None,
+        };
+        assert!(
+            own("perch", score(0.25)),
+            "perch's own threshold was not applied"
+        );
+        assert!(
+            !own("birdnet", score(0.25)),
+            "birdnet's rule fired on another classifier's score"
+        );
+        // The rank rule likewise: Perch's human class is 40th, inside a cutoff
+        // of 50 named for it; BirdNET's is 300th, outside the same cutoff.
+        let rank = |c| ClassifierPrivacyRule {
+            threshold: None,
+            rank_cutoff: Some(c),
+        };
+        let station = PrivacyFilter::new(0.0).with_rank_cutoff(10);
+        let masks = |f: PrivacyFilter| f.masked_windows(std::slice::from_ref(&chunk))[0];
+        assert!(
+            !masks(station.clone()),
+            "precondition: the station's rule does not fire"
+        );
+        assert!(masks(
+            station.clone().with_classifier_rule("perch", rank(50))
+        ));
+        assert!(!masks(station.with_classifier_rule("birdnet", rank(50))));
+        // A rule can switch a classifier's score rule off.
+        let off = PrivacyFilter::new(0.20).with_classifier_rule("perch", score(0.0));
+        assert!(!off.masked_windows(std::slice::from_ref(&chunk))[0]);
+    }
+
+    /// The default is unchanged: with no classifier rule, judging each
+    /// classifier on the station's rule decides every chunk as the summaries
+    /// (highest score, best rank) did, across every combination tried.
+    #[test]
+    fn with_no_classifier_rule_the_verdict_is_the_summary_s() {
+        let scores = [0.0, 0.05, 0.3, 0.5, 0.9, f32::NAN];
+        let ranks = [None, Some(0), Some(9), Some(10), Some(400)];
+        let mut tried = 0;
+        for threshold in [0.0, 0.03, 0.3, 0.5] {
+            for cutoff in [0, 10, 50] {
+                let filter = PrivacyFilter::new(threshold).with_rank_cutoff(cutoff);
+                for &sa in &scores {
+                    for &sb in &scores {
+                        for &ra in &ranks {
+                            for &rb in &ranks {
+                                let each =
+                                    heard_by_both(heard_by("a", sa, ra), heard_by("b", sb, rb));
+                                let summary = ChunkPrediction {
+                                    by_classifier: Vec::new(),
+                                    ..each.clone()
+                                };
+                                assert_eq!(
+                                    filter.masked_windows(std::slice::from_ref(&each)),
+                                    filter.masked_windows(std::slice::from_ref(&summary)),
+                                    "t={threshold} c={cutoff} a=({sa},{ra:?}) b=({sb},{rb:?})"
+                                );
+                                tried += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(tried, 4 * 3 * 36 * 25);
     }
 }

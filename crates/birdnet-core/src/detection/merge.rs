@@ -16,11 +16,35 @@
 //!
 //! # Agreement is counted, never folded into the confidence
 //!
-//! When two classifiers independently report the same species in the same
-//! chunk, that is much stronger evidence than one being confident — it is the
-//! honest attack on the false-positive problem that `corroboration.rs` can
-//! only approach through repetition. So it is recorded, as a count, on the
-//! detection.
+//! When two classifiers report the same species in the same chunk, that is
+//! recorded, as a count, on the detection.
+//!
+//! # Agreement is association, not independent corroboration (review F09)
+//!
+//! The count says that several classifiers reported the species over
+//! **overlapping windows of the same audio** — each from the chunk's start,
+//! for its own window length ([`crate::detection::answers::shared_support_secs`]
+//! says how much they share). It is an association between their outputs and
+//! not two independent observations: the classifiers heard the same
+//! microphone, the same noise and the same overlapping seconds, and two
+//! models trained on overlapping data (Perch and BirdNET share Xeno-canto)
+//! can share an error as readily as a truth. Whether agreement predicts a
+//! correct identification is an empirical question this station's per-model
+//! answers exist to let someone test; nothing here assumes the answer.
+//!
+//! # No decision reads a blend of classifiers' scores
+//!
+//! No score is averaged, summed or maxed across classifiers to decide
+//! anything: each classifier's detections are judged against its own bar, the
+//! privacy and noise filters judge each classifier's own evidence against its
+//! own rule ([`crate::detection::types::ChunkPrediction::by_classifier`]), and
+//! the per-model answers keep every score on its own scale. One comparison
+//! across scales remains, and is named here so it is not mistaken for none:
+//! among classifiers that each cleared their own bar, the one with the higher
+//! raw confidence is the one whose detection the row carries, and that
+//! confidence then meets the station's per-species bar downstream. Changing
+//! that choice changes which detections a multi-classifier station stores, and
+//! is a maintainer's decision, not a refactor.
 //!
 //! It is **not** used to adjust the confidence, and the temptation to is worth
 //! naming. A combined confidence — an average, a maximum with a bonus, a
@@ -99,7 +123,7 @@ pub fn merge_verdicts(verdicts: &[ModelVerdict]) -> Vec<Detection> {
     for verdict in verdicts {
         // One classifier reporting the same species twice in a chunk — a
         // label file with a duplicate row, say — must not count as agreement
-        // with itself. Agreement means *independent* classifiers.
+        // with itself. Agreement means *distinct* classifiers.
         let mut seen_here: Vec<&str> = Vec::new();
         let mut cleared_here: Vec<&str> = Vec::new();
 
@@ -288,8 +312,9 @@ mod tests {
     }
 
     /// **The point of the whole stage.** Two classifiers reporting the same
-    /// species in the same chunk is independent corroboration, and it is
-    /// counted.
+    /// species in the same chunk is counted, as an association over
+    /// overlapping windows (see the module's documentation), not as
+    /// independent corroboration.
     ///
     /// Observed failing with the `*count` increment removed: agreement stayed
     /// at 1 and the corroboration was indistinguishable from one model
@@ -416,7 +441,7 @@ mod tests {
     ///
     /// Observed failing with the `seen_here` guard removed: a single model
     /// listing the species twice reported an agreement of 2, which would read
-    /// downstream as two independent models concurring.
+    /// downstream as two models concurring.
     #[test]
     fn one_classifier_repeating_itself_is_not_corroboration() {
         let out = merge_verdicts(&[verdict(

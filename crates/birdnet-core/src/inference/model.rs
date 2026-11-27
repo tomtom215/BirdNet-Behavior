@@ -681,6 +681,7 @@ impl BirdNetModel {
             human_rank,
             privacy_unassessed: false,
             loudest_noise,
+            by_classifier: Vec::new(),
         })
     }
 
