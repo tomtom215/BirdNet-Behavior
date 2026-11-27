@@ -92,14 +92,20 @@ pub struct Proportion {
 impl Proportion {
     /// The point estimate, `None` with no trials.
     #[must_use]
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "counts of detections or annotations, far below 2^52"
+    )]
     pub fn estimate(self) -> Option<f64> {
         (self.trials > 0).then(|| self.successes as f64 / self.trials as f64)
     }
 
     /// The Wilson score interval at `z` (1.96 for 95%), `None` with no trials.
     #[must_use]
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "counts of detections or annotations, far below 2^52"
+    )]
     pub fn wilson(self, z: f64) -> Option<(f64, f64)> {
         if self.trials == 0 {
             return None;
@@ -315,7 +321,8 @@ const fn splitmix(state: &mut u64) -> u64 {
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_precision_loss,
-    clippy::cast_sign_loss
+    clippy::cast_sign_loss,
+    reason = "recording and replicate counts, and a quantile index into the replicates: non-negative and far below 2^52"
 )]
 fn bootstrap(recordings: &[Counts], replicates: u32, seed: u64) -> (Interval, Interval) {
     if recordings.is_empty() {

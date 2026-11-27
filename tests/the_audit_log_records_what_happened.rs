@@ -757,6 +757,7 @@ const ACTIONS: &[&str] = &[
     "account.session.revoke_others",
     "account.user.create",
     "account.user.delete",
+    "audio.live_access",
     "audio.source.create",
     "audio.source.delete",
     "audio.source.listen_default",

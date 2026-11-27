@@ -80,7 +80,10 @@ pub fn slot_of(offset_secs: f64, slot_secs: f64) -> Option<i64> {
     }
     let slot = ((offset_secs + BOUNDARY_SLACK_SECS) / slot_secs).floor();
     // A recording would have to be longer than i64::MAX slots to overflow.
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "a window slot of one recording, far inside i64"
+    )]
     Some(slot as i64)
 }
 
@@ -178,7 +181,10 @@ mod tests {
     /// Window starts the pipeline cuts for a recording `len` seconds long:
     /// every `step` from 0 while a full window fits, plus a tail start when at
     /// least `min_tail` of audio remains (the shape of `chunk_starts`).
-    #[allow(clippy::while_float)]
+    #[allow(
+        clippy::while_float,
+        reason = "window starts are a bounded arithmetic series; the loop ends at len"
+    )]
     fn starts(len: f64, window: f64, step: f64, min_tail: f64) -> Vec<f64> {
         let mut out = Vec::new();
         let mut pos = 0.0;
@@ -316,7 +322,7 @@ mod tests {
                 let mut s = seed;
                 for i in (1..n).rev() {
                     s = s.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
-                    #[allow(clippy::cast_possible_truncation)]
+                    #[allow(clippy::cast_possible_truncation, reason = "a 31-bit test shuffle index")]
                     let j = (s >> 33) as usize % (i + 1);
                     shuffled.swap(i, j);
                 }

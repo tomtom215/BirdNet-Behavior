@@ -17,6 +17,10 @@ use birdnet_behavioral::reporting::period_intervals;
 
 /// `YYYY-MM-DD` of `n` days after 1970-01-01 (Howard Hinnant's
 /// `civil_from_days`).
+#[allow(
+    clippy::many_single_char_names,
+    reason = "Hinnant's own names, so the algorithm reads against its source"
+)]
 fn date(n: i64) -> String {
     let z = n + 719_468;
     let era = z.div_euclid(146_097);

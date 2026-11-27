@@ -178,7 +178,10 @@ pub fn record(
             output_bits: out.iter().map(|v| v.to_bits()).collect(),
         });
     }
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a chunk step in samples and a sample rate, exact in f32"
+    )]
     let step_secs = pipeline::chunk_step_samples(config) as f32 / config.target_sample_rate as f32;
     Ok(GoldenRecord {
         header: GoldenHeader {
@@ -305,7 +308,10 @@ mod tests {
                 .iter()
                 .enumerate()
                 .map(|(i, o)| GoldenWindow {
-                    #[allow(clippy::cast_precision_loss)]
+                    #[allow(
+                        clippy::cast_precision_loss,
+                        reason = "a test window index, exact in f32"
+                    )]
                     start_bits: (i as f32 * 3.0).to_bits(),
                     input_sha256: format!("w{i}"),
                     output_bits: o.iter().map(|v| v.to_bits()).collect(),

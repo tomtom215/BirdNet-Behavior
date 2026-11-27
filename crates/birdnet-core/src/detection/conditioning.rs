@@ -121,7 +121,10 @@ impl OnePoleHighPass {
     #[must_use]
     pub fn new(sample_rate: u32, cutoff_hz: f32) -> Self {
         let rc = 1.0 / (2.0 * std::f32::consts::PI * cutoff_hz);
-        #[allow(clippy::cast_precision_loss)]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "an audio sample rate, exact in f32"
+        )]
         let dt = 1.0 / sample_rate as f32;
         Self {
             alpha: rc / (rc + dt),

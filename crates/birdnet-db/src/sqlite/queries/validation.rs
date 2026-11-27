@@ -263,7 +263,10 @@ pub fn draw(protocol: &SampleProtocol, frame: &[FrameRow]) -> Vec<SampleItem> {
         let size = rows.len();
         let n = size.min(protocol.per_stratum as usize);
         rows.sort_by_cached_key(|r| (hash_rank(protocol.seed, "draw", &r.key()), r.key()));
-        #[allow(clippy::cast_precision_loss)]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "sample and stratum sizes, far below 2^52"
+        )]
         let p = n as f64 / size as f64;
         for r in rows.into_iter().take(n) {
             drawn.push((stratum.clone(), size, p, r));

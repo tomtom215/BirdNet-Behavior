@@ -179,7 +179,7 @@ a prefix — `auth.%` for every sign-in, `species.%` for every filter change:
 | `account.` | `user.create`, `user.delete`, `password.set`, `session.revoke`, `session.revoke_others` |
 | `settings.` | `update` |
 | `species.` | `include.add`, `include.remove`, `exclude.add`, `exclude.remove`, `whitelist.add`, `whitelist.remove`, `threshold.set`, `threshold.delete`, `detections.delete`, `clips.delete` |
-| `audio.` | `source.create`, `source.update`, `source.delete`, `source.restart`, `source.listen_default` |
+| `audio.` | `source.create`, `source.update`, `source.delete`, `source.restart`, `source.listen_default`, `live_access` (who can hear the live audio) |
 | `rule.` | `create`, `delete`, `toggle`, `import` |
 | `detection.` | `delete`, `lock`, `unlock`, `review`, `relabel`, `comment.add`, `comment.delete` |
 | `quarantine.` | `approve`, `reject`, `delete` |

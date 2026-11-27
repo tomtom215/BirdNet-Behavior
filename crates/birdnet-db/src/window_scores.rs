@@ -196,7 +196,8 @@ impl WindowScoreStore {
              CREATE INDEX IF NOT EXISTS window_scores_time ON window_scores (start_utc_ms);",
         )?;
         conn.execute(
-            "INSERT OR IGNORE INTO store_meta (key, value) VALUES ('schema', ?1)",
+            "INSERT INTO store_meta (key, value) VALUES ('schema', ?1)
+             ON CONFLICT(key) DO NOTHING",
             [WINDOW_SCORES_SCHEMA],
         )?;
         Ok(Self { conn, config })
@@ -213,10 +214,11 @@ impl WindowScoreStore {
         let blob = pack(w.scores, self.config.floor, &self.config.excluded_labels);
         let n = i64::try_from(blob.len() / PACKED_LABEL_BYTES).unwrap_or(i64::MAX);
         self.conn.execute(
-            "INSERT OR IGNORE INTO window_scores
+            "INSERT INTO window_scores
                  (start_utc_ms, source, model_id, recording, offset_secs, audio_secs, run_id,
                   floor, n, scores)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+             ON CONFLICT(source, model_id, start_utc_ms, recording, offset_secs) DO NOTHING",
             params![
                 w.start_utc_ms,
                 w.source,
@@ -378,7 +380,7 @@ mod tests {
                 .record(&WindowRecord {
                     start_utc_ms: i * 3_000,
                     recording: rec,
-                    #[allow(clippy::cast_precision_loss)]
+                    #[allow(clippy::cast_precision_loss, reason = "i % 20 is exact in f64")]
                     offset_secs: (i % 20) as f64 * 3.0,
                     ..window(0, &scores)
                 })

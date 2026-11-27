@@ -4663,6 +4663,79 @@
         }
       }
     },
+    "/recordings/verify/{detection_uuid}": {
+      "get": {
+        "tags": [
+          "recordings"
+        ],
+        "summary": "Verify a detection's clip",
+        "description": "Whether the clip of the detection `detection_uuid` names is still the clip that was written (RES-23): its SHA-256 and length now, against those recorded when it was written. `recorded` is the checksum and length written with the clip (`null`: unknown). `verification.state` is `verified`, `altered` (with what was `found`), `missing`, `pruned`, `unrecorded` (no checksum was recorded, so it is unknown), `no_clip` or `unreadable`. Has the clips' own access rule.",
+        "operationId": "verifyRecording",
+        "parameters": [
+          {
+            "name": "detection_uuid",
+            "in": "path",
+            "description": "The detection's permanent identifier (`detection_uuid`, `Detection_Id` in the CSV export).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The recorded checksum and the verdict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detection_uuid": {
+                      "type": "string"
+                    },
+                    "file_name": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "recorded": {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    },
+                    "verification": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "verified",
+                            "altered",
+                            "missing",
+                            "pruned",
+                            "unrecorded",
+                            "no_clip",
+                            "unreadable"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No detection has that identifier."
+          },
+          "500": {
+            "description": "The record could not be read."
+          }
+        }
+      }
+    },
     "/spectrogram/{filename}": {
       "get": {
         "tags": [

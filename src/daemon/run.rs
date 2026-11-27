@@ -202,6 +202,7 @@ pub(super) fn register_run_with(
 /// `None` means the run could not be registered; the reason is logged at
 /// error level here, and the caller must not start the processor — a row
 /// without its model's identity is the defect `analysis_runs` exists to end.
+#[cfg(test)]
 pub(super) fn provenance_for(
     state: &AppState,
     manifest: &RunManifest,

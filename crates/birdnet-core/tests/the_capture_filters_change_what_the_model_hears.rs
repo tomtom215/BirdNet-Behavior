@@ -92,7 +92,10 @@ fn the_one_pole_filter_has_the_documented_response() {
         let len = RATE as usize * 2;
         let sine: Vec<f32> = (0..len)
             .map(|i| {
-                #[allow(clippy::cast_precision_loss)]
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "a sample index of a few seconds, exact in f32"
+                )]
                 let t = i as f32 / RATE as f32;
                 (2.0 * std::f32::consts::PI * hz * t).sin()
             })
@@ -124,7 +127,10 @@ fn the_default_filters_change_the_magpie_windows_the_model_is_given() {
     };
 
     // The input before any filter: its offset, which the DC block removes.
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a clip's sample count, exact in f64"
+    )]
     let mean = x.iter().map(|v| f64::from(*v)).sum::<f64>() / x.len() as f64;
     let dc = through_tee(&x, dc_only);
     let tee = per_window(&x, &through_tee(&x, defaults));

@@ -78,7 +78,10 @@ impl SplitMix64 {
     /// A uniform draw from `[0, 1)` with 53 bits.
     pub fn next_f64(&mut self) -> f64 {
         // 53 bits fit an f64's mantissa exactly.
-        #[allow(clippy::cast_precision_loss)]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "53 random bits and 2^53, both exact in f64"
+        )]
         let (x, scale) = ((self.next_u64() >> 11) as f64, (1_u64 << 53) as f64);
         x / scale
     }
@@ -163,7 +166,10 @@ pub fn markov_rho(runs: &[Vec<bool>]) -> Option<f64> {
     if from0 == 0 || from1 == 0 {
         return None;
     }
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "day counts of one series, far below 2^52"
+    )]
     let (a, b) = (up as f64 / from0 as f64, down as f64 / from1 as f64);
     Some(1.0 - a - b)
 }
@@ -178,11 +184,11 @@ pub fn run_design_effect(m: usize, rho: f64) -> f64 {
     let rho = rho.clamp(0.0, MAX_RHO);
     let mut sum = 1.0;
     let mut pow = 1.0;
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_precision_loss, reason = "a day count, far below 2^52")]
     let mf = m as f64;
     for k in 1..m {
         pow *= rho;
-        #[allow(clippy::cast_precision_loss)]
+        #[allow(clippy::cast_precision_loss, reason = "a lag in days, far below 2^52")]
         let lag = k as f64;
         sum += 2.0 * (1.0 - lag / mf) * pow;
     }
@@ -206,13 +212,16 @@ pub fn dependent_share(runs: &[Vec<bool>], rho: Option<f64>) -> Option<Dependent
     }
     let k: usize = runs.iter().flatten().filter(|d| **d).count();
     let rho = rho.unwrap_or(0.0).clamp(0.0, MAX_RHO);
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "run lengths in days, far below 2^52"
+    )]
     let weighted: f64 = runs
         .iter()
         .filter(|r| !r.is_empty())
         .map(|r| r.len() as f64 * run_design_effect(r.len(), rho))
         .sum();
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_precision_loss, reason = "day counts, far below 2^52")]
     let (kf, nf) = (k as f64, n as f64);
     let design_effect = weighted / nf;
     let effective = nf / design_effect;
@@ -361,14 +370,20 @@ pub fn shift_null(a: &[DaySlots], b: &[DaySlots], draws: usize, seed: u64) -> Pa
         }
     }
     let n = null.len();
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a permutation count, far below 2^52"
+    )]
     let expected = if n == 0 {
         f64::from(observed)
     } else {
         null.iter().map(|&x| f64::from(x)).sum::<f64>() / n as f64
     };
     let at_least = null.iter().filter(|&&x| x >= observed).count();
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "permutation counts, far below 2^52"
+    )]
     let (p_value, min_p) = ((1 + at_least) as f64 / (1 + n) as f64, 1.0 / (1 + n) as f64);
     PairNull {
         observed,
@@ -392,7 +407,10 @@ pub fn benjamini_hochberg(p: &[f64]) -> Vec<f64> {
     let mut q = vec![1.0; m];
     let mut running = 1.0_f64;
     for (rank, &i) in order.iter().enumerate().rev() {
-        #[allow(clippy::cast_precision_loss)]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "test counts and ranks, far below 2^52"
+        )]
         let adj = pv(i) * m as f64 / (rank + 1) as f64;
         running = running.min(adj).min(1.0);
         q[i] = running;

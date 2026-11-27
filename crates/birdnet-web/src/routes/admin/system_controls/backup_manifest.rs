@@ -101,7 +101,6 @@ pub struct ManifestCounts {
 ///
 /// A failed read of the snapshot or a failed write: the backup is then
 /// refused, rather than shipped with a manifest that leaves rows out.
-#[allow(clippy::too_many_lines)]
 pub fn write_manifests(
     snapshot: &Path,
     recordings_dir: &Path,

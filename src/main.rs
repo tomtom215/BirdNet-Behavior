@@ -235,7 +235,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    if announces_start(&dispatch_subcommand(&cli)) {
+    if announces_start(dispatch_subcommand(&cli)) {
         tracing::info!(
             version = env!("CARGO_PKG_VERSION"),
             config = %cli.config.display(),
@@ -440,7 +440,7 @@ fn reload_filter_spec(cli: &Cli, startup_rust_log: Option<&str>) -> (String, Vec
 /// Whether this invocation says "starting BirdNet-Behavior" (MDL-28): only
 /// the station itself. The unit's pre-start `--doctor` runs the same binary,
 /// and every start logged the line twice.
-const fn announces_start(action: &Action) -> bool {
+const fn announces_start(action: Action) -> bool {
     matches!(action, Action::RunServer)
 }
 
@@ -469,10 +469,10 @@ mod tests {
     /// before it, and every other one-shot command, does not.
     #[test]
     fn only_the_station_says_it_is_starting() {
-        assert!(super::announces_start(&super::dispatch_subcommand(&cli(
-            &[]
-        ))));
-        assert!(!super::announces_start(&super::dispatch_subcommand(&cli(
+        assert!(super::announces_start(super::dispatch_subcommand(
+            &cli(&[])
+        )));
+        assert!(!super::announces_start(super::dispatch_subcommand(&cli(
             &["--doctor"]
         ))));
     }

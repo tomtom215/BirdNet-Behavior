@@ -60,6 +60,12 @@ const SENTINELS: &[(&str, &str)] = &[
     ("detection_secs", "2.875"),
     ("model_id", "'sentinel-model'"),
     ("model_agreement", "3"),
+    ("detection_uuid", "'5e7a1c3d-2b4f-4a6e-8c9d-0f1e2d3c4b5a'"),
+    (
+        "Clip_Sha256",
+        "'5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e'",
+    ),
+    ("Clip_Bytes", "987654"),
 ];
 
 fn columns(conn: &rusqlite::Connection) -> Vec<String> {

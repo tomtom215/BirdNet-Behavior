@@ -53,7 +53,7 @@ crates/birdnet-db/src/audio_sources.rs	2
 crates/birdnet-db/src/sound_levels.rs	3
 crates/birdnet-db/src/species_tracking.rs	1
 crates/birdnet-db/src/sqlite/queries/charts.rs	2
-crates/birdnet-db/src/sqlite/queries/correlation.rs	2
+crates/birdnet-db/src/sqlite/queries/correlation.rs	1
 crates/birdnet-db/src/sqlite/queries/detections/read.rs	1
 crates/birdnet-db/src/thresholds.rs	1
 crates/birdnet-db/src/weather.rs	2
@@ -108,7 +108,7 @@ crates/birdnet-web/src/routes/api_write.rs	2
 crates/birdnet-web/src/routes/auth_pages.rs	1
 crates/birdnet-web/src/routes/charts.rs	1
 crates/birdnet-web/src/routes/feeds.rs	2
-crates/birdnet-web/src/routes/pages/atoms.rs	4
+crates/birdnet-web/src/routes/pages/atoms.rs	3
 crates/birdnet-web/src/routes/pages/behavioral.rs	1
 crates/birdnet-web/src/routes/pages/behavioral_answers.rs	1
 crates/birdnet-web/src/routes/pages/changelog.rs	2

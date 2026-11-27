@@ -295,7 +295,7 @@ pub fn rates(
             let measured = lower > 0.0;
             let k = u32::try_from(ev).unwrap_or(u32::MAX);
             let (lo, hi) = birdnet_behavioral::phenology::abundance::poisson_interval_exact(k);
-            #[allow(clippy::cast_precision_loss)]
+            #[allow(clippy::cast_precision_loss, reason = "an event count, far below 2^52")]
             let evf = ev as f64;
             let (lh, uh) = (lower / 3600.0, upper / 3600.0);
             out.push(RatePoint {
@@ -398,7 +398,7 @@ pub fn rate_ratio(recent: (u64, f64, f64), earlier: (u64, f64, f64)) -> RateRati
     if l1 <= 0.0 || l2 <= 0.0 {
         return r;
     }
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_precision_loss, reason = "event counts, far below 2^52")]
     let (k1f, k2f) = (k1 as f64, k2 as f64);
     let (m1, m2) = (f64::midpoint(l1, u1), f64::midpoint(l2, u2));
     if k2 > 0 {

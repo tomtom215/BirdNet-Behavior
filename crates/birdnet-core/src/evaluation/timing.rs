@@ -46,7 +46,8 @@ impl TimingSummary {
     #[allow(
         clippy::cast_precision_loss,
         clippy::cast_possible_truncation,
-        clippy::cast_sign_loss
+        clippy::cast_sign_loss,
+        reason = "a sample count, and a quantile rank into it: non-negative and far below 2^52"
     )]
     pub fn from_durations(samples: &[Duration]) -> Option<Self> {
         if samples.is_empty() {

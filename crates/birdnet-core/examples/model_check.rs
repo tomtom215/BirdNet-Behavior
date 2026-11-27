@@ -185,7 +185,10 @@ fn bench(args: &Args) -> Result<ExitCode, String> {
         (0..spec.window_samples)
             .map(|_| {
                 x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
-                #[allow(clippy::cast_precision_loss)]
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "a 16-bit noise sample scaled into a small amplitude"
+                )]
                 let v = f32::from(u16::try_from(x >> 16).unwrap_or(0)) / 65_536.0 - 0.5;
                 v * 0.05
             })

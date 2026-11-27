@@ -323,16 +323,25 @@ fn pair(sb: &SiteBlocks, c: &Candidate<'_>, n: &PairNull, q: f64, verdict: Verdi
         count_blocks(&sb.species[c.a]),
         count_blocks(&sb.species[c.b]),
     );
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "block counts of one range, far below 2^52"
+    )]
     let overlap = c.shared as f64 / (blocks_a + blocks_b - c.shared) as f64;
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "block counts of one range, far below 2^52"
+    )]
     let either_by_chance = (blocks_a + blocks_b) as f64 - n.expected;
     let chance_overlap = if either_by_chance > 0.0 {
         n.expected / either_by_chance
     } else {
         0.0
     };
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "block counts of one range, far below 2^52"
+    )]
     let lift = (n.expected > 0.0).then(|| c.shared as f64 / n.expected);
     SpeciesPair {
         species_a: c.a.to_owned(),
