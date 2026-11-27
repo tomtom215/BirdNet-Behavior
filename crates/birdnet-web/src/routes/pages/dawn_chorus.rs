@@ -958,7 +958,10 @@ fn hour_to_angle(h: f64) -> f64 {
 /// which they all used to be drawn as the empty state's "no chorus yet" except the colours.
 type Answer = (StatusCode, [(header::HeaderName, &'static str); 1], String);
 
-#[allow(clippy::type_complexity)]
+#[allow(
+    clippy::type_complexity,
+    reason = "the blocking read's own result type, spelled out"
+)]
 fn settle<E: std::fmt::Display, J: std::fmt::Display>(
     result: Result<
         (
@@ -1001,7 +1004,10 @@ mod tests {
     /// N25-04: a chorus read that failed is the failed-partial notice, not "no chorus yet";
     /// a read that succeeded and found nothing is the empty state (counterpart).
     #[test]
-    #[allow(clippy::type_complexity)] // the blocking read's own result type, spelled out
+    #[allow(
+        clippy::type_complexity,
+        reason = "the blocking read's own result type, spelled out"
+    )]
     fn a_failed_chorus_read_is_not_no_chorus_yet() {
         let failed: Result<
             (

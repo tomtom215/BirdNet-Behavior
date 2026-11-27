@@ -240,7 +240,10 @@ fn live_sequence_count() {
 /// itself is not an exchange (R at 05:40:00 and 05:40:20), and direction matters (W then R once,
 /// R then W never).
 #[test]
-#[allow(clippy::many_single_char_names)] // r, b, w: the three birds the rows below are about
+#[allow(
+    clippy::many_single_char_names,
+    reason = "r, b, w: the three birds the rows below are about"
+)]
 fn live_answers() {
     let Some((db, _tmp)) = loaded_db() else {
         return;
@@ -1281,7 +1284,10 @@ fn live_sequences_and_sessions_keep_sources_apart_only_when_asked() {
 /// 20 seconds after it, every time, is the one cell marked. And at a shift of zero the shifted
 /// query counts what the grid counts.
 #[test]
-#[allow(clippy::many_single_char_names)] // a, c, d, s, t, x: the fixture's own short names
+#[allow(
+    clippy::many_single_char_names,
+    reason = "a, c, d, s, t, x: the fixture's own short names"
+)]
 fn live_answers_against_chance() {
     let Some((db, _tmp)) = loaded_db() else {
         return;

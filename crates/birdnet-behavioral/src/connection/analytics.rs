@@ -632,7 +632,10 @@ impl AnalyticsDb {
             let frequency: i64 = row.get(1)?;
             // Over every session with a neighbour, not the rows `LIMIT` kept.
             let sessions: f64 = row.get(2)?;
-            #[allow(clippy::cast_precision_loss)]
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "session and frequency counts, far below 2^52"
+            )]
             let probability = if sessions > 0.0 {
                 frequency as f64 / sessions
             } else {
@@ -837,7 +840,10 @@ impl AnalyticsDb {
                 (0..n * (n - 1)).map(|k| row.get::<_, i64>(k)).collect()
             })?;
             for (k, v) in flat.into_iter().enumerate() {
-                #[allow(clippy::cast_precision_loss)]
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "an exchange count, far below 2^52"
+                )]
                 shifted[k].push(v as f64);
             }
         }
@@ -850,7 +856,10 @@ impl AnalyticsDb {
                 if i == j {
                     continue;
                 }
-                #[allow(clippy::cast_precision_loss)]
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "exchange counts, far below 2^52"
+                )]
                 let observed = a
                     .exchanges
                     .get(i)

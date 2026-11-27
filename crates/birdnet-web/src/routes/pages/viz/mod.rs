@@ -47,7 +47,7 @@ pub(crate) use assembly::chorus_figure;
 pub(crate) use cograph::CoGraph;
 #[cfg(feature = "analytics")]
 pub(crate) use funnel::{Morning, Voice, morning_order};
-pub(crate) use matrix::{LINK_CHOICES, co_figure, cooccurrence_matrix};
+pub(crate) use matrix::{LINK_CHOICES, co_figure};
 pub(crate) use timeline::{accumulation_curve, day_strip, streamgraph};
 #[cfg(feature = "analytics")]
 pub(crate) use trend::{TrendOpts, TrendPoint, expected_ranges, trend_chart};

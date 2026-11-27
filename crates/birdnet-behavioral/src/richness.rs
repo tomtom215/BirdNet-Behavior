@@ -43,7 +43,10 @@ fn ln_choose(n: u64, k: u64) -> f64 {
         return f64::NEG_INFINITY;
     }
     let k = k.min(n - k);
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "detection counts of one day, far below 2^52"
+    )]
     (0..k)
         .map(|i| ((n - i) as f64).ln() - ((i + 1) as f64).ln())
         .sum()

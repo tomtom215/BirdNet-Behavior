@@ -1209,9 +1209,9 @@
    "severity": "medium",
    "title": "The most-seen charts have no table alternative",
    "status_before": "open",
-   "status_after": "open",
-   "disposition": "not_addressed_in_this_branch",
-   "evidence_appended": null
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): five most-seen column charts offer their numbers as a table, held by a source scan (`89834c9`); the calendar and accumulation charts have none."
   },
   {
    "id": "UIC-30",
@@ -1249,9 +1249,9 @@
    "severity": "medium",
    "title": "Sparklines are each scaled to their own maximum, so the rail compares shapes that are not comparable",
    "status_before": "open",
-   "status_after": "open",
-   "disposition": "not_addressed_in_this_branch",
-   "evidence_appended": null
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a species row with fewer than 10 detections is drawn as dots, and the rail says what the line's scale is (`fe59a0c`)."
   },
   {
    "id": "CHT-02",
@@ -1309,9 +1309,9 @@
    "severity": "medium",
    "title": "Richness per day is mostly a picture of how much was heard",
    "status_before": "open",
-   "status_after": "open",
-   "disposition": "not_addressed_in_this_branch",
-   "evidence_appended": null
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): richness per day is rarefied to a common detection depth (Hurlbert, exact) (`b250f44`); not divided by listening time."
   },
   {
    "id": "CHT-08",
@@ -1319,9 +1319,9 @@
    "severity": "high",
    "title": "The chord diagram cannot show the absence of association, and has no chance level",
    "status_before": "open",
-   "status_after": "open",
-   "disposition": "not_addressed_in_this_branch",
-   "evidence_appended": null
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): co-occurrence is tested against a permutation null within each clock hour (999 shuffles, seed 20261127, Benjamini-Hochberg at 5 %) and drawn as a ladder coloured only where a pair stands out; a fixture with nothing in it says \"Nothing stands out\" (`9de4839`, `6c91339`, `d748853`). The /api/v2/analytics/cooccurrence null (`e388b82`, day shifts in 28-day strata) is a second definition, not yet reconciled."
   },
   {
    "id": "CHT-09",
@@ -1329,9 +1329,9 @@
    "severity": "medium",
    "title": "Ridgeline: own-max heights hide low-count ridges that are one false positive",
    "status_before": "open",
-   "status_after": "open",
-   "disposition": "not_addressed_in_this_branch",
-   "evidence_appended": null
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a ridge with fewer than 5 detections at its peak is drawn hollow and says its count (`9db3df6`); a true axis with a Poisson band, and hatching an arrival after an outage, are not done."
   },
   {
    "id": "CHT-10",
@@ -1349,9 +1349,9 @@
    "severity": "high",
    "title": "Before/after ranks neighbours by frequency, so the commonest bird follows everything",
    "status_before": "open",
-   "status_after": "open",
-   "disposition": "not_addressed_in_this_branch",
-   "evidence_appended": null
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): before/after ranks neighbours against their share by chance in the same hours, with an exact binomial test (`f6a388d`)."
   },
   {
    "id": "CHT-13",
@@ -1369,9 +1369,9 @@
    "severity": "medium",
    "title": "Who answers whom draws raw exchange counts; two frequent singers \"answer\" by chance",
    "status_before": "open",
-   "status_after": "open",
-   "disposition": "not_addressed_in_this_branch",
-   "evidence_appended": null
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): who-answers-whom is drawn against shifts that wrap within each bird's span of the day (a plain shift gave p=0.0003 for two independent birds) (`f6a388d`)."
   },
   {
    "id": "CHT-15",
@@ -1469,9 +1469,9 @@
    "severity": "medium",
    "title": "The dawn chorus partials turn a failed chorus read into 'no chorus yet'",
    "status_before": "open",
-   "status_after": "open",
-   "disposition": "not_addressed_in_this_branch",
-   "evidence_appended": null
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a failed chorus read is no longer shown as \"no chorus yet\" (`c5d29f8`)."
   },
   {
    "id": "N26-07",
@@ -1576,12 +1576,12 @@
  ],
  "counts": {
   "routed": 138,
-  "touched": 88,
-  "status_changed": 69,
+  "touched": 96,
+  "status_changed": 77,
   "routed_by_status_after": {
-   "done": 37,
-   "in_progress": 61,
-   "open": 40
+   "done": 43,
+   "in_progress": 63,
+   "open": 32
   },
   "findings_by_status": {
    "implemented": 22

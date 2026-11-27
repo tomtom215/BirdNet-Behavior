@@ -308,6 +308,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   certainty (ACC-09).**
 - **Patterns' range is in the address and works without a script (UIC-08); a feed row draws no waveform it did
   not measure (UIR-05).**
+- **The relational charts are drawn against chance (CHT-08, CHT-12, CHT-14).** Co-occurrence is a ladder coloured
+  only where a pair stands out from shuffles within each hour (seed recorded, Benjamini-Hochberg), and says
+  "Nothing stands out" when nothing does; before/after and who-answers-whom rank against what chance gives in
+  the same hours. All three are associations, not behaviour. Kinds of birds per day are compared at a common
+  number of detections (CHT-07); a species heard a handful of times is dots, not a line (CHT-01); a ridge on
+  under five detections is hollow (CHT-09); five charts offer their numbers as a table (UIC-27); a failed dawn
+  chorus read no longer says "no chorus yet" (N25-04).
 - **A recording longer than eleven minutes is not analysed where it is dropped** (review F11). The station reads
   its header, refuses it before decoding, and moves it to `ingest/refused/` beside the database, where the
   stream directory's purge cannot delete it, with a journal line naming the command that takes it. It used to be

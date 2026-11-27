@@ -107,11 +107,58 @@ fn headline(a: &Answers, names: &[String]) -> Option<String> {
     Some(out)
 }
 
+/// The figure's sentence, the drawn grid, what its marks mean, and the table of the same
+/// numbers: [`render`]'s text around `svg`, whose largest mark is `max`.
+fn caption(
+    a: &Answers,
+    chance: Option<&AnswersChance>,
+    shown: &[String],
+    window_days: u32,
+    max: f64,
+    svg: &str,
+) -> String {
+    let names: Vec<String> = shown.to_vec();
+    let lead = chance
+        .map_or_else(|| headline(a, &names), |c| chance_headline(a, c, &names))
+        .unwrap_or_else(|| {
+        format!(
+            "No pair was heard within a minute of each other at least {MIN_EXCHANGES} times in these {window_days} days."
+        )
+    });
+    let mut html = String::with_capacity(svg.len() + 2048);
+    let _ = write!(
+        html,
+        r#"<p class="fig-take">{lead}</p>{svg}<div class="ck-scale ck-scale--discs"><span class="bnb-meta">Read across: the bird on the left was heard first; the disc says how often the bird above was heard within {within} after it.</span></div><p class="bnb-meta">{scale} {days} days with these birds in the last {window_days}. Two birds heard at the same instant are not replies, and neither is a bird repeating itself. {ring}</p>"#,
+        scale = if chance.is_some() {
+            format!("A disc's area is how many times chance; the largest here is {max:.1} times.")
+        } else {
+            format!("The largest disc here is {max:.0} times; a disc's area is the count.")
+        },
+        ring = chance.map_or_else(
+            || format!("A small ring is fewer than {MIN_EXCHANGES} times: too few to read."),
+            |c| format!(
+                "A small ring was heard, but no more often than chance. Chance is the same count with the second bird's times moved by each of {k} shifts of 5 to 30 minutes, either way (seed {seed}), which keeps how much each bird sings and when in the morning, and breaks only the timing a reply is; a cell is marked when it stands above them after allowing for the {t} pairs tested (Benjamini\u{2013}Hochberg, 5%). Exploratory and associational: a reply here is a timing, not a conversation.",
+                k = c.shifts_secs.len(),
+                seed = birdnet_behavioral::null::NULL_SEED,
+                t = c.tests,
+            ),
+        ),
+        lead = escape_html(&lead),
+        within = if a.within_secs == 60 {
+            "a minute".to_string()
+        } else {
+            format!("{} seconds", a.within_secs)
+        },
+        days = a.days_heard,
+    );
+    html.push_str(&table(a, chance, shown));
+    html
+}
+
 /// The card's body: a sentence, the grid, what a disc means, and the table of the same numbers.
 ///
 /// `shown` are the species' names in the station's language, in the order of `a.species`; each
 /// bird's mark is the colour its species owns on the station (`slots`), as on every other chart.
-#[allow(clippy::too_many_lines)] // one grid, its cells' three states and its key, in drawing order
 pub(super) fn render(
     a: &Answers,
     chance: Option<&AnswersChance>,
@@ -309,42 +356,7 @@ pub(super) fn render(
     svg.push_str(&hits);
     svg.push_str("</svg></div>");
 
-    let names: Vec<String> = shown.to_vec();
-    let lead = chance
-        .map_or_else(|| headline(a, &names), |c| chance_headline(a, c, &names))
-        .unwrap_or_else(|| {
-        format!(
-            "No pair was heard within a minute of each other at least {MIN_EXCHANGES} times in these {window_days} days."
-        )
-    });
-    let mut html = String::with_capacity(svg.len() + 2048);
-    let _ = write!(
-        html,
-        r#"<p class="fig-take">{lead}</p>{svg}<div class="ck-scale ck-scale--discs"><span class="bnb-meta">Read across: the bird on the left was heard first; the disc says how often the bird above was heard within {within} after it.</span></div><p class="bnb-meta">{scale} {days} days with these birds in the last {window_days}. Two birds heard at the same instant are not replies, and neither is a bird repeating itself. {ring}</p>"#,
-        scale = if chance.is_some() {
-            format!("A disc's area is how many times chance; the largest here is {max:.1} times.")
-        } else {
-            format!("The largest disc here is {max:.0} times; a disc's area is the count.")
-        },
-        ring = chance.map_or_else(
-            || format!("A small ring is fewer than {MIN_EXCHANGES} times: too few to read."),
-            |c| format!(
-                "A small ring was heard, but no more often than chance. Chance is the same count with the second bird's times moved by each of {k} shifts of 5 to 30 minutes, either way (seed {seed}), which keeps how much each bird sings and when in the morning, and breaks only the timing a reply is; a cell is marked when it stands above them after allowing for the {t} pairs tested (Benjamini\u{2013}Hochberg, 5%). Exploratory and associational: a reply here is a timing, not a conversation.",
-                k = c.shifts_secs.len(),
-                seed = birdnet_behavioral::null::NULL_SEED,
-                t = c.tests,
-            ),
-        ),
-        lead = escape_html(&lead),
-        within = if a.within_secs == 60 {
-            "a minute".to_string()
-        } else {
-            format!("{} seconds", a.within_secs)
-        },
-        days = a.days_heard,
-    );
-    html.push_str(&table(a, chance, shown));
-    html
+    caption(a, chance, shown, window_days, max, &svg)
 }
 
 /// The sentence over the grid when chance is known: the cell furthest above it, or that nothing

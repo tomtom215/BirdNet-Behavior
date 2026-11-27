@@ -31,10 +31,6 @@ const CORR_ERR: &str = r#"<p class="co-err">Co-occurrence data temporarily unava
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/pages/correlation-pairs", get(correlation_pairs_partial))
-        .route(
-            "/pages/cooccurrence-matrix",
-            get(cooccurrence_matrix_partial),
-        )
         .route("/pages/acoustic-network", get(acoustic_network_partial))
         .route("/pages/companion-species", get(companion_partial))
 }
@@ -150,27 +146,6 @@ async fn correlation_pairs_partial(
     let days = query.days.unwrap_or(30).min(365);
     let html = cached_fragment(&state, format!("corr-pairs:{days}"), CORR_ERR, move |s| {
         compute_correlation_pairs(s, days).map(with_as_of)
-    })
-    .await;
-    (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
-}
-
-// ---------------------------------------------------------------------------
-// GET /pages/cooccurrence-matrix — the ladder on its own
-// ---------------------------------------------------------------------------
-
-fn compute_cooccurrence_matrix(state: &AppState, days: u32) -> Option<String> {
-    let (g, _) = co_graph(state, days, "co-occurrence ladder")?;
-    Some(super::viz::cooccurrence_matrix(&g))
-}
-
-async fn cooccurrence_matrix_partial(
-    State(state): State<AppState>,
-    Query(query): Query<CorrelationQuery>,
-) -> impl axum::response::IntoResponse {
-    let days = query.days.unwrap_or(30).min(365);
-    let html = cached_fragment(&state, format!("corr-matrix:{days}"), CORR_ERR, move |s| {
-        compute_cooccurrence_matrix(s, days).map(with_as_of)
     })
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)

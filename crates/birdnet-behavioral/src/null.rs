@@ -74,10 +74,16 @@ impl Rng {
         let threshold = n.wrapping_neg() % n;
         loop {
             let m = u128::from(self.next_u64()) * u128::from(n);
-            #[allow(clippy::cast_possible_truncation)]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "the low 64 bits of a 128-bit product, taken on purpose (Lemire's bounded draw)"
+            )]
             let low = m as u64;
             if low >= threshold {
-                #[allow(clippy::cast_possible_truncation)]
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "the high 64 bits of a 128-bit product, taken on purpose (Lemire's bounded draw)"
+                )]
                 return (m >> 64) as u64;
             }
         }
@@ -167,7 +173,7 @@ impl NullResult {
 #[must_use]
 pub fn stratified_shuffle(strata: &[Stratum], rounds: u32, rng: &mut Rng) -> NullResult {
     let observed: u64 = strata.iter().map(|s| s.shared).sum();
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_precision_loss, reason = "block counts, far below 2^52")]
     let expected: f64 = strata
         .iter()
         .filter(|s| s.listened > 0)
@@ -188,7 +194,7 @@ pub fn stratified_shuffle(strata: &[Stratum], rounds: u32, rng: &mut Rng) -> Nul
             at_or_below += 1;
         }
     }
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_precision_loss, reason = "a block count, far below 2^52")]
     NullResult {
         observed: observed as f64,
         expected,
@@ -251,7 +257,7 @@ pub fn above_shifts(observed: f64, shifted: &[f64]) -> (f64, f64) {
     if shifted.is_empty() {
         return (0.0, 1.0);
     }
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_precision_loss, reason = "a shift count, far below 2^52")]
     let k = shifted.len() as f64;
     let mean = shifted.iter().sum::<f64>() / k;
     let var = if shifted.len() > 1 {
@@ -318,10 +324,16 @@ pub fn neighbour_base(
     for (h, n) in &mine {
         let Some(base) = others.get(h) else { continue };
         let total: u64 = base.values().sum();
-        #[allow(clippy::cast_precision_loss)]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "detection counts, far below 2^52"
+        )]
         let w = *n as f64 / usable as f64;
         for (x, k) in base {
-            #[allow(clippy::cast_precision_loss)]
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "detection counts, far below 2^52"
+            )]
             let share = *k as f64 / total as f64;
             *out.entry((*x).to_owned()).or_insert(0.0) += w * share;
         }
@@ -340,9 +352,9 @@ pub fn binomial_two_sided(k: u64, n: u64, p: f64) -> f64 {
     }
     // Log masses by the recurrence pmf(i + 1) = pmf(i) · (n − i)/(i + 1) · p/(1 − p).
     let (lp, lq) = (p.ln(), (1.0 - p).ln());
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_precision_loss, reason = "a trial count, far below 2^52")]
     let mut log = vec![0.0; usize::try_from(n).unwrap_or(usize::MAX - 1) + 1];
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(clippy::cast_precision_loss, reason = "trial counts, far below 2^52")]
     {
         log[0] = n as f64 * lq;
         for i in 0..n {
@@ -396,7 +408,10 @@ pub fn benjamini_hochberg(p: &[f64], q: f64) -> Vec<bool> {
     let mut order: Vec<usize> = (0..m).filter(|&i| p[i].is_finite()).collect();
     order.sort_by(|&x, &y| p[x].total_cmp(&p[y]).then(x.cmp(&y)));
     let mut cut = 0;
-    #[allow(clippy::cast_precision_loss)]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "a rank and a test count, far below 2^52"
+    )]
     for (rank, &i) in order.iter().enumerate() {
         if p[i] <= (rank + 1) as f64 * q / m as f64 {
             cut = rank + 1;
@@ -451,9 +466,9 @@ mod tests {
         for (n, k, d) in [(100, 10, 30), (100, 30, 10), (50, 50, 7), (40, 0, 9)] {
             let mut r = Rng::new(3);
             let total: u64 = (0..20_000).map(|_| hypergeometric(&mut r, n, k, d)).sum();
-            #[allow(clippy::cast_precision_loss)]
+            #[allow(clippy::cast_precision_loss, reason = "a draw total, far below 2^52")]
             let mean = total as f64 / 20_000.0;
-            #[allow(clippy::cast_precision_loss)]
+            #[allow(clippy::cast_precision_loss, reason = "test sizes, far below 2^52")]
             let want = k as f64 * d as f64 / n as f64;
             assert!(
                 (mean - want).abs() < 0.05 + want * 0.02,

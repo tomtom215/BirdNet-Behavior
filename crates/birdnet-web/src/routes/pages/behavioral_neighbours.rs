@@ -55,7 +55,8 @@ fn sessions_of(probability: f64, frequency: u64) -> u64 {
         #[allow(
             clippy::cast_precision_loss,
             clippy::cast_possible_truncation,
-            clippy::cast_sign_loss
+            clippy::cast_sign_loss,
+            reason = "a count recovered from its frequency and share: non-negative and far below 2^52"
         )]
         let n = (frequency as f64 / probability).round() as u64;
         n.max(frequency)

@@ -565,7 +565,11 @@ pub fn cooccurrence_strata(
         let mut hours: HashSet<(String, u8)> = ledger.keys().cloned().collect();
         hours.extend(heard_slots.keys().cloned());
         for key in hours {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "a listened time in seconds over five-minute blocks, clamped to 0..=12"
+            )]
             let from_ledger = ledger
                 .get(&key)
                 .map_or(0, |s| (s.max(0.0) / 300.0).ceil().min(12.0) as u64);

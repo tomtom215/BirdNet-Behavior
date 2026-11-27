@@ -2,8 +2,6 @@
 # Read by tests/every_clippy_allow_says_why.rs. Each number is the number in the tree and
 # only ever goes down: give an allow a reason, or split a function, and lower its line.
 too_many_lines	26
-crates/birdnet-behavioral/src/connection/analytics.rs	1
-crates/birdnet-behavioral/src/connection/live.rs	1
 crates/birdnet-core/benches/audio_pipeline.rs	3
 crates/birdnet-core/src/audio/biquad.rs	1
 crates/birdnet-core/src/audio/capture/disk/manager.rs	1

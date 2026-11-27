@@ -257,7 +257,10 @@ pub(crate) const SPARSE_BELOW: i64 = 10;
 /// was heard, on its floor, so a handful of detections is a handful of marks and not a shape;
 /// anything more is the [`sparkline`]. The list says what the scale is
 /// ([`SPARK_SCALE_NOTE`]).
-#[allow(clippy::cast_precision_loss)] // a row is a fortnight of days
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "a row is a fortnight of days, exact in f64"
+)]
 pub(crate) fn species_sparkline(
     data: &[i64],
     width: f64,

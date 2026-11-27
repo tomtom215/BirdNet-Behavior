@@ -105,10 +105,7 @@ decoration	crates/birdnet-web/src/routes/pages/cmdk.rs	species_hits	let-ok	let O
 decoration	crates/birdnet-web/src/routes/pages/cmdk.rs	species_hits	unwrap_or_default	tokio::task::spawn_blocking(move || { state2.with_read_db(|conn| { let pattern = birdnet_db::sqlite::like_cont
 setting-default	crates/birdnet-web/src/routes/pages/confidence.rs	station_floor	ok	birdnet_db::settings::get_or(conn, SETTING_KEY, "") .ok()
 setting-default	crates/birdnet-web/src/routes/pages/confidence.rs	station_floor	unwrap_or_else	birdnet_db::settings::get_or(conn, SETTING_KEY, "") .ok() .and_then(|v| parse_floor(&v)) .unwrap_or_else(defau
-handled	crates/birdnet-web/src/routes/pages/correlation.rs	compute_acoustic_network	ok	state .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 120, MIN_SHARED_BLOCKS)) .ok()
 handled	crates/birdnet-web/src/routes/pages/correlation.rs	compute_companion	ok	state .with_read_db(|conn| {
-handled	crates/birdnet-web/src/routes/pages/correlation.rs	compute_cooccurrence_matrix	ok	state .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 120, MIN_SHARED_BLOCKS)) .ok()
-handled	crates/birdnet-web/src/routes/pages/correlation.rs	compute_correlation_pairs	ok	state .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 25, MIN_SHARED_BLOCKS)) .ok()
 decoration	crates/birdnet-web/src/routes/pages/dashboard/partials.rs	species_list_partial	unwrap_or_default	birdnet_db::sqlite::species_sparklines(conn, 7).unwrap_or_default()
 decoration	crates/birdnet-web/src/routes/pages/dashboard/partials.rs	top_species_partial	unwrap_or_default	birdnet_db::sqlite::species_sparklines(conn, 14).unwrap_or_default()
 decoration	crates/birdnet-web/src/routes/pages/dashboard/stats.rs	stats_partial	unwrap_or_default	birdnet_db::sqlite::daily_counts(conn, 12).unwrap_or_default()
@@ -283,3 +280,5 @@ write-outcome	src/integrations/station_health.rs	record_clock	match-err	match st
 handled	crates/birdnet-web/src/routes/admin/validation.rs	add_verdict	match-err	match state .run_blocking(move |s| { s.with_db(|conn| { validation::record_verdict( conn, id, body.position, &
 handled	crates/birdnet-web/src/routes/admin/validation.rs	create_sample	match-err	match state .run_blocking(move |s| s.with_db(|conn| validation::create_sample(conn, &protocol))) .await { Err 
 handled	crates/birdnet-web/src/routes/admin/validation.rs	list_samples	match-err	match state .run_blocking(|s| s.with_read_db(validation::samples)) .await { Err .. }
+handled	crates/birdnet-web/src/routes/pages/correlation.rs	co_graph	ok	state .with_read_db(|conn| cooccurrence_strata(conn, days, MAX_SPECIES)) .ok()
+handled	crates/birdnet-web/src/routes/pages/timeseries_dash.rs	compute_ts_diversity	ok	state .with_read_db(|conn| birdnet_db::sqlite::species_counts_by_day(conn, 60)) .ok()

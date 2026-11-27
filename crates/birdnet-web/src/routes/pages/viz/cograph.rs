@@ -124,7 +124,7 @@ impl CoGraph {
     pub fn lift(&self, i: usize, j: usize) -> Option<f64> {
         let e = *self.expected.get(i)?.get(j)?;
         let o = *self.blocks.get(i)?.get(j)?;
-        #[allow(clippy::cast_precision_loss)]
+        #[allow(clippy::cast_precision_loss, reason = "block counts, far below 2^52")]
         (e > 0.0).then(|| o as f64 / e)
     }
 
