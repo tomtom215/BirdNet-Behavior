@@ -135,6 +135,41 @@ else
     fail "reboot changed the device string: '${before}' -> '${after}'"
 fi
 
+# ── The Docker quick-start (OOB-10) ─────────────────────────────────────────
+# quickstart.sh is downloaded and run on its own, so it cannot source
+# installer/lib. It carries its own copy of the detector between two marker
+# lines; this runs that copy over every fixture and requires the installer's
+# answer. A quick-start that stored the card index came back from a reboot
+# that re-enumerated USB recording nothing.
+run_quickstart_detect() {
+    local fixture="$1"
+    local bindir="${WORK}/qbin.$$"
+    mkdir -p "${bindir}"
+    printf '#!/usr/bin/env bash\ncat %q\n' "${WORK}/fx/${fixture}" > "${bindir}/arecord"
+    chmod +x "${bindir}/arecord"
+    local body
+    body="$(sed -n '/^# >>> qs_detect_alsa_device/,/^# <<< qs_detect_alsa_device/p' "${REPO_ROOT}/quickstart.sh")"
+    if [ -z "${body}" ]; then
+        rm -rf "${bindir}"
+        echo "<no detector in quickstart.sh>"
+        return
+    fi
+    PATH="${bindir}:${PATH}" bash -c "${body}
+        qs_detect_alsa_device" 2>/dev/null
+    rm -rf "${bindir}"
+}
+
+echo "=== quickstart.sh's detector agrees with the installer's ==="
+for fx in pi_before pi_after dup_ids odd_id no_cards dev_nonzero multi_distinct; do
+    want="$(run_detect "${REPO_ROOT}/installer/lib" "${fx}")"
+    got="$(run_quickstart_detect "${fx}")"
+    if [ "${got}" = "${want}" ]; then
+        pass "quickstart ${fx} -> '${got}'"
+    else
+        fail "quickstart ${fx} -> got '${got}', the installer writes '${want}'"
+    fi
+done
+
 # ── Counter-test ────────────────────────────────────────────────────────────
 # A test that only exercises the new code cannot show the bug was real, so the
 # index-based implementation is kept here as a fixture and run over the same

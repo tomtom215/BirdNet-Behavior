@@ -17,7 +17,7 @@
 #      live in a Docker-managed volume, not here.
 #   3. Downloads the canonical compose files from GitHub.
 #   4. Auto-detects your audio source:
-#        • USB/ALSA capture card  → plughw:<card>,<device>
+#        • USB/ALSA capture card  → plughw:CARD=<id>,DEV=<device>
 #        • PulseAudio / PipeWire socket  → default source
 #        • Otherwise prompts you for an RTSP stream URL
 #   5. Asks for your station coordinates (or auto-detects via opt-in IP
@@ -364,15 +364,43 @@ hdr "Audio source"
 AUDIO_KIND=""    # alsa | pulse | rtsp | none
 AUDIO_VALUE=""
 
+# >>> qs_detect_alsa_device (kept equal to installer/lib/70-station.sh's
+# detect_first_audio_device by installer/test/alsa-device-detect.sh)
+#
+# The first ALSA capture device, addressed by the card's id rather than its
+# index: `plughw:CARD=<id>,DEV=<n>`. The index is assigned in detection order
+# and moves when USB re-enumerates, which a reboot may do; on a Raspberry Pi 4
+# the same microphone was card 1 before a cold reboot and card 3 after it, and
+# a station configured by index came back serving a dashboard and recording
+# nothing. The index is used only when the id cannot name one card (two cards
+# share it) or is not safe to write unquoted. Empty when there is no card.
+qs_detect_alsa_device() {
+    local listing first_card first_id first_device id_count=0
+    listing="$(arecord -l 2>/dev/null)"
+    [ -n "${listing}" ] || return 0
+    first_card="$(printf '%s\n' "${listing}" | awk '/^card /{ print $2; exit }' | tr -d ':')"
+    [ -n "${first_card}" ] || return 0
+    first_id="$(printf '%s\n' "${listing}" | awk '/^card /{ print $3; exit }')"
+    first_device="$(printf '%s\n' "${listing}" \
+        | awk '/^card /{ if (match($0, /device [0-9]+/)) print substr($0, RSTART + 7, RLENGTH - 7); exit }')"
+    if [ -n "${first_id}" ]; then
+        id_count="$(printf '%s\n' "${listing}" \
+            | awk -v id="${first_id}" '$1 == "card" && $3 == id { n++ } END { print n+0 }')"
+    fi
+    if [ -n "${first_id}" ] \
+        && printf '%s' "${first_id}" | grep -qE '^[A-Za-z0-9_-]+$' \
+        && [ "${id_count}" = "1" ]; then
+        echo "plughw:CARD=${first_id},DEV=${first_device:-0}"
+    else
+        echo "plughw:${first_card},${first_device:-0}"
+    fi
+}
+# <<< qs_detect_alsa_device
+
 # Try ALSA first (most Raspberry Pi USB mic setups).
 if command -v arecord >/dev/null 2>&1; then
-    first_card=$(arecord -l 2>/dev/null | awk '/^card/{print $2; exit}' | tr -d ':')
-    first_dev=$(arecord -l 2>/dev/null \
-        | awk '/^card/ {
-               for (i=1; i<=NF; i++) if ($i=="device") { v=$(i+1); gsub(":","",v); print v; exit }
-           }')
-    if [ -n "${first_card:-}" ]; then
-        candidate="plughw:${first_card},${first_dev:-0}"
+    candidate="$(qs_detect_alsa_device)"
+    if [ -n "${candidate:-}" ]; then
         say "Found a USB/ALSA capture device:"
         arecord -l 2>/dev/null | grep '^card' | sed 's/^/    /'
         say ""
