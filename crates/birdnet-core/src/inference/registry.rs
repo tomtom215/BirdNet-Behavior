@@ -259,6 +259,9 @@ pub struct ClassifierRegistry {
     /// Every declared id, in declaration order, so [`Self::states`] lists
     /// the classifiers as the configuration does.
     declared: Vec<String>,
+    /// The synonym pairs the merge reads (MMP-09): the bundled table, kept to
+    /// the pairs these classifiers' label sets can meet on.
+    synonyms: super::synonyms::SynonymTable,
 }
 
 impl ClassifierRegistry {
@@ -329,11 +332,19 @@ impl ClassifierRegistry {
         // Perch, the pairing the manual recommends.
 
         let routes = resolve_routes(routes, &models, &left_out)?;
+        let synonyms = if models.len() > 1 {
+            let vocabularies: Vec<&super::labels::LabelSet> =
+                models.iter().map(|m| m.model.labels()).collect();
+            super::synonyms::SynonymTable::bundled().restricted_to(&vocabularies)
+        } else {
+            super::synonyms::SynonymTable::empty()
+        };
         Ok(Self {
             models,
             routes,
             left_out,
             declared: specs.iter().map(|s| s.id.clone()).collect(),
+            synonyms,
         })
     }
 
@@ -361,7 +372,23 @@ impl ClassifierRegistry {
             routes: HashMap::new(),
             left_out: Vec::new(),
             declared: vec![id],
+            synonyms: super::synonyms::SynonymTable::empty(),
         }
+    }
+
+    /// The synonym pairs the merge takes as one species (MMP-09): empty with
+    /// one classifier, else the bundled pairs these label sets can meet on.
+    #[must_use]
+    pub const fn synonyms(&self) -> &super::synonyms::SynonymTable {
+        &self.synonyms
+    }
+
+    /// The same registry merging with `synonyms` instead (for tests, and for
+    /// an operator table once one is wired).
+    #[must_use]
+    pub fn with_synonyms(mut self, synonyms: super::synonyms::SynonymTable) -> Self {
+        self.synonyms = synonyms;
+        self
     }
 
     /// The classifier every station has, and the one any ambiguity falls back

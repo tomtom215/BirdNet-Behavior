@@ -37,8 +37,11 @@
 //! # Species are matched by scientific name as the labels write it
 //!
 //! Classifiers' label sets are operator-supplied and may follow different
-//! taxonomies. A species one model names differently is a different species to
-//! the merge and to this module alike; synonyms are not reconciled here.
+//! taxonomies. The two names of a pair in the registry's synonym table
+//! ([`crate::inference::synonyms`], MMP-09) are one species to the merge, and
+//! the daemon asks a classifier that lacks the detection's name under the
+//! pair's other name before answering "no class". Any other difference of name
+//! is a different species to the merge and to this module alike.
 
 use super::types::{AnswerState, ModelAnswer};
 

@@ -340,11 +340,18 @@ fn infer_chunk(
         return Err(e.into());
     }
 
-    let mut detections = crate::detection::merge::merge_verdicts(&verdicts);
-    // One name per species on the station, the primary's (MMP-10). Only a
-    // station that ran more than one classifier on this chunk can differ.
+    // Two names of one species are one species (MMP-09).
+    let mut detections =
+        crate::detection::merge::merge_verdicts_with(&verdicts, registry.synonyms());
+    // One name per species on the station, the primary's (MMP-10, MMP-09). Only
+    // a station that ran more than one classifier on this chunk can differ.
     if verdicts.len() > 1 {
         let primary = registry.primary().model.labels();
+        crate::detection::merge::name_synonyms_as_primary(
+            &mut detections,
+            registry.synonyms(),
+            |sci| primary.iter().any(|l| l.scientific_name == sci),
+        );
         crate::detection::merge::name_as_primary(&mut detections, |sci| {
             primary
                 .iter()
@@ -402,12 +409,24 @@ fn attach_answers(
     if listening.len() < 2 {
         return;
     }
+    let synonyms = registry.synonyms();
     let lookups: Vec<Option<Lookup<'_>>> = listening
         .iter()
         .map(|&(registered, answered)| {
             answered.then(|| {
-                Box::new(move |name: &str| registered.model.score_of_last_window(name))
-                    as Lookup<'_>
+                // A classifier that names the species by the other name of a
+                // pair is asked under that name (MMP-09), so its answer is
+                // its score and not "no class".
+                Box::new(
+                    move |name: &str| match registered.model.score_of_last_window(name) {
+                        crate::detection::answers::ClassScore::NoClass => synonyms
+                            .other_name(name)
+                            .map_or(crate::detection::answers::ClassScore::NoClass, |other| {
+                                registered.model.score_of_last_window(other)
+                            }),
+                        score => score,
+                    },
+                ) as Lookup<'_>
             })
         })
         .collect();
@@ -1469,6 +1488,84 @@ mod tests {
             let lead = answer_of(d, d.model_id.as_deref().unwrap());
             assert_eq!(lead.score, Some(d.confidence), "{}", d.scientific_name);
         }
+    }
+
+    /// MMP-09, end to end through two ONNX sessions and the registry's own
+    /// table: the primary calls class 0 *Anthus lutescens* and the second
+    /// classifier calls it *Anthus chii*, a pair of the bundled table. Both hear
+    /// it: one detection, agreed by two, under the primary's name, and each
+    /// classifier's answer is its own score rather than "no class".
+    #[test]
+    fn one_bird_two_classifiers_name_differently_is_one_agreed_detection() {
+        use crate::detection::types::AnswerState::Heard;
+        use crate::inference::model::ModelConfig;
+        use crate::inference::registry::ModelSpec;
+        const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
+        const TINY_V30: &[u8] = include_bytes!("../../testdata/tiny_v30_test.onnx");
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = |id: &str, bytes: &[u8], first: &str| {
+            let path = tmp.path().join(format!("{id}.onnx"));
+            std::fs::write(&path, bytes).unwrap();
+            let labels = tmp.path().join(format!("{id}.txt"));
+            let lines: Vec<String> = std::iter::once(first.to_owned())
+                .chain((1..11).map(|i| format!("Species{i} bird_Bird {i}")))
+                .collect();
+            std::fs::write(&labels, lines.join("\n")).unwrap();
+            ModelSpec {
+                id: id.to_owned(),
+                model_path: path,
+                labels_path: labels,
+                threshold: Some(0.5),
+                sample_rate: Some(48_000),
+                output_scale: None,
+            }
+        };
+        let mut registry = ClassifierRegistry::load(
+            &[
+                spec("birdnet", TINY_V24, "Anthus lutescens_Yellowish Pipit"),
+                spec("v3", TINY_V30, "Anthus chii_Pipit"),
+            ],
+            &std::collections::HashMap::new(),
+            &ModelConfig {
+                confidence_threshold: 0.0,
+                ..ModelConfig::default()
+            },
+        )
+        .expect("both load");
+        assert_eq!(
+            registry.synonyms().other_name("Anthus chii"),
+            Some("Anthus lutescens"),
+            "precondition: the loaded label sets keep the bundled pair"
+        );
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk_scoring(&[0.9]), 20).unwrap();
+        let pipits: Vec<_> = out
+            .detections
+            .iter()
+            .filter(|d| d.scientific_name.starts_with("Anthus"))
+            .collect();
+        assert_eq!(pipits.len(), 1, "one bird, one row: {pipits:?}");
+        let pipit = pipits[0];
+        assert_eq!(
+            pipit.scientific_name, "Anthus lutescens",
+            "the primary's name"
+        );
+        assert_eq!(pipit.common_name, "Yellowish Pipit");
+        assert_eq!(pipit.agreeing_models, Some(2));
+        assert_eq!(answer_of(pipit, "birdnet").state, Heard);
+        let v3 = answer_of(pipit, "v3");
+        assert_eq!(v3.state, Heard, "asked under its own name: {v3:?}");
+        assert!((v3.score.unwrap() - 0.9).abs() < 1e-6);
+
+        // The counterpart: with no table the same chunk is two species.
+        let mut apart = registry.with_synonyms(crate::inference::synonyms::SynonymTable::empty());
+        let out = infer_chunk(&mut apart, &[0, 1], &chunk_scoring(&[0.9]), 20).unwrap();
+        let names: Vec<&str> = out
+            .detections
+            .iter()
+            .filter(|d| d.scientific_name.starts_with("Anthus"))
+            .map(|d| d.scientific_name.as_str())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
     }
 
     /// A classifier that has no class for the species is `NoLabel`, with no
