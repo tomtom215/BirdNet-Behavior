@@ -3,6 +3,7 @@
 //! Defines the core detection data structures and the watch -> analyze -> report pipeline.
 
 pub mod answers;
+pub mod conditioning;
 pub mod corroboration;
 pub mod daemon;
 pub mod dynamic_threshold;
