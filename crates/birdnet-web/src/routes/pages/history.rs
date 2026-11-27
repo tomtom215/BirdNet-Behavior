@@ -163,10 +163,16 @@ async fn history_calendar_partial(
     Query(params): Query<CalendarParams>,
 ) -> impl IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
-        state.with_read_db(birdnet_db::sqlite::detections_per_day)
+        state.with_read_db(|conn| {
+            let days = birdnet_db::sqlite::detections_per_day(conn)?;
+            // The ledger only adds a statement ("off"); a failed read of it leaves the
+            // calendar without that statement, never without the calendar.
+            let ledger = super::listening::StationLedger::read(conn).ok();
+            Ok::<_, birdnet_db::sqlite::DbError>((days, ledger))
+        })
     })
     .await;
-    let Ok(Ok(days)) = result else {
+    let Ok(Ok((days, ledger))) = result else {
         // These four partials all answer 200, so the layout's
         // `htmx:responseError` fallback never runs and whatever is written
         // here is the reader's last word. `content()` in this same file
@@ -181,7 +187,45 @@ async fn history_calendar_partial(
         .sel
         .as_deref()
         .filter(|s| crate::routes::is_valid_date(s));
-    axum::response::Html(render_calendar(&days, params.month.as_deref(), sel))
+    let today = today_date_string();
+    axum::response::Html(render_month(
+        &days,
+        params.month.as_deref(),
+        sel,
+        &DayStates {
+            ledger: ledger.as_ref(),
+            today: &today,
+        },
+    ))
+}
+
+/// What the calendar needs, beyond the counts, to tell a day's three empty states apart
+/// (UIR-09; `docs/design/charts.md` honesty rule 3): the effort ledger, for "off", and today,
+/// for "not yet".
+struct DayStates<'a> {
+    /// The station's ledger; `None` when it could not be read or the station has none, and
+    /// then no day is called off.
+    ledger: Option<&'a super::listening::StationLedger>,
+    /// The local date today, `YYYY-MM-DD`.
+    today: &'a str,
+}
+
+/// The calendar as the tests before UIR-09 drew it: no ledger, and no day to come.
+#[cfg(test)]
+fn render_calendar(
+    days: &[birdnet_db::sqlite::DayCount],
+    month_opt: Option<&str>,
+    sel: Option<&str>,
+) -> String {
+    render_month(
+        days,
+        month_opt,
+        sel,
+        &DayStates {
+            ledger: None,
+            today: "9999-12-31",
+        },
+    )
 }
 
 #[allow(
@@ -190,10 +234,11 @@ async fn history_calendar_partial(
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap
 )]
-fn render_calendar(
+fn render_month(
     days: &[birdnet_db::sqlite::DayCount],
     month_opt: Option<&str>,
     sel: Option<&str>,
+    states: &DayStates<'_>,
 ) -> String {
     if days.is_empty() {
         return r#"<p class="hist-empty">No detection history yet.</p>"#.to_string();
@@ -265,9 +310,42 @@ fn render_calendar(
     for _ in 0..lead {
         html.push_str(r#"<div class="rp-day empty"></div>"#);
     }
+    let (mut any_off, mut any_future) = (false, false);
     for day in 1..=days_in_month(year, mon) {
         let date = format!("{year:04}-{mon:02}-{day:02}");
         let (count, species) = map.get(date.as_str()).copied().unwrap_or((0, 0));
+        // UIR-09: three empty cells that are three different facts. A day to come is not a
+        // link (there is nothing to open) and is outlined; a day the ledger says the station
+        // did not listen to is hatched and says "off"; a listened day with nothing heard is
+        // the plain cell. Today is never off: the recorder credits on a timer.
+        let month_sr = format!(r#"<span class="sr-only"> {month_label},</span>"#);
+        if date.as_str() > states.today {
+            any_future = true;
+            let _ = write!(
+                html,
+                r#"<div class="rp-day future"><span class="dn">{day}{month_sr}</span><span class="sr-only"> not yet</span></div>"#,
+            );
+            continue;
+        }
+        let off = count == 0
+            && date.as_str() != states.today
+            && states
+                .ledger
+                .and_then(|l| l.listened(&date))
+                .is_some_and(|listened| !listened);
+        if off {
+            any_off = true;
+            let current = if sel == Some(date.as_str()) {
+                r#" aria-current="date""#
+            } else {
+                ""
+            };
+            let _ = write!(
+                html,
+                r#"<a class="rp-day off" href="/reports/day?date={date}" hx-get="/pages/history-chart?date={date}" hx-target='#rp-daydetail' hx-swap="innerHTML"{current}><span class="dn">{day}{month_sr}</span><span class="doff" aria-hidden="true">off</span><span class="sr-only"> station not listening</span></a>"#,
+            );
+            continue;
+        }
         let heat = heat_bg(count, cmax);
         let sel_cls = if sel == Some(date.as_str()) {
             " sel"
@@ -279,7 +357,6 @@ fn render_calendar(
         // own text, with what the eye takes from the grid ("May", "detections") written for a
         // screen reader only, so the visible label is part of its name (WCAG 2.5.3): an
         // `aria-label` replaced the visible "23 sp" with "23 species" and axe reported every cell.
-        let month_sr = format!(r#"<span class="sr-only"> {month_label},</span>"#);
         let body = if count > 0 {
             format!(
                 r#"<span class="dc"> {count}<span class="sr-only"> detection{s},</span></span><span class="dsp"> {species} sp<span class="sr-only">ecies</span></span>"#,
@@ -310,7 +387,14 @@ fn render_calendar(
             heat_bg((cmax * n / 100).max(1), cmax),
         );
     }
-    html.push_str("more</div>");
+    html.push_str("more");
+    if any_off {
+        html.push_str(r#"<span class="rp-key"><span class="rp-legend-off" aria-hidden="true"></span>station not listening</span>"#);
+    }
+    if any_future {
+        html.push_str(r#"<span class="rp-key"><span class="rp-legend-future" aria-hidden="true"></span>not yet</span>"#);
+    }
+    html.push_str("</div>");
     html
 }
 
@@ -1072,5 +1156,103 @@ mod tests {
         assert!(html.contains("No detections were recorded"));
         assert!(html.contains("Back to history"));
         assert!(!html.contains("tdl-card"));
+    }
+
+    // -----------------------------------------------------------------------
+    // UIR-09: an off day, a quiet day and a day to come are three things
+    // -----------------------------------------------------------------------
+
+    /// The class list of the cell for `date`, which is either a link (`<a class=`) or, for a
+    /// day to come, a plain box (`<div class=`).
+    fn cell_class<'a>(html: &'a str, date: &str) -> &'a str {
+        let day: u32 = date[8..].parse().expect("day");
+        // Every cell's first text is its day number in `<span class="dn">`.
+        let marker = format!(r#"<span class="dn">{day}<"#);
+        let at = html
+            .find(&marker)
+            .unwrap_or_else(|| panic!("no cell {date}"));
+        let open = html[..at]
+            .rfind("class=\"rp-day")
+            .expect("the cell's class");
+        let rest = &html[open + 7..];
+        &rest[..rest.find('"').expect("closing quote")]
+    }
+
+    /// November 2026: detections on the 5th and the 8th; the ledger from the 1st, with no
+    /// audio on the 6th and 7th; today the 10th, so the 11th onward has not happened.
+    fn november(ledger: bool) -> String {
+        let days = vec![
+            birdnet_db::sqlite::DayCount {
+                date: "2026-11-05".into(),
+                count: 30,
+                species: 4,
+            },
+            birdnet_db::sqlite::DayCount {
+                date: "2026-11-08".into(),
+                count: 10,
+                species: 2,
+            },
+        ];
+        let ledger = ledger.then(|| {
+            super::super::listening::StationLedger::from_daily(
+                [1, 2, 3, 4, 5, 8, 9]
+                    .iter()
+                    .map(|d| (format!("2026-11-{d:02}"), 86_400.0))
+                    .collect(),
+            )
+        });
+        render_month(
+            &days,
+            Some("2026-11"),
+            None,
+            &DayStates {
+                ledger: ledger.as_ref(),
+                today: "2026-11-10",
+            },
+        )
+    }
+
+    /// UIR-09. The 6th and 7th (no audio) were blank like the 23rd to the 30th (to come): the
+    /// reader could not tell an outage from the future. An off day is hatched and says "off";
+    /// a day to come is outlined, is not a link, and says "not yet"; a listened day with
+    /// nothing heard is a plain cell that says so.
+    #[test]
+    fn an_off_day_does_not_look_like_a_day_to_come() {
+        let html = november(true);
+        assert_eq!(cell_class(&html, "2026-11-06"), "rp-day off");
+        assert_eq!(cell_class(&html, "2026-11-07"), "rp-day off");
+        assert!(html.contains(r#"<span class="doff" aria-hidden="true">off</span>"#));
+        assert!(html.contains("<span class=\"sr-only\"> station not listening</span>"));
+        assert_eq!(cell_class(&html, "2026-11-04"), "rp-day", "quiet, listened");
+        assert_eq!(
+            cell_class(&html, "2026-11-10"),
+            "rp-day",
+            "today is never off"
+        );
+        for d in 11..=30 {
+            assert_eq!(
+                cell_class(&html, &format!("2026-11-{d:02}")),
+                "rp-day future"
+            );
+        }
+        assert!(
+            !html.contains("href=\"/reports/day?date=2026-11-11\""),
+            "a day to come is not a link"
+        );
+        assert!(html.contains("<span class=\"sr-only\"> not yet</span>"));
+        // And the legend names the two states.
+        assert!(html.contains("station not listening"));
+        assert!(html.contains("rp-legend-off") && html.contains("rp-legend-future"));
+    }
+
+    /// Counterpart: a station with no ledger (imported history) claims no day was off, and
+    /// the future is still the future.
+    #[test]
+    fn without_a_ledger_no_day_is_called_off() {
+        let html = november(false);
+        assert_eq!(cell_class(&html, "2026-11-06"), "rp-day");
+        assert!(!html.contains("rp-day off"));
+        assert!(!html.contains("rp-legend-off"));
+        assert_eq!(cell_class(&html, "2026-11-11"), "rp-day future");
     }
 }

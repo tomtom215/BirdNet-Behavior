@@ -4033,6 +4033,17 @@ a.spp-inherit    { color: inherit; }
 .rp-day.sel { border-color: var(--moss); box-shadow: 0 0 0 var(--bw-strong) var(--moss); }
 .rp-legend { display: flex; align-items: center; gap: 5px; margin-top: var(--space-12); justify-content: flex-end; font-size: var(--fs-xs); color: var(--fg-4); }
 .rp-legend span { width: 13px; height: 13px; border-radius: var(--r-2xs); }
+/* UIR-09: an off day, a quiet day and a day to come are three cells. Off is the kit's
+   "not listening" hatch (`.ck-off`), with the word; a day to come is a dashed outline with
+   nothing in it, and is not a link. */
+.rp-day.off { background: repeating-linear-gradient(45deg, var(--chart-grid-strong) 0 2px, transparent 2px 6px); }
+.rp-day .doff { position: absolute; left: 9px; bottom: 5px; line-height: 1; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--fg-2); }
+.rp-day.future { background: transparent; border-style: dashed; cursor: default; }
+.rp-day.future:hover { border-color: var(--hairline); }
+.rp-day.future .dn { color: var(--fg-3); }
+.rp-legend .rp-key { width: auto; height: auto; display: inline-flex; align-items: center; gap: 5px; margin-left: var(--space-10); }
+.rp-legend .rp-legend-off { background: repeating-linear-gradient(45deg, var(--chart-grid-strong) 0 2px, transparent 2px 5px); border: var(--bw) solid var(--chart-grid-strong); }
+.rp-legend .rp-legend-future { border: var(--bw) dashed var(--fg-4); }
 
 /* ── Analytics shell (/analytics) — legacy --text-muted/--pad-3 preserved. ─ */
 
