@@ -700,7 +700,7 @@ fn decode_file_inner(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use std::path::PathBuf;
 
@@ -923,7 +923,7 @@ mod tests {
     }
 
     /// Samples per MPEG-1 Layer III frame.
-    const MP3_FRAME_SAMPLES: usize = 1152;
+    pub const MP3_FRAME_SAMPLES: usize = 1152;
 
     /// Write `frames` silent MPEG-1 Layer III frames (128 kbit/s, 48 kHz,
     /// mono: 384 bytes each, all-zero side information and main data). When
@@ -931,7 +931,7 @@ mod tests {
     /// 511, which no valid stream carries (the limit is 288): the demuxer
     /// still reads the packet, and the decoder refuses it with a
     /// `DecodeError`, as a damaged frame in an uploaded MP3 would be.
-    fn write_silent_mp3(path: &Path, frames: usize, corrupt: Option<usize>) {
+    pub fn write_silent_mp3(path: &Path, frames: usize, corrupt: Option<usize>) {
         const FRAME_LEN: usize = 384;
         let mut bytes = Vec::with_capacity(frames * FRAME_LEN);
         for i in 0..frames {

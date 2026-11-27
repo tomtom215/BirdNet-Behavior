@@ -153,7 +153,12 @@ pub fn admit_for_live_analysis(path: &Path) -> Result<Admitted, AdmissionError> 
         let bytes_per_frame = audio
             .bits_per_coded_sample
             .or(audio.bits_per_sample)
-            .zip(audio.channels.as_ref().map(|c| c.count()))
+            .zip(
+                audio
+                    .channels
+                    .as_ref()
+                    .map(symphonia::core::audio::Channels::count),
+            )
             .map(|(bits, ch)| u64::from(bits.div_ceil(8)) * ch as u64)
             .filter(|&b| b > 0);
         bytes_per_frame.zip(file_len).map(|(b, len)| len / b)

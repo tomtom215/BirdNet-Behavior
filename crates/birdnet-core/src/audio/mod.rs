@@ -22,3 +22,4 @@ pub mod quality;
 pub mod resample;
 pub mod soundlevel;
 pub mod spectrogram;
+pub mod split;
