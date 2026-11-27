@@ -36,7 +36,7 @@
 use std::f64::consts::{PI, TAU};
 use std::fmt::Write as _;
 
-use super::cograph::{CoGraph, Link, chord_order, share_step};
+use super::cograph::{CoGraph, Link, chord_order, lift_words, share_step};
 pub use super::kit::pct;
 use super::kit::{text_width, tip};
 use super::{EMPTY, svg_a11y};
@@ -264,7 +264,7 @@ pub fn chord_diagram(g: &CoGraph, max_links: usize) -> String {
     svg.push_str(&svg_a11y(
         "Acoustic co-occurrence network",
         &format!(
-            "{} species on a ring joined by the {} strongest links; a wider ribbon, in a stronger colour, joins two species that were heard together in the same five-minute block more of the time. The strongest is {} with {}.",
+            "{} species on a ring joined by {} links, each a pair heard together in the same five-minute block more often than chance gives in the hours each is heard in; a wider ribbon, in a stronger colour, is further above chance. A ring shows only these: a pair heard together less often, or no differently, has no ribbon. The furthest above chance is {} with {}.",
             nodes.len(),
             links.len(),
             g.names[links[0].a],
@@ -279,17 +279,21 @@ pub fn chord_diagram(g: &CoGraph, max_links: usize) -> String {
         let (ea, eb) = ends[li];
         let a_name = &g.names[l.a];
         let b_name = &g.names[l.b];
+        let against = g
+            .lift(l.a, l.b)
+            .map_or_else(|| "not worked out".to_owned(), lift_words);
         let data_tip = tip(
             &format!("{a_name} × {b_name}"),
             &[
                 (
-                    "Of the five-minute blocks either was heard in",
-                    &pct(g.share[l.a][l.b]),
-                    None,
-                ),
-                (
                     "Heard together",
                     &format!("{} blocks", g.blocks[l.a][l.b]),
+                    None,
+                ),
+                ("Against chance", &against, None),
+                (
+                    "Of the five-minute blocks either was heard in",
+                    &pct(g.share[l.a][l.b]),
                     None,
                 ),
             ],
@@ -348,7 +352,12 @@ pub fn chord_diagram(g: &CoGraph, max_links: usize) -> String {
         let rows: Vec<(String, String)> = partners
             .iter()
             .take(4)
-            .map(|&(p, _)| (g.names[p].clone(), pct(g.share[i][p])))
+            .map(|&(p, _)| {
+                (
+                    g.names[p].clone(),
+                    g.lift(i, p).map_or_else(|| pct(g.share[i][p]), lift_words),
+                )
+            })
             .collect();
         let row_refs: Vec<(&str, &str, Option<&str>)> = rows
             .iter()
@@ -357,11 +366,11 @@ pub fn chord_diagram(g: &CoGraph, max_links: usize) -> String {
         let more = partners.len().saturating_sub(4);
         let note = if more > 0 {
             format!(
-                "and {more} more link{} drawn. Share of the blocks either was heard in.",
+                "and {more} more link{} drawn. Each is heard together more often than chance.",
                 if more == 1 { "" } else { "s" }
             )
         } else {
-            "Share of the blocks either was heard in.".to_owned()
+            "Each is heard together more often than chance.".to_owned()
         };
         let data_tip = tip(name, &row_refs, Some(&note));
         // Who this arc belongs to: itself and its partners (reading a species keeps them), and
@@ -439,6 +448,7 @@ mod tests {
                 .collect(),
             strength: s,
             blocks: vec![vec![12; n]; n],
+            ..CoGraph::default()
         }
     }
 
@@ -455,7 +465,9 @@ mod tests {
     }
 
     /// The chord from one fixed input, reduced to its length and hash: taken before `pct` moved
-    /// to the kit (UIC-18).
+    /// to the kit (UIC-18), and taken again when the ring began to read against chance (CHT-08:
+    /// its description and its readings say "times chance"; the geometry is unchanged, since a
+    /// test graph with no chance level draws the same ribbons as before).
     #[test]
     fn the_chord_is_pinned() {
         let mut g = complete(6);
@@ -464,7 +476,7 @@ mod tests {
         let svg = chord_diagram(&g, 12);
         assert_eq!(
             super::super::kit::pin("chord", &svg),
-            (11481, 17_950_049_609_762_854_192),
+            (12175, 2_660_783_296_086_858_195),
             "the chord changed"
         );
     }

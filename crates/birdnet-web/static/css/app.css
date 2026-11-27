@@ -4760,6 +4760,11 @@ svg[data-ck="marks"] { cursor: default; }
 .ck-m3 { --c: var(--seq-moss-3); } .ck-m4 { --c: var(--seq-moss-4); }
 .ck-m5 { --c: var(--seq-moss-5); } .ck-m6 { --c: var(--seq-moss-6); }
 .ck-m7 { --c: var(--seq-moss-7); }
+/* The diverging ramp, for a measure with a meaningful middle (how many times chance, CHT-08):
+   dn = less than the middle, dp = more, 1 nearest it. The middle itself is the empty track. */
+.ck-dn1 { --c: var(--div-neg-1); } .ck-dn2 { --c: var(--div-neg-2); } .ck-dn3 { --c: var(--div-neg-3); }
+.ck-dp1 { --c: var(--div-pos-1); } .ck-dp2 { --c: var(--div-pos-2); } .ck-dp3 { --c: var(--div-pos-3); }
+.ck-track-sw { background: var(--chart-track); }
 .ck-sw { background: var(--c); }
 .ck-fill { fill: var(--c); }
 /* A mark that fills from a gradient: full colour at its data end, a little toward
@@ -6161,22 +6166,26 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
    the kit's classes (.ck-q1..7, .ck-c1..8, .ck-scale, …) carry the colour of a mark.
    Written in routes/pages/viz/{radial,matrix,ridge,…}.rs. */
 
-/* Who sings with whom: a ring on a wide screen, a ladder on a narrow one. The ring's
-   names need about 760 units of width; below 1000 px they would be drawn under the
-   legibility floor, and a ladder is as readable at 340 px as at 900. */
+/* Who sings with whom: the ladder is the figure at every width (it can say "less often than
+   chance" and "within chance", which a ring cannot, CHT-08). The ring is folded under it and
+   shown only from 1000 px: its names need about 760 units of width, and below that they would
+   be drawn under the legibility floor. */
 .co-fig { display: flex; flex-direction: column; gap: var(--space-12); width: 100%; }
+/* The figure's card lays its contents out in a row (a centred picture); this figure is a column
+   of its own with the as-of line under it, so the row would squeeze it beside that line. */
+#acoustic-network { display: block; }
 .co-controls { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-10); flex-wrap: wrap; }
 .co-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-24); align-items: start; }
-.co-chord { display: none; min-width: 0; }
+.co-chord { min-width: 0; }
+.co-ring { display: none; }
+.co-none { margin: 0; }
 .co-chord .viz-svg-chord { max-width: 800px; }
 .co-ladder { min-width: 0; }
 .viz-svg-ladder { display: block; width: 100%; max-width: 480px; height: auto; margin-inline: auto; }
 .co-aside-h { margin: 0 0 var(--space-10); font-family: var(--font-display); font-size: var(--fs-lead); font-weight: var(--fw-regular); letter-spacing: var(--track-tight); }
-@media (max-width: 999px) { .co-controls { display: none; } }
 @media (min-width: 1000px) {
   .co-main { grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); }
-  .co-chord { display: block; }
-  .co-ladder { display: none; }
+  .co-ring { display: block; }
 }
 .co-rank { list-style: none; margin: 0 0 var(--space-12); padding: 0; display: grid; gap: var(--space-10); }
 .co-rank-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "n v" "b b"; gap: var(--space-4) var(--space-8); font-size: var(--fs-md); }
@@ -6644,7 +6653,10 @@ input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
 :root[data-illustration="plate"] .ck-q7, :root[data-illustration="plate"] .ck-m1,
 :root[data-illustration="plate"] .ck-m2, :root[data-illustration="plate"] .ck-m3,
 :root[data-illustration="plate"] .ck-m4, :root[data-illustration="plate"] .ck-m5,
-:root[data-illustration="plate"] .ck-m6, :root[data-illustration="plate"] .ck-m7 { --hatch: initial; }
+:root[data-illustration="plate"] .ck-m6, :root[data-illustration="plate"] .ck-m7,
+:root[data-illustration="plate"] .ck-dn1, :root[data-illustration="plate"] .ck-dn2,
+:root[data-illustration="plate"] .ck-dn3, :root[data-illustration="plate"] .ck-dp1,
+:root[data-illustration="plate"] .ck-dp2, :root[data-illustration="plate"] .ck-dp3 { --hatch: initial; }
 :root[data-illustration="plate"] .ck-fill,
 :root[data-illustration="plate"] .bt-bar,
 :root[data-illustration="plate"] .chord-arc,

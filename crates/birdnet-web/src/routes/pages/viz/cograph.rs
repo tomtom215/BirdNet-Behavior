@@ -30,15 +30,27 @@ pub struct CoGraph {
     /// The station's species colours: a species is drawn in the colour it owns on the station,
     /// on every one of these pictures and on every other chart, however they order it.
     pub slots: super::kit::SpeciesSlots,
-    /// `strength[i][j]` in `0..=1`: the pair's share, relative to the strongest pair
-    /// among these species. Symmetric, zero on the diagonal.
+    /// `strength[i][j]` in `0..=1`: what the ring draws. For a pair heard together more often
+    /// than chance, the log of its lift relative to the strongest such pair; zero for every
+    /// other pair, so the ring shows only positives and says so. Symmetric, zero on the diagonal.
     pub strength: Vec<Vec<f64>>,
     /// `share[i][j]` in `0..=1`: the pair's share as measured, the fraction of the
     /// five-minute blocks either was heard in that held both (Jaccard).
     pub share: Vec<Vec<f64>>,
     /// `blocks[i][j]`: five-minute blocks the two were heard in together.
     pub blocks: Vec<Vec<i64>>,
+    /// `expected[i][j]`: the blocks chance gives the pair, within each hour of the day (the
+    /// mean of the permutation null, `birdnet_behavioral::null`). Empty when no chance level
+    /// was worked out, and then nothing is said about chance.
+    pub expected: Vec<Vec<f64>>,
+    /// `verdict[i][j]`: whether the pair stands out from chance, and on which side, once the
+    /// pairs tested with it are allowed for (CHT-08).
+    pub verdict: Vec<Vec<Verdict>>,
+    /// How chance was worked out, in the words printed under the figure.
+    pub method: String,
 }
+
+pub use birdnet_behavioral::null::Verdict;
 
 /// The step of the sequential ramp, 1 to 7, for a strength `v` in `0..=1`: seven even steps.
 ///
@@ -49,6 +61,31 @@ pub struct CoGraph {
 #[must_use]
 pub fn share_step(v: f64) -> usize {
     ((v.clamp(0.0, 1.0) * 7.0).ceil() as usize).clamp(1, 7)
+}
+
+/// How a lift is said: "2.4 times chance".
+#[must_use]
+pub fn lift_words(lift: f64) -> String {
+    if lift >= 10.0 {
+        format!("{lift:.0} times chance")
+    } else {
+        format!("{lift:.1} times chance")
+    }
+}
+
+/// The step of the diverging ramp, 1 to 3, for a lift away from 1: under 1.5 times (or over
+/// two-thirds) is 1, under 3 times (or over a third) is 2, beyond is 3. Symmetric on a log
+/// scale, so "half as often" and "twice as often" are the same step.
+#[must_use]
+pub fn lift_step(lift: f64) -> usize {
+    let d = lift.max(f64::MIN_POSITIVE).ln().abs();
+    if d < 1.5_f64.ln() {
+        1
+    } else if d < 3.0_f64.ln() {
+        2
+    } else {
+        3
+    }
 }
 
 /// One link between two species, `a < b`.
@@ -68,6 +105,52 @@ impl CoGraph {
     pub fn class(&self, i: usize) -> String {
         self.slots
             .class(self.names.get(i).map_or("", String::as_str))
+    }
+
+    /// Whether the pair `i`, `j` stands out from chance (and how); [`Verdict::Chance`] when no
+    /// chance level is known.
+    #[must_use]
+    pub fn verdict(&self, i: usize, j: usize) -> Verdict {
+        self.verdict
+            .get(i)
+            .and_then(|r| r.get(j))
+            .copied()
+            .unwrap_or(Verdict::Chance)
+    }
+
+    /// Blocks the pair `i`, `j` shared, over the blocks chance gives it: `None` when chance
+    /// gives none or was not worked out.
+    #[must_use]
+    pub fn lift(&self, i: usize, j: usize) -> Option<f64> {
+        let e = *self.expected.get(i)?.get(j)?;
+        let o = *self.blocks.get(i)?.get(j)?;
+        #[allow(clippy::cast_precision_loss)]
+        (e > 0.0).then(|| o as f64 / e)
+    }
+
+    /// The pairs tested at once: every pair of the species drawn.
+    #[must_use]
+    pub const fn tested(&self) -> usize {
+        let n = self.names.len();
+        n * n.saturating_sub(1) / 2
+    }
+
+    /// The pairs marked on each side of chance: `(more, less)`.
+    #[must_use]
+    pub fn standing_out(&self) -> (usize, usize) {
+        let n = self.n();
+        let mut more = 0;
+        let mut less = 0;
+        for i in 0..n {
+            for j in i + 1..n {
+                match self.verdict(i, j) {
+                    Verdict::More => more += 1,
+                    Verdict::Less => less += 1,
+                    Verdict::Chance => {}
+                }
+            }
+        }
+        (more, less)
     }
 
     /// How many species.
@@ -313,6 +396,7 @@ mod tests {
             share: s.clone(),
             strength: s,
             blocks: vec![vec![0; n]; n],
+            ..CoGraph::default()
         }
     }
 

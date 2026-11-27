@@ -17,16 +17,12 @@ use axum::http::{StatusCode, header};
 use axum::routing::get;
 use serde::Deserialize;
 
-use birdnet_db::sqlite::{companion_species, top_cooccurrence_pairs};
+use birdnet_db::sqlite::{ListenedFrom, companion_species, cooccurrence_strata};
 
 use super::escape_html;
 use super::simple_url_encode;
 use crate::analytics_cache::cached_fragment;
 use crate::state::AppState;
-
-/// A pair needs this many shared five-minute blocks to be drawn. Below it, two
-/// birds heard once, together, would read as perfectly associated.
-const MIN_SHARED_BLOCKS: u32 = 3;
 
 /// Fallback served (uncached) when a co-occurrence query errors.
 const CORR_ERR: &str = r#"<p class="co-err">Co-occurrence data temporarily unavailable.</p>"#;
@@ -70,8 +66,8 @@ pub(super) fn content() -> String {
         eyebrow: "Patterns",
         help: &super::help::help_link(super::help::Topic::Analytics),
         title: "Who sings with <em>whom</em>",
-        lead: "Species joined by a ribbon are often heard in the same five-minute block.",
-        lede: "A wider ribbon, in a stronger colour, means the two birds share more of their time. Point at a name to see only its ribbons. It's correlation, not cause: they may just share the same good morning.",
+        lead: "Which birds are heard in the same five-minute block more often, or less often, than chance.",
+        lede: "Chance is worked out within each hour of the day, so two birds that both sing at dawn are not counted as together for that alone. A coloured cell stands out from chance; an empty one does not. It is an association, not a cause, and exploratory: they may share a habitat, a weather or a disturbance.",
         aside: ranges,
     });
     CORRELATION_CONTENT.replace("{{page_head}}", &head)
@@ -81,18 +77,12 @@ static CORRELATION_CONTENT: crate::seal::Sealed = crate::seal::Sealed::new(
     r##"{{page_head}}
 
 <div class="bnb-card pad fig">
-  <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>The acoustic network</div><h2 class="sh-h">Who connects to whom</h2></div><span class="bnb-pill">same 5-min block</span></div>
+  <div class="section-header"><div><div class="bnb-eyebrow"><span class="fig-no" aria-hidden="true"></span>The acoustic network</div><h2 class="sh-h">Who connects to whom</h2></div><span class="bnb-pill">against chance</span></div>
   <div class="pt-viz" id="acoustic-network" hx-get="/pages/acoustic-network?days=30" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">Loading…</p>
   </div>
-  <details class="pt-disc co-disc-matrix">
-    <summary>See the numbers — the co-occurrence matrix</summary>
-    <div id="cooccurrence-matrix" hx-get="/pages/cooccurrence-matrix" hx-include="#days-hidden" hx-trigger="toggle from:closest details once, intersect once" hx-swap="innerHTML">
-      <span class="htmx-indicator bnb-meta">Loading…</span>
-    </div>
-  </details>
   <details class="pt-disc">
-    <summary>See the numbers — strongest co-occurring pairs</summary>
+    <summary>See the numbers: every pair against chance</summary>
     <div id="correlation-pairs" hx-get="/pages/correlation-pairs" hx-include="#days-hidden" hx-trigger="toggle from:closest details once, intersect once" hx-swap="innerHTML">
       <span class="htmx-indicator bnb-meta">Loading…</span>
     </div>
@@ -130,7 +120,6 @@ function loadDays(days, btn) {
   btn.classList.add('active');
   btn.setAttribute('aria-pressed', 'true');
   document.getElementById('days-hidden').value = days;
-  htmx.ajax('GET', '/pages/cooccurrence-matrix?days=' + days, '#cooccurrence-matrix');
   htmx.ajax('GET', '/pages/acoustic-network?days=' + days, '#acoustic-network');
   htmx.ajax('GET', '/pages/correlation-pairs?days=' + days, '#correlation-pairs');
   const species = document.getElementById('species-input').value.trim();
@@ -146,14 +135,12 @@ document.getElementById('range-controls').addEventListener('click', function(e) 
 );
 
 // ---------------------------------------------------------------------------
-// GET /pages/correlation-pairs — top co-occurring pairs partial
+// GET /pages/correlation-pairs — every pair against chance, as a table
 // ---------------------------------------------------------------------------
 
 fn compute_correlation_pairs(state: &AppState, days: u32) -> Option<String> {
-    let pairs = state
-        .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 25, MIN_SHARED_BLOCKS))
-        .ok()?;
-    Some(render_pairs_table(&pairs, days, state.names()))
+    let (g, stored) = co_graph(state, days, "co-occurrence table")?;
+    Some(render_pairs_table(&g, &stored, 25))
 }
 
 async fn correlation_pairs_partial(
@@ -169,20 +156,12 @@ async fn correlation_pairs_partial(
 }
 
 // ---------------------------------------------------------------------------
-// GET /pages/cooccurrence-matrix — N×N intensity grid
+// GET /pages/cooccurrence-matrix — the ladder on its own
 // ---------------------------------------------------------------------------
 
 fn compute_cooccurrence_matrix(state: &AppState, days: u32) -> Option<String> {
-    let pairs = state
-        .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 120, MIN_SHARED_BLOCKS))
-        .ok()?;
-    let slots = super::viz::kit::station_slots_for(state, "co-occurrence ladder")?;
-    Some(super::viz::cooccurrence_matrix(&build_graph(
-        &pairs,
-        MAX_SPECIES,
-        state.names(),
-        slots,
-    )))
+    let (g, _) = co_graph(state, days, "co-occurrence ladder")?;
+    Some(super::viz::cooccurrence_matrix(&g))
 }
 
 async fn cooccurrence_matrix_partial(
@@ -198,23 +177,15 @@ async fn cooccurrence_matrix_partial(
 }
 
 // ---------------------------------------------------------------------------
-// GET /pages/acoustic-network — chord diagram of the co-occurrence graph
+// GET /pages/acoustic-network — the figure: the ladder, the key and the folded ring
 // ---------------------------------------------------------------------------
 
 fn compute_acoustic_network(state: &AppState, days: u32, links: usize) -> Option<String> {
-    let pairs = state
-        .with_read_db(|conn| top_cooccurrence_pairs(conn, days, 120, MIN_SHARED_BLOCKS))
-        .ok()?;
-    if pairs.is_empty() {
+    let (g, _) = co_graph(state, days, "co-occurrence chord")?;
+    if g.n() < 2 {
         return Some(super::empty_states::no_co_signal());
     }
-    let slots = super::viz::kit::station_slots_for(state, "co-occurrence chord")?;
-    let graph = build_graph(&pairs, MAX_SPECIES, state.names(), slots);
-    Some(super::viz::co_figure(
-        &graph,
-        links,
-        "/pages/acoustic-network",
-    ))
+    Some(super::viz::co_figure(&g, links, "/pages/acoustic-network"))
 }
 
 async fn acoustic_network_partial(
@@ -233,55 +204,121 @@ async fn acoustic_network_partial(
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
-/// Reduce co-occurrence pairs to the graph over the `max_species` most connected species.
+// ---------------------------------------------------------------------------
+// The graph, with its chance level (CHT-08)
+// ---------------------------------------------------------------------------
+
+/// The co-occurrence graph of the window: counts by hour from the database, the chance level
+/// from the permutation null. `None` when the read fails (never an empty graph in its place).
+fn co_graph(state: &AppState, days: u32, what: &str) -> Option<(super::viz::CoGraph, Vec<String>)> {
+    let strata = state
+        .with_read_db(|conn| cooccurrence_strata(conn, days, MAX_SPECIES))
+        .ok()?;
+    let slots = super::viz::kit::station_slots_for(state, what)?;
+    let g = build_graph(&strata, state.names(), slots);
+    Some((g, strata.names))
+}
+
+/// What the method line says about where the listened blocks came from.
+const fn listened_words(from: Option<ListenedFrom>) -> &'static str {
+    match from {
+        Some(ListenedFrom::Ledger) => {
+            " The blocks the station listened to are read from its hourly listening ledger."
+        }
+        Some(ListenedFrom::DetectionHours) => {
+            " This station has no hourly listening ledger for the period, so every hour with a detection is taken as listened in full, and a quiet hour it did listen to is not counted."
+        }
+        None => "",
+    }
+}
+
+/// Test every pair of the species in `strata` against chance and build the graph the pictures
+/// draw.
 ///
-/// Species are ranked by the sum of the overlap they take part in, busiest first; each is
-/// drawn in the colour it owns on the station (`slots`), the same in every picture. Strength is the pair's overlap scaled to the
-/// strongest pair among those species, so the pictures read as a relative picture; the
-/// overlap as measured and the blocks behind it travel along, because a reading must say
-/// "38 % of the blocks either was heard in", not "0.71 of the strongest".
+/// A pair's test shuffles one bird's blocks among the blocks the station listened to in the
+/// same clock hour (`birdnet_behavioral::null::stratified_shuffle`), so each bird keeps its
+/// amount of time and its daily rhythm, and two dawn singers are not "together" for both
+/// singing at dawn. Every pair is tested, with no floor on shared blocks: a pair that never
+/// shares a block is a result too (it may be "less often than chance"). The pairs are tested
+/// at once and marked by Benjamini–Hochberg at `FDR_Q`. Each species keeps the colour it owns
+/// on the station (`slots`).
+#[allow(clippy::many_single_char_names)] // i, j, n, p, r: a pair, the species, the p-values
 fn build_graph(
-    pairs: &[birdnet_db::sqlite::SpeciesPair],
-    max_species: usize,
+    strata: &birdnet_db::sqlite::CoStrata,
     names: &birdnet_core::i18n::NameLocalizer,
     slots: super::viz::kit::SpeciesSlots,
 ) -> super::viz::CoGraph {
-    use std::collections::HashMap;
+    use birdnet_behavioral::null::{
+        self, FDR_Q, NULL_ROUNDS, Rng, Stratum, Verdict, benjamini_hochberg, stratified_shuffle,
+    };
 
-    // Summed overlap each species participates in → connectedness ranking.
-    let mut weight: HashMap<&str, f64> = HashMap::new();
-    for p in pairs {
-        *weight.entry(p.species_a.as_str()).or_insert(0.0) += p.overlap;
-        *weight.entry(p.species_b.as_str()).or_insert(0.0) += p.overlap;
+    let n = strata.names.len();
+    let mut tests = Vec::new();
+    for i in 0..n {
+        for j in i + 1..n {
+            let st: Vec<Stratum> = (0..strata.listened.len())
+                .map(|h| Stratum {
+                    listened: strata.listened[h],
+                    a: strata.blocks[i][h],
+                    b: strata.blocks[j][h],
+                    shared: strata.shared[i][j][h],
+                })
+                .collect();
+            // The stream is named by the pair, in name order, so a pair's draws do not depend
+            // on where it stands in the list.
+            let (x, y) = if strata.names[i] <= strata.names[j] {
+                (i, j)
+            } else {
+                (j, i)
+            };
+            let mut rng = Rng::for_key(&format!("co|{}|{}", strata.names[x], strata.names[y]));
+            tests.push((i, j, stratified_shuffle(&st, NULL_ROUNDS, &mut rng)));
+        }
     }
-    let mut ranked: Vec<(&str, f64)> = weight.into_iter().collect();
-    ranked.sort_by(|a, b| b.1.total_cmp(&a.1).then(a.0.cmp(b.0)));
-    let labels: Vec<&str> = ranked.iter().take(max_species).map(|(n, _)| *n).collect();
+    let p: Vec<f64> = tests.iter().map(|t| t.2.p_two_sided()).collect();
+    let marked = benjamini_hochberg(&p, FDR_Q);
 
-    let idx: HashMap<&str, usize> = labels.iter().enumerate().map(|(i, n)| (*n, i)).collect();
-    let n = labels.len();
     let mut strength = vec![vec![0.0_f64; n]; n];
     let mut share = vec![vec![0.0_f64; n]; n];
     let mut blocks = vec![vec![0_i64; n]; n];
-    let mut max_overlap = f64::MIN_POSITIVE;
-    for p in pairs {
-        if let (Some(&i), Some(&j)) = (idx.get(p.species_a.as_str()), idx.get(p.species_b.as_str()))
-            && i != j
+    let mut expected = vec![vec![0.0_f64; n]; n];
+    let mut verdict = vec![vec![Verdict::Chance; n]; n];
+    let mut top = f64::MIN_POSITIVE;
+    for ((i, j, r), &stands_out) in tests.iter().zip(&marked) {
+        let (i, j) = (*i, *j);
+        let v = Verdict::from_null(r, stands_out);
+        let shared = strata.total_shared(i, j);
+        let either = strata.total(i) + strata.total(j) - shared;
+        #[allow(clippy::cast_precision_loss)]
+        let jaccard = if either > 0 {
+            shared as f64 / either as f64
+        } else {
+            0.0
+        };
+        let shared = i64::try_from(shared).unwrap_or(i64::MAX);
+        for (a, b) in [(i, j), (j, i)] {
+            share[a][b] = jaccard;
+            blocks[a][b] = shared;
+            expected[a][b] = r.expected;
+            verdict[a][b] = v;
+        }
+        if v == Verdict::More
+            && let Some(l) = r.lift()
         {
-            share[i][j] = p.overlap;
-            share[j][i] = p.overlap;
-            blocks[i][j] = p.shared_blocks;
-            blocks[j][i] = p.shared_blocks;
-            max_overlap = max_overlap.max(p.overlap);
+            strength[i][j] = l.ln();
+            strength[j][i] = l.ln();
+            top = top.max(l.ln());
         }
     }
-    for (row, out) in share.iter().zip(strength.iter_mut()) {
-        for (v, cell) in row.iter().zip(out.iter_mut()) {
-            *cell = v / max_overlap;
+    for row in &mut strength {
+        for cell in row.iter_mut() {
+            *cell /= top;
         }
     }
+    let tested = tests.len();
     super::viz::CoGraph {
-        names: labels
+        names: strata
+            .names
             .iter()
             .map(|l| names.name_of_stored(l).to_owned())
             .collect(),
@@ -289,22 +326,45 @@ fn build_graph(
         strength,
         share,
         blocks,
+        expected,
+        verdict,
+        method: format!(
+            "{}{}",
+            null::method_words(
+                "one bird's five-minute blocks are put back at random among the blocks the station listened to in the same hour of the day",
+                tested,
+            ),
+            listened_words(strata.listened_from),
+        ),
     }
 }
 
-fn render_pairs_table(
-    pairs: &[birdnet_db::sqlite::SpeciesPair],
-    _days: u32,
-    names: &birdnet_core::i18n::NameLocalizer,
-) -> String {
-    if pairs.is_empty() {
+/// Every pair tested, the ones that stand out first (furthest from chance first), then the
+/// rest by blocks shared: the table behind the ladder.
+fn render_pairs_table(g: &super::viz::CoGraph, stored: &[String], limit: usize) -> String {
+    use super::viz::cograph::{Verdict, lift_words};
+    let n = g.n();
+    if n < 2 {
         return super::empty_states::no_co_signal();
     }
-
-    let max_overlap = pairs
-        .iter()
-        .map(|p| p.overlap)
-        .fold(f64::MIN_POSITIVE, f64::max);
+    let mut rows: Vec<(usize, usize)> = (0..n)
+        .flat_map(|i| (i + 1..n).map(move |j| (i, j)))
+        .collect();
+    let away = |&(i, j): &(usize, usize)| -> f64 {
+        if g.verdict(i, j) == Verdict::Chance {
+            -1.0
+        } else {
+            g.lift(i, j)
+                .map_or(0.0, |l| l.max(f64::MIN_POSITIVE).ln().abs())
+        }
+    };
+    rows.sort_by(|x, y| {
+        away(y)
+            .total_cmp(&away(x))
+            .then(g.blocks[y.0][y.1].cmp(&g.blocks[x.0][x.1]))
+            .then(x.cmp(y))
+    });
+    rows.truncate(limit);
 
     let mut html = String::from(
         r"<table>
@@ -313,39 +373,48 @@ fn render_pairs_table(
     <th>Species A</th>
     <th>Species B</th>
     <th>5-min blocks together</th>
-    <th>Share of their time</th>
+    <th>Chance gives</th>
+    <th>Against chance</th>
   </tr>
 </thead>
 <tbody>",
     );
-
-    for pair in pairs {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let bar_pct = (pair.overlap / max_overlap * 100.0).round() as u64;
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let share_pct = (pair.overlap * 100.0).round() as u64;
-        let enc_a = simple_url_encode(&pair.species_a);
-        let enc_b = simple_url_encode(&pair.species_b);
+    for (i, j) in rows {
+        let verdict = g.verdict(i, j);
+        let against = g.lift(i, j).map_or_else(
+            || super::viz::matrix::verdict_words(verdict).to_owned(),
+            |l| {
+                format!(
+                    "{}, {}",
+                    lift_words(l),
+                    super::viz::matrix::verdict_words(verdict)
+                )
+            },
+        );
         let _ = write!(
             html,
             r#"<tr>
   <td><a class="species-link" href="/species/detail?name={enc_a}">{a}</a></td>
   <td><a class="species-link" href="/species/detail?name={enc_b}">{b}</a></td>
   <td>{blocks}</td>
-  <td>
-    <div class="co-bar-row">
-      <div class="bar" data-style="width:{bar_pct}%;min-width:4px;"></div>
-      <span class="co-bar-label">{share_pct}%</span>
-    </div>
-  </td>
+  <td>{chance:.1}</td>
+  <td>{against}</td>
 </tr>"#,
-            a = escape_html(names.name_of_stored(&pair.species_a)),
-            b = escape_html(names.name_of_stored(&pair.species_b)),
-            blocks = pair.shared_blocks,
+            enc_a = simple_url_encode(stored.get(i).map_or("", String::as_str)),
+            enc_b = simple_url_encode(stored.get(j).map_or("", String::as_str)),
+            a = escape_html(&g.names[i]),
+            b = escape_html(&g.names[j]),
+            blocks = g.blocks[i][j],
+            chance = g.expected[i][j],
+            against = escape_html(&against),
         );
     }
-
     html.push_str("</tbody></table>");
+    let _ = write!(
+        html,
+        r#"<p class="bnb-meta">{}</p>"#,
+        escape_html(&g.method)
+    );
     html
 }
 
@@ -474,9 +543,6 @@ pub(super) fn companion_days_text(c: &birdnet_db::sqlite::FollowOn, trigger_show
 /// first visit (and each background refresh) is instant.
 pub fn prewarm(state: &AppState) {
     let cache = state.analytics_cache();
-    if let Some(h) = compute_cooccurrence_matrix(state, 30).map(with_as_of) {
-        cache.put("corr-matrix:30".to_string(), h);
-    }
     if let Some(h) = compute_acoustic_network(state, 30, DEFAULT_LINKS).map(with_as_of) {
         cache.put(format!("corr-network:30:{DEFAULT_LINKS}"), h);
     }
@@ -494,124 +560,197 @@ fn with_as_of(html: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use birdnet_db::sqlite::{FollowOn, SpeciesPair};
+    use birdnet_db::sqlite::FollowOn;
 
-    #[test]
-    fn render_pairs_table_empty() {
-        let html = render_pairs_table(&[], 30, &birdnet_core::i18n::NameLocalizer::english());
-        assert!(html.contains("Not enough overlap"));
+    fn english() -> birdnet_core::i18n::NameLocalizer {
+        birdnet_core::i18n::NameLocalizer::english()
     }
 
-    #[test]
-    fn render_pairs_table_with_data() {
-        let pairs = vec![SpeciesPair {
-            species_a: "Robin".into(),
-            species_b: "Wren".into(),
-            shared_blocks: 5,
-            blocks_a: 10,
-            blocks_b: 8,
-            overlap: 5.0 / 13.0,
-            ..SpeciesPair::default()
-        }];
-        let html = render_pairs_table(&pairs, 30, &birdnet_core::i18n::NameLocalizer::english());
-        assert!(html.contains("Robin"));
-        assert!(html.contains("Wren"));
-        assert!(html.contains("<td>5</td>"), "{html}");
-        assert!(html.contains(">38%<"), "5 of 13 blocks: {html}");
-    }
-
-    #[test]
-    fn render_pairs_table_escapes_html() {
-        let pairs = vec![SpeciesPair {
-            species_a: "<script>alert(1)</script>".into(),
-            species_b: "Wren".into(),
-            shared_blocks: 1,
-            blocks_a: 1,
-            blocks_b: 1,
-            overlap: 1.0,
-            ..SpeciesPair::default()
-        }];
-        let html = render_pairs_table(&pairs, 30, &birdnet_core::i18n::NameLocalizer::english());
-        assert!(!html.contains("<script>"));
-        assert!(html.contains("&lt;script&gt;"));
-    }
-
-    fn pair(a: &str, b: &str, shared: u32, overlap: f64) -> SpeciesPair {
-        SpeciesPair {
-            species_a: a.into(),
-            species_b: b.into(),
-            shared_blocks: i64::from(shared),
-            blocks_a: 40,
-            blocks_b: 40,
-            overlap,
-            ..SpeciesPair::default()
-        }
-    }
-
-    /// The graph the pictures draw keeps what a reading needs: the overlap as measured (not
-    /// only as scaled to the strongest pair) and the blocks behind it, and the colour slot of
-    /// a species is its rank by connectedness.
-    #[test]
-    fn the_graph_keeps_the_measured_share_beside_the_scaled_one() {
-        let pairs = vec![
-            pair("Robin", "Wren", 30, 0.60),
-            pair("Robin", "Jay", 15, 0.30),
-            pair("Wren", "Jay", 6, 0.12),
-            pair("Jay", "Owl", 3, 0.05),
-        ];
-        let g = build_graph(
-            &pairs,
-            3,
-            &birdnet_core::i18n::NameLocalizer::english(),
-            crate::routes::pages::viz::kit::SpeciesSlots::default(),
-        );
-        // Robin (0.90) and Wren (0.72) and Jay (0.47) are the three most connected; Owl is cut.
-        assert_eq!(g.names, vec!["Robin", "Wren", "Jay"]);
-        assert!(
-            (g.strength[0][1] - 1.0).abs() < 1e-12,
-            "the strongest pair is 1.0"
-        );
-        assert!((g.strength[0][2] - 0.5).abs() < 1e-12);
-        assert!(
-            (g.share[0][1] - 0.60).abs() < 1e-12,
-            "the share is as measured"
-        );
-        assert_eq!(g.blocks[1][2], 6);
-        for i in 0..3 {
-            assert!(
-                g.strength[i][i].abs() < 1e-12,
-                "no species is linked to itself"
-            );
-            for j in 0..3 {
-                assert!(
-                    (g.strength[i][j] - g.strength[j][i]).abs() < 1e-12,
-                    "symmetric"
-                );
-                assert_eq!(g.blocks[i][j], g.blocks[j][i]);
+    /// A station that listened to every hour of the last 30 days, and the species placed in
+    /// five-minute blocks by `place(day, hour, slot) -> names`.
+    fn station(place: impl Fn(u32, u32, u32) -> Vec<&'static str>) -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let mut rows = Vec::new();
+        let mut effort = Vec::new();
+        for back in 1..=30_u32 {
+            let d = format!("DATE('now', 'localtime', '-{back} days')");
+            for h in 0..24_u32 {
+                effort.push(format!("({d},{h},'mic',3600,3600)"));
+                for s in 0..12_u32 {
+                    for name in place(back, h, s) {
+                        rows.push(format!(
+                            "({d},'{h:02}:{m:02}:00','{name} sp','{name}',0.9)",
+                            m = s * 5 + 1
+                        ));
+                    }
+                }
             }
         }
+        conn.execute_batch(&format!(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) VALUES {};
+             INSERT INTO recording_effort_hourly (date, hour, source, seconds_analysed, seconds_up) VALUES {};",
+            rows.join(","),
+            effort.join(",")
+        ))
+        .unwrap();
+        conn
     }
 
-    /// A pair outside the species kept does not stretch the scale: only the strongest link
-    /// *drawn* is 1.0.
-    #[test]
-    fn a_pair_that_is_not_drawn_does_not_set_the_scale() {
-        let pairs = vec![
-            pair("A", "B", 10, 0.40),
-            pair("A", "C", 8, 0.30),
-            pair("B", "C", 8, 0.20),
-            pair("X", "Y", 50, 0.45),
-        ];
-        // X and Y (0.45 each) are less connected in total than A (0.70), B (0.60), C (0.50)
-        // and are cut at three, though their pair is stronger than A-B.
+    /// A fixed pseudo-random draw in `0..1000` for a block and a bird: the fixture's own dice,
+    /// so it is the same on every run.
+    fn dice(day: u32, hour: u32, slot: u32, bird: u32) -> u32 {
+        let mut x = u64::from(day) * 1_000_003
+            + u64::from(hour) * 10_007
+            + u64::from(slot) * 101
+            + u64::from(bird) * 7_919;
+        x ^= x >> 13;
+        x = x.wrapping_mul(0x5bd1_e995_9e37_79b9);
+        x ^= x >> 29;
+        u32::try_from(x % 1000).unwrap()
+    }
+
+    fn figure(conn: &rusqlite::Connection) -> (crate::routes::pages::viz::CoGraph, String) {
+        let strata = cooccurrence_strata(conn, 30, MAX_SPECIES).unwrap();
         let g = build_graph(
-            &pairs,
-            3,
-            &birdnet_core::i18n::NameLocalizer::english(),
+            &strata,
+            &english(),
             crate::routes::pages::viz::kit::SpeciesSlots::default(),
         );
-        assert_eq!(g.names, vec!["A", "B", "C"]);
-        assert!((g.strength[0][1] - 1.0).abs() < 1e-12, "{:?}", g.strength);
+        let html = crate::routes::pages::viz::co_figure(&g, 12, "/pages/acoustic-network");
+        (g, html)
+    }
+
+    /// Five birds, each in its own share of the dawn and morning blocks, independently of the
+    /// others: they share many blocks because they share hours, and none more or less than
+    /// those hours give.
+    fn independent(day: u32, hour: u32, slot: u32) -> Vec<&'static str> {
+        const BIRDS: [(&str, u32); 5] = [
+            ("Robin", 450),
+            ("Wren", 350),
+            ("Blackbird", 300),
+            ("Dunnock", 250),
+            ("Chaffinch", 200),
+        ];
+        if !(4..=9).contains(&hour) {
+            return Vec::new();
+        }
+        BIRDS
+            .iter()
+            .zip(0_u32..)
+            .filter(|((_, p), k)| dice(day, hour, slot, *k) < *p)
+            .map(|((n, _), _)| *n)
+            .collect()
+    }
+
+    /// CHT-08: birds that are only heard in the same hours are not drawn as together. Every
+    /// cell is empty and the figure says nothing stands out, though every pair shares dozens of
+    /// blocks (which the old figure drew as its strongest ribbons).
+    #[test]
+    fn birds_heard_only_in_the_same_hours_draw_nothing() {
+        let conn = station(independent);
+        let (g, html) = figure(&conn);
+        assert_eq!(g.n(), 5);
+        assert!(
+            g.blocks[0][1] > 30,
+            "the pairs do share blocks: {:?}",
+            g.blocks
+        );
+        assert_eq!(g.standing_out(), (0, 0), "{:?}", g.verdict);
+        assert!(html.contains(crate::routes::pages::viz::matrix::NOTHING_STANDS_OUT));
+        assert!(
+            !html.contains("ck-fill ck-dp") && !html.contains("ck-fill ck-dn"),
+            "no cell is coloured: {html}"
+        );
+        assert!(html.contains("999 times (seed 20261127)"), "{html}");
+        assert!(html.contains("hourly listening ledger"), "{html}");
+    }
+
+    /// Counterpart: a bird that comes in with the Robin, in the same blocks far more often
+    /// than their hours give, is the one pair marked, and the darkest.
+    #[test]
+    fn a_planted_follower_is_the_pair_that_stands_out() {
+        let conn = station(|day, hour, slot| {
+            let mut birds = independent(day, hour, slot);
+            if birds.contains(&"Robin") && dice(day, hour, slot, 99) < 400 {
+                birds.push("Nuthatch");
+            }
+            birds
+        });
+        let (g, html) = figure(&conn);
+        let (more, _) = g.standing_out();
+        assert_eq!(more, 1, "{:?}", g.verdict);
+        let links = g.ranked_links();
+        let top = (g.names[links[0].a].as_str(), g.names[links[0].b].as_str());
+        assert!(
+            top == ("Robin", "Nuthatch") || top == ("Nuthatch", "Robin"),
+            "{top:?}"
+        );
+        assert!(!html.contains(crate::routes::pages::viz::matrix::NOTHING_STANDS_OUT));
+        assert!(html.contains("Together more than chance"), "{html}");
+    }
+
+    /// The table holds every pair tested, the ones that stand out first, with what chance gives.
+    #[test]
+    fn the_table_puts_what_stands_out_first_beside_what_chance_gives() {
+        let conn = station(|day, hour, slot| {
+            let mut birds = independent(day, hour, slot);
+            if birds.contains(&"Robin") && dice(day, hour, slot, 99) < 400 {
+                birds.push("Nuthatch");
+            }
+            birds
+        });
+        let strata = cooccurrence_strata(&conn, 30, MAX_SPECIES).unwrap();
+        let g = build_graph(
+            &strata,
+            &english(),
+            crate::routes::pages::viz::kit::SpeciesSlots::default(),
+        );
+        let html = render_pairs_table(&g, &strata.names, 25);
+        assert_eq!(html.matches("<tr>").count(), 1 + 15, "6 species, 15 pairs");
+        let first = html.split("<tbody>").nth(1).unwrap();
+        let first = first.split("</tr>").next().unwrap();
+        assert!(
+            first.contains("Nuthatch") && first.contains("Robin"),
+            "{first}"
+        );
+        assert!(first.contains("together more often than chance"), "{first}");
+        assert!(html.contains("<th>Chance gives</th>"), "{html}");
+        assert!(html.contains("within chance"), "{html}");
+        assert!(
+            html.contains("href=\"/species/detail?name=Nuthatch\""),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn the_table_escapes_names_and_says_when_there_is_nothing() {
+        let empty = birdnet_db::sqlite::CoStrata::default();
+        let g = build_graph(
+            &empty,
+            &english(),
+            crate::routes::pages::viz::kit::SpeciesSlots::default(),
+        );
+        assert!(render_pairs_table(&g, &[], 25).contains("Not enough overlap"));
+        let strata = birdnet_db::sqlite::CoStrata {
+            names: vec!["<script>alert(1)</script>".into(), "Wren".into()],
+            listened: vec![12; 24],
+            blocks: vec![vec![1; 24], vec![1; 24]],
+            shared: vec![
+                vec![vec![0; 24], vec![1; 24]],
+                vec![vec![1; 24], vec![0; 24]],
+            ],
+            listened_from: Some(ListenedFrom::DetectionHours),
+        };
+        let g = build_graph(
+            &strata,
+            &english(),
+            crate::routes::pages::viz::kit::SpeciesSlots::default(),
+        );
+        let html = render_pairs_table(&g, &strata.names, 25);
+        assert!(!html.contains("<script>"));
+        assert!(html.contains("&lt;script&gt;"));
+        assert!(html.contains("no hourly listening ledger"), "{html}");
     }
 
     /// The chord diagram's "links shown" is read from the request and bounded.

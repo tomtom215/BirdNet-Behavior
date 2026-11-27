@@ -12,7 +12,10 @@
 //                end on) in the foreground and the rest at --chart-dim; pointing at a ribbon leaves
 //                it and its two species; the keyboard reads species then links; "Links shown"
 //                changes the number of ribbons and says which is pressed; nothing is written over
-//                the ribbons; a phone gets the ladder and no ring, with no sideways scroll
+//                the ribbons; a phone gets the ladder and no ring, with no sideways scroll. Since
+//                CHT-08 the ladder is the figure at every width and the ring is folded under it,
+//                drawn only from the pairs that stand out from chance: the desktop opens the fold,
+//                and a fixture with nothing standing out must say so and draw no ribbon
 //   dawn rings   every ring-hour reads (name, hour span, count, share, busiest hour); a ring comes
 //                forward from the pointer, from its key and from the keyboard (Up and Down move from
 //                ring to ring); the centre says the time now and no "chorus 24 h"; the now hand is a
@@ -36,6 +39,7 @@
 // Self-test (each must go red; this is how the gate was seen failing):
 //   MUTATE=nofocus   chart-kit.js never applies a mark's data-ck-f focus
 //   MUTATE=allthere  the stylesheet shows the ring on a phone as well as the ladder
+//   MUTATE=rankall   the ranked list beside the ladder holds a pair that does not stand out
 //   MUTATE=nodim     the stylesheet stops dimming
 //   MUTATE=nogrid    the chorus loses data-ck-grid, so Up and Down no longer move between rows
 //   MUTATE=notipcell the chorus's cells lose their readings
@@ -74,6 +78,13 @@ async function open(route, { width = 1440, theme = 'light', touch = false } = {}
       await r.fulfill({ response: res, body });
     });
   }
+  if (MUTATE === 'rankall') {
+    await context.route('**/pages/acoustic-network*', async (r) => {
+      const res = await r.fetch();
+      const body = (await res.text()).replace('<ol class="co-rank">', '<ol class="co-rank"><li class="co-rank-row">A × B</li>');
+      await r.fulfill({ response: res, body });
+    });
+  }
   if (['nogrid', 'notipcell', 'wrongcsv'].includes(MUTATE)) {
     await context.route('**/pages/analytics-assembly*', async (r) => {
       const res = await r.fetch();
@@ -103,7 +114,7 @@ async function open(route, { width = 1440, theme = 'light', touch = false } = {}
   page.on('pageerror', (e) => errors.push(e.message));
   await page.goto(BASE + route, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForLoadState('networkidle', { timeout: 12000 }).catch(() => {});
-  if (MUTATE === 'allthere') await page.evaluate(() => document.styleSheets[0].insertRule('.co-chord { display: block !important; }', document.styleSheets[0].cssRules.length));
+  if (MUTATE === 'allthere') await page.evaluate(() => document.styleSheets[0].insertRule('.co-ring { display: block !important; }', document.styleSheets[0].cssRules.length));
   if (MUTATE === 'widephone') await page.evaluate(() => { const sh = document.styleSheets[0]; sh.insertRule('.viz-chart--wide { display: block !important; }', sh.cssRules.length); sh.insertRule('.viz-chart--narrow { display: none !important; }', sh.cssRules.length); });
   if (MUTATE === 'nodim') await page.evaluate(() => document.styleSheets[0].insertRule('svg.ck-focus [data-ck-s] { opacity: 1 !important; }', document.styleSheets[0].cssRules.length));
   return { context, page, errors };
@@ -116,6 +127,20 @@ const dim = (page) => page.evaluate(() => Number(getComputedStyle(document.docum
 console.log('who sings together: the chord at desktop width');
 {
   const { context, page, errors } = await open('/patterns?tab=together');
+  await page.waitForSelector('.co-ladder svg', { timeout: 15000 });
+  const ladderShown = await page.$eval('.co-ladder', (e) => getComputedStyle(e).display !== 'none');
+  check('the ladder is the figure at desktop width too', ladderShown);
+  const fold = page.locator('details.co-ring > summary');
+  if (!(await fold.count())) {
+    // The fixture's 30 days hold too little to tell any pair from chance; the year does. The
+    // empty answer is graded here, and the ring on the year below.
+    const said = await page.locator('.co-none').textContent().catch(() => '');
+    const ribbonsDrawn = await page.$$eval('.chord-ribbon', (e) => e.length);
+    check('with nothing standing out the figure says so and draws no ring', /Nothing stands out/.test(said) && ribbonsDrawn === 0, `${said} / ${ribbonsDrawn} ribbons`);
+    await page.click('#range-controls [data-days="365"]');
+    await page.waitForSelector('details.co-ring > summary', { timeout: 30000 });
+  }
+  await fold.click();
   await page.waitForSelector('.viz-svg-chord', { timeout: 15000 });
   const d = await dim(page);
   const arcs = await page.$$('.viz-svg-chord .chord-arc');
@@ -153,7 +178,7 @@ console.log('who sings together: the chord at desktop width');
   const faded = ribOp.filter((o) => Math.abs(o - d) < 0.02).length;
   check('pointing at a species leaves exactly the ribbons that end on it', lit === touching && faded === ribbons.length - touching && touching > 0, `lit ${lit} faded ${faded} touching ${touching} of ${ribbons.length}`);
   const tip = await page.locator('.co-chord .ck-tip.on').textContent().catch(() => '');
-  check('and reads it (name, partners, share)', /%/.test(tip) && tip.length > 8, tip);
+  check('and reads it (name, partners, how far above chance)', /times chance/.test(tip) && tip.length > 8, tip);
   await page.mouse.move(5, 5);
   await page.waitForTimeout(150);
   const rest = await opacities(page, '.viz-svg-chord .chord-ribbon');
@@ -179,7 +204,7 @@ console.log('who sings together: the chord at desktop width');
   await page.locator('.viz-svg-chord').focus();
   await page.keyboard.press('ArrowRight');
   const live = await page.locator('.co-chord .ck-live').textContent();
-  check('the keyboard reads species first (aria-live)', live.length > 10 && /%/.test(live), live);
+  check('the keyboard reads species first (aria-live)', live.length > 10 && /times chance/.test(live), live);
   const names = await page.$$eval('.viz-svg-chord .chord-name', (e) => e.length);
   for (let i = 0; i < names + 1; i++) await page.keyboard.press('ArrowRight');
   const live2 = await page.locator('.co-chord .ck-live').textContent();
@@ -211,13 +236,15 @@ console.log('\nwho sings together: a phone');
   const { context, page, errors } = await open('/patterns?tab=together', { width: 390, touch: true });
   await page.waitForSelector('.co-ladder svg', { timeout: 15000 });
   const r = await page.evaluate(() => ({
-    ring: getComputedStyle(document.querySelector('.co-chord')).display,
+    ring: document.querySelector('.co-ring') ? getComputedStyle(document.querySelector('.co-ring')).display : 'none',
     ladder: getComputedStyle(document.querySelector('.co-ladder')).display,
     over: document.documentElement.scrollWidth - window.innerWidth,
     cells: document.querySelectorAll('.co-ladder rect[data-tip]').length,
+    above: document.querySelectorAll('.co-ladder rect.ck-dp1, .co-ladder rect.ck-dp2, .co-ladder rect.ck-dp3').length,
     rank: document.querySelectorAll('.co-rank-row').length,
   }));
-  check('a phone gets the ladder and the ranked pairs, and no ring', r.ring === 'none' && r.ladder !== 'none' && r.cells > 5 && r.rank > 2, JSON.stringify(r));
+  check('a phone gets the ladder, and no ring', r.ring === 'none' && r.ladder !== 'none' && r.cells > 5, JSON.stringify(r));
+  check('the list beside it holds the pairs above chance and no other', r.rank === Math.min(8, r.above), JSON.stringify(r));
   check('with no sideways scroll', r.over <= 0, `${r.over}px`);
   const fs = await page.$eval('.co-ladder .ladder-name', (e) => {
     const svg = e.closest('svg');
