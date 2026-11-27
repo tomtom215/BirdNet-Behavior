@@ -12,7 +12,9 @@ findings in 18 work packages, with a checklist in `docs/audit-2026-11/checklist.
 this document against the tree and GitHub; work package WP-00 corrected the header, sections 1, 2, 5 and 6 from it,
 re-running each command named below on 2026-11-22.
 
-**2026-11-26: the newest entry; start here.** Since 2026-11-24 the audit has been worked in batches, one pull request
+**2026-11-26, later: the newest entry; start here.** An external read-only review packet pinned at `e5ba133` (findings F01–F22, and a routing of the 138 open or in-progress rows) was worked on branch `claude/awesome-carson-rj7j5u`. `docs/audit-2026-11/status/REVIEW-2026-11-26.md` says what was implemented, each with the red test seen failing on the old code where one could be written (F15 has none, and says why), what the review got wrong, what was run on the integrated head, and what needs hardware, recordings or people; its "Start here" list is where the next session begins (first: a mutation run on the branch head). The findings are rows `REV-F01` to `REV-F22` in `checklist.json`, and the ledger of every routed row is `REVIEW-2026-11-26-ledger.json` beside the status file.
+
+**2026-11-26: the batches.** Since 2026-11-24 the audit has been worked in batches, one pull request
 each, and each batch has a status file in `docs/audit-2026-11/status/` that says what changed, what the session ran
 and what it did not: `BATCH-2026-11-24.md`, `BATCH-2026-11-25.md`, `BATCH-2026-11-26.md` (merged as #310) and
 `BATCH-2026-11-26-models.md` (the fourth, this entry). `checklist.json` is the state of every finding; count it, do

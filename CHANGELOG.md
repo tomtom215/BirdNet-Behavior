@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **A model mirror's password and query token are no longer logged (MDL-22).** `BIRDNET_MODEL_MIRROR` with
+  `user:pass@` or a `?token=` was printed whole in the download's log lines and in the error a failed install
+  returns; every origin is now printed with the password and secret query values replaced. The request still uses
+  the real URL.
 - **`lettre` 0.11.24, for six advisories published 2026-11-17**: RUSTSEC-2026-0560 (STARTTLS response
   injection lets a man-in-the-middle forge SMTP replies), RUSTSEC-2026-0561 (missing dot-stuffing after a bare
   LF or CR allows SMTP command injection), RUSTSEC-2026-0562 and RUSTSEC-2026-0564 (panics on an `EHLO` reply of
@@ -26,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`DB_SYNCHRONOUS=full`** syncs the database at every commit, so a recorded detection is on the disk before it
+  is announced. The default, `normal`, is unchanged: a commit survives the program stopping, and the last few
+  before a power cut can be lost; the configuration reference now says so, and the start-up log says which is in
+  force.
+- **`&source=` on the detection-history export** gives one source's history, its effort and its detections only.
+- **Migration 67 records each classifier a run starts with** (`analysis_run_models`), with the file it loaded.
 - **The station repairs its own model files (MDL-10).** A model file the configuration names that is missing or
   damaged is fetched again in the background, with the catalogue's retries and then once an hour
   (`BIRDNET_MODEL_REPAIR_INTERVAL`, seconds), and the station restarts once to load a file it started without.
@@ -354,6 +364,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A stop's queue keeps what analysed a detection, and loses nothing it could not store** (review F01-F05,
+  F07, F15, F16 of the 2026-11-26 review). A detection kept at a stop is stored at the next start under the
+  analysis run that produced it and judged at the bars in force when it was kept, not under the run and
+  thresholds of the start that replays it; one kept by an earlier version is stored with its run unknown rather
+  than given another's. A kept detection the database refuses is offered again at the next start, and after three
+  failed starts is held in the queue and reported, never deleted; one already stored before a crash is not stored
+  twice. The queue no longer copies whole recordings and their neighbours to the data disk: it keeps only the
+  samples each clip is cut from, so on a privacy-filtered station no audio the filter did not judge is kept. Its
+  files are written whole and synced. A detection the database refuses no longer opens a duplicate interval that
+  suppresses the next one, no two detections the interval admits are closer than it in any order of arrival, a
+  replayed detection no longer marks its source as capturing, and a row and its classifiers' answers are written
+  in one transaction.
+- **A window a classifier that can hear people failed is masked by the privacy filter** (review F08), instead of
+  being judged for speech by the classifiers that answered, which may name no human class.
+- **One window no classifier answered no longer discards the rest of its recording** (review F18): the other
+  windows' detections are kept, and the failed windows are not counted as listening.
+- **Effort is the audio that decoded** (review F10): a recording cut short by a crash, whose header claims 15 s and
+  holds 1 s, was credited 15 s of listening, and one with ffmpeg's placeholder header none.
+- **Exports name the model file of the classifier that made each row** (review F19, MMP-08), not the run's first
+  classifier's. A row from a run before migration 67 whose rows name more than one classifier has no checksum,
+  since which file made it was never recorded.
+- **The detection history is not made a `1` by one source's detection on another's effort** (review F14): an
+  occasion is detected only when a source that itself listened for `min_seconds` detected the species.
+  `Detections` still counts every detection.
+- **With `--watch-dir` equal to the recordings directory, locked and reviewed clips are kept (N25-11).** They were
+  drained after `STREAM_RETENTION_SECS` with every other clip.
+- **Model and labels files are placed with their directory synced** (review F21), so "installed" survives a
+  power cut.
 - **Stopping with a backlog took 30 to 50 seconds and lost what systemd's kill cut off (MDL-21).** The unit
   allows 30. Detections not yet processed are now written to `clip-queue/` beside the database with their
   recordings and replayed at the next start; a stop with 200 queued took 0.5 s here, against 29 s before.

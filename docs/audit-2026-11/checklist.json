@@ -223,7 +223,7 @@
    "phase": 1,
    "source": "01-multi-source-capture.md:110",
    "status": "in_progress",
-   "evidence": "22ed559: --doctor gains an 'Overlapping windows' warning when OVERLAP is above 0 and DUPLICATE_INTERVAL_SECS is off, with the remedy; a warning, so the configuration stays usable. Gates overlap_without_a_duplicate_interval_is_reported and no_overlap_or_a_duplicate_interval_is_not_reported red before. Remaining, for the maintainer: collapsing rows across overlapping windows or changing the default interval (it changes counts). See N24-06. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decisions 1 and 2 (the event layer): what is left is collapsing rows, which changes counts."
+   "evidence": "22ed559: --doctor gains an 'Overlapping windows' warning when OVERLAP is above 0 and DUPLICATE_INTERVAL_SECS is off, with the remedy; a warning, so the configuration stays usable. Gates overlap_without_a_duplicate_interval_is_reported and no_overlap_or_a_duplicate_interval_is_not_reported red before. Remaining, for the maintainer: collapsing rows across overlapping windows or changing the default interval (it changes counts). See N24-06. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decisions 1 and 2 (the event layer): what is left is collapsing rows, which changes counts. || `ce3de58` (review F06): the duplicate gate now compares with every remembered time, so no two admitted rows are closer than the interval in any arrival order; order-free counting still waits on decision 1."
   },
   {
    "id": "MSC-10",
@@ -331,7 +331,7 @@
    "phase": 1,
    "source": "01-multi-source-capture.md:194",
    "status": "in_progress",
-   "evidence": "Not started: per-source location and species lists depend on maintainer decision 2 (whether co-located sources are one station or several sites); a per-source threshold offset alone could be done before it. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 2 (a site per source), which is where a per-site location and species list hang."
+   "evidence": "Not started: per-source location and species lists depend on maintainer decision 2 (whether co-located sources are one station or several sites); a per-source threshold offset alone could be done before it. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 2 (a site per source), which is where a per-site location and species list hang. || `85191b0` (review F14): detection history scopable to one source (&source=). Status unchanged."
   },
   {
    "id": "MSC-19",
@@ -462,8 +462,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "02-multi-model-pipeline.md:183",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": " || `ebf6743` (review F19): migration 67 analysis_run_models; exports resolve a row's file through (run_id, model_id); a pre-67 run whose rows name more than one classifier exports no checksum. Gate crates/birdnet-web/tests/an_export_names_the_file_each_rows_classifier_ran.rs, first case red on `e5ba133`. Not done: per-answer artefacts in the model-scores export."
   },
   {
    "id": "MMP-09",
@@ -619,7 +619,7 @@
    "phase": 1,
    "source": "02-multi-model-pipeline.md:300",
    "status": "in_progress",
-   "evidence": "WP-01 part done (af8bb36, 7167866): a second classifier at another rate leaving the primary running is gated, as are doctor and route cases. Remaining: the MMP-03 to MMP-08 gates (WP-02 onward); any two-real-model run in CI. A corrupt extra model still stops the daemon by decision, so \"an extra classifier's failure leaves the primary running\" holds for the rate case only."
+   "evidence": "WP-01 part done (af8bb36, 7167866): a second classifier at another rate leaving the primary running is gated, as are doctor and route cases. Remaining: the MMP-03 to MMP-08 gates (WP-02 onward); any two-real-model run in CI. A corrupt extra model still stops the daemon by decision, so \"an extra classifier's failure leaves the primary running\" holds for the rate case only. || Review session 2026-11-26 added two of the untested invariants: `1a972f7` a window a human-capable classifier failed is masked under the privacy filter; `ef07e0d` a failed window costs that window, not the file."
   },
   {
    "id": "MMP-22",
@@ -859,7 +859,7 @@
    "phase": 1,
    "source": "03-precision-accuracy.md:302",
    "status": "open",
-   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 1: an events view; rows stay as BirdNET-Pi parity has them."
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 1: an events view; rows stay as BirdNET-Pi parity has them. || `ce3de58` (review F06): see MSC-09; status unchanged."
   },
   {
    "id": "ACC-20",
@@ -1027,7 +1027,7 @@
    "phase": 3,
    "source": "04-zero-setup-defaults.md:381",
    "status": "in_progress",
-   "evidence": "Not started. The audit marks it a maintainer decision. Question: require sign-in for /stream and the spectrogram socket by default, changing what existing stations' listeners can hear? Decided 2026-11-25: see decisions-2026-11-25.md section 5."
+   "evidence": "Not started. The audit marks it a maintainer decision. Question: require sign-in for /stream and the spectrogram socket by default, changing what existing stations' listeners can hear? Decided 2026-11-25: see decisions-2026-11-25.md section 5. || `ce3de58` (review F03): the stop queue keeps only the audio a clip is cut from, so no unfiltered neighbour or segment audio reaches the data disk on a stop. The live feed itself is unchanged."
   },
   {
    "id": "OOB-14",
@@ -1039,7 +1039,7 @@
    "phase": 3,
    "source": "04-zero-setup-defaults.md:399",
    "status": "open",
-   "evidence": ""
+   "evidence": " || `b00076e` (review F17): DB_SYNCHRONOUS=full, opt-in, syncs every commit at the cost of more writes; the default is unchanged. No wear measured."
   },
   {
    "id": "OOB-15",
@@ -2119,7 +2119,7 @@
    "phase": 2,
    "source": "07-research-grade.md:339",
    "status": "open",
-   "evidence": ""
+   "evidence": " || `ce3de58` (F01) a replayed detection keeps the run that analysed it; `ebf6743` (F19) each classifier of a run is recorded with its file. Status unchanged: the run still records less than the full configuration."
   },
   {
    "id": "RES-12",
@@ -2203,7 +2203,7 @@
    "phase": 1,
    "source": "07-research-grade.md:463",
    "status": "open",
-   "evidence": "Decided 2026-11-25 (decisions-2026-11-25.md sections 1 and 2): events are computed at read time, never stored on the row; tolerance a setting defaulting to the model's window plus one second; each source its own site until told otherwise. Not started. Was marked in_progress with nothing built."
+   "evidence": "Decided 2026-11-25 (decisions-2026-11-25.md sections 1 and 2): events are computed at read time, never stored on the row; tolerance a setting defaulting to the model's window plus one second; each source its own site until told otherwise. Not started. Was marked in_progress with nothing built. || `85191b0` (review F14): the detection history no longer makes a surveyed positive of one source's detection and another's effort. Status unchanged."
   },
   {
    "id": "RES-19",
@@ -2287,7 +2287,7 @@
    "phase": 2,
    "source": "07-research-grade.md:556",
    "status": "open",
-   "evidence": ""
+   "evidence": " || `ce3de58` (review F02): a replayed detection is matched to an existing row by date, time, species, source, window offset and correlation id before writing. Not a stable detection identifier; status unchanged."
   },
   {
    "id": "RES-26",
@@ -2503,7 +2503,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-06.md",
    "status": "open",
-   "evidence": "Found while implementing WP-06; not re-checked beyond the finder's reading. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 2: pooling is right for one site and wrong across sites."
+   "evidence": "Found while implementing WP-06; not re-checked beyond the finder's reading. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 2: pooling is right for one site and wrong across sites. || `85191b0` (review F14): the occupancy-style history now treats each source as its own site; co-occurrence, phenology and retention still pool. Status unchanged."
   },
   {
    "id": "N05-01",
@@ -3078,8 +3078,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
-   "status": "in_progress",
-   "evidence": "Probed 2026-11-25 (scratch test, one locked and one unlocked clip, one 60 s cycle): with --watch-dir equal to the recordings directory, both clips are deleted once an hour old with the disk not full (so every clip goes after STREAM_RETENTION_SECS, 600 by default), and the locked clip is deleted on a full disk; with separate directories the locked clip survives both. Neither installer sets the directories equal. This batch: the station logs an error at start saying so (startup_notices::clips_drained_by_watch_dir) and backups.md states the exception. Remains: the behaviour itself (refuse the configuration, or stop the stream manager draining the clips tree)."
+   "status": "done",
+   "evidence": "Probed 2026-11-25 (scratch test, one locked and one unlocked clip, one 60 s cycle): with --watch-dir equal to the recordings directory, both clips are deleted once an hour old with the disk not full (so every clip goes after STREAM_RETENTION_SECS, 600 by default), and the locked clip is deleted on a full disk; with separate directories the locked clip survives both. Neither installer sets the directories equal. This batch: the station logs an error at start saying so (startup_notices::clips_drained_by_watch_dir) and backups.md states the exception. Remains: the behaviour itself (refuse the configuration, or stop the stream manager draining the clips tree). || `223ac20` (review session 2026-11-26): with --watch-dir equal to the recordings dir, the stream manager also protects the database's kept-back clips; a failed read deletes nothing that cycle. Unlocked clips are still drained after STREAM_RETENTION_SECS; the startup notice and backups.md say so. Gate helpers::system::tests::a_stream_dir_that_holds_clips_protects_the_locked_ones, red with the old provider."
   },
   {
    "id": "N25-12",
@@ -3126,8 +3126,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/decisions-2026-11-25.md",
-   "status": "in_progress",
-   "evidence": "Read 2026-11-25: README.md:117 against CHANGELOG (0.19.0 released 2026-10-31), with OOB-22; docs/UNATTENDED_DEPLOYMENT_AUDIT.md:603, written when the 4.5 s model was the default. 86ed9df (2026-11-25): the S-1 row of docs/UNATTENDED_DEPLOYMENT_AUDIT.md carries a dated 'Superseded' note. Remains: README.md:117, which waits for pull request 308."
+   "status": "done",
+   "evidence": "Read 2026-11-25: README.md:117 against CHANGELOG (0.19.0 released 2026-10-31), with OOB-22; docs/UNATTENDED_DEPLOYMENT_AUDIT.md:603, written when the 4.5 s model was the default. 86ed9df (2026-11-25): the S-1 row of docs/UNATTENDED_DEPLOYMENT_AUDIT.md carries a dated 'Superseded' note. Remains: README.md:117, which waits for pull request 308. || Read 2026-11-26 at `e5ba133`: README.md no longer carries the Docker quick-start version claim (`grep -n '0\\.17\\.1' README.md` finds nothing) after pull request 308."
   },
   {
    "id": "N26-01",
@@ -3498,8 +3498,8 @@
    "work_package": "models",
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
-   "status": "open",
-   "evidence": "Read by the delivery lane 2026-11-26: origin URLs are printed in install errors and logs, so BIRDNET_MODEL_MIRROR=https://user:pass@host/ would be logged. Not probed."
+   "status": "done",
+   "evidence": "Read by the delivery lane 2026-11-26: origin URLs are printed in install errors and logs, so BIRDNET_MODEL_MIRROR=https://user:pass@host/ would be logged. Not probed. || `355efc0` (review F20): every origin is printed through redact_url_credentials and describe() redacts library messages. Gate model_catalog::tests::network::a_mirrors_credentials_are_never_logged_or_reported, red on `e5ba133` (password and token in the 'downloading' line and the error)."
   },
   {
    "id": "MDL-23",
@@ -3572,6 +3572,270 @@
    "source": "docs/audit-2026-11/10-model-delivery.md",
    "status": "open",
    "evidence": "Lane R report from the model-e2e run, 2026-11-26: the unit's preflight doctor logs the same start-up line as the service. Not reproduced by the session."
+  },
+  {
+   "id": "REV-F01",
+   "title": "Replay binds historical inference to the new process run and current policy",
+   "severity": "high",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "done",
+   "evidence": "`ce3de58`: Batch lines carry the run and the effective bars; v1 lines replay with run/settings NULL. Other gates (occurrence, clock, daylight, duplicate) apply under the settings in force at replay, as declared in the commit."
+  },
+  {
+   "id": "REV-F02",
+   "title": "Replay acknowledges dequeue progress without a durable outcome",
+   "severity": "high",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "in_progress",
+   "evidence": "`ce3de58`: Explicit settle journal, retry, hold after 3 failed starts, replay idempotency on (date, time, species, source, window, correlation id). Remains: held detections are reported in the journal only (no metric or page), no transactional outbox for external posts; a crash after commit and before notifications loses those notifications."
+  },
+  {
+   "id": "REV-F03",
+   "title": "Shutdown persists unfiltered raw segments and neighbours despite clip privacy",
+   "severity": "high",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "done",
+   "evidence": "`ce3de58`: Spool keeps only the clip's sample range per recording, zero elsewhere; no neighbours on a privacy-filtered station. Clip identity across replay proven sample for sample. Not covered: support bundle, backups, live audio (OOB-13)."
+  },
+  {
+   "id": "REV-F04",
+   "title": "Spool commit lacks complete file/directory durability and atomic checkpoint",
+   "severity": "high",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "done",
+   "evidence": "`ce3de58`: atomic_file::commit for every batch file, queue dir synced, 0700. Not power-cut tested (V04 needs hardware)."
+  },
+  {
+   "id": "REV-F05",
+   "title": "Malformed replay entries and unreadable directories become skips or hidden leftovers",
+   "severity": "medium",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "done",
+   "evidence": "`ce3de58`: Unreadable, later-format and path-escaping lines are held, never deleted; read_dir errors logged at error level; keep returns what was written."
+  },
+  {
+   "id": "REV-F06",
+   "title": "Duplicate interval is order-dependent and not durable",
+   "severity": "medium",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "in_progress",
+   "evidence": "`ce3de58`: Invariant held: no two admitted rows of one species and source within the interval in any arrival order. Not order-free (85,80,92 vs 80,85,92); that needs read-time events (decision 1, RES-18). DST fold not addressed."
+  },
+  {
+   "id": "REV-F07",
+   "title": "Duplicate gate mutates before storage; failed insert can suppress the next valid row",
+   "severity": "medium",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "done",
+   "evidence": "`ce3de58`: Duplicate gate checks before and records after a successful insert."
+  },
+  {
+   "id": "REV-F08",
+   "title": "Privacy coverage can silently weaken when a routed classifier fails",
+   "severity": "high",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "done",
+   "evidence": "`1a972f7`: A window a human-capable classifier failed is privacy-unassessed and masked when the filter is on."
+  },
+  {
+   "id": "REV-F09",
+   "title": "Multi-model window length and score semantics are conflated",
+   "severity": "medium",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "open",
+   "evidence": "PARTIALLY CONFIRMED by reading: per-model answer windows are already stored (process.rs:387-388); missing are a padding mask (answer window_end can pass the file end) and per-scale human/noise scores. Not implemented."
+  },
+  {
+   "id": "REV-F10",
+   "title": "Decoder conceals packet loss without returning validity or timing uncertainty",
+   "severity": "medium",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "in_progress",
+   "evidence": "`d11737c`: Effort credited from decoded duration (probe: header 15.0 s vs 1 s decoded; ffmpeg placeholder header None). Remains: known-length lost packets are zero-filled and counted; no validity mask or timing uncertainty."
+  },
+  {
+   "id": "REV-F11",
+   "title": "Detection decode uses uncapped in-memory path",
+   "severity": "medium",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "open",
+   "evidence": "CONFIRMED by reading (pipeline.rs:373 uncapped; any parseable file in the watch dir). Not implemented: refusing long files changes what an operator dropping recordings gets today; needs the batch-ingest decision (RES-05)."
+  },
+  {
+   "id": "REV-F12",
+   "title": "Downmix can erase valid stereo content",
+   "severity": "medium",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "open",
+   "evidence": "PARTIALLY CONFIRMED: a per-source Left/Right channel pick exists at capture (admin/audio.rs:1466, capture/process.rs:512); the averaging remains for 'both' and dropped files. Not implemented."
+  },
+  {
+   "id": "REV-F13",
+   "title": "Geomodel week fixed at file start even across civil boundaries",
+   "severity": "medium",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "open",
+   "evidence": "CONFIRMED by reading (one week per file, process.rs:433-438). BirdNET-Pi parity is also per file (inferred); changing it needs a setting or an accepted parity departure. Not implemented."
+  },
+  {
+   "id": "REV-F14",
+   "title": "Occupancy-style export pools site detections with unrelated effort and legacy uptime",
+   "severity": "high",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "in_progress",
+   "evidence": "`85191b0`: A detection makes an occasion detected only on a source that surveyed it; &source= scopes the history. Remains: survey-design export, interval-union effort for declared co-located sites, DST-aware occasions, vocabulary eligibility."
+  },
+  {
+   "id": "REV-F15",
+   "title": "Detection row and per-model answer evidence are not atomically coupled",
+   "severity": "medium",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "done",
+   "evidence": "`ce3de58`: Row and answers in one transaction (answers in a savepoint). No red test: the crash window cannot be hit deterministically without a fault-injecting VFS."
+  },
+  {
+   "id": "REV-F16",
+   "title": "A backlog detection marks capture source up, irrespective of current capture",
+   "severity": "medium",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "done",
+   "evidence": "`ce3de58`: Replayed detections no longer stamp source up. A live backlog file still stamps; the supervisor rewrites the gauge each tick (2 s default)."
+  },
+  {
+   "id": "REV-F17",
+   "title": "WAL NORMAL intentionally sacrifices committed data durability under power loss",
+   "severity": "high",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "done",
+   "evidence": "`b00076e`: Opt-in DB_SYNCHRONOUS=full, default unchanged, loss window documented. Power-loss behaviour not measured (V04)."
+  },
+  {
+   "id": "REV-F18",
+   "title": "A failed later inference window discards all earlier successful predictions in a file",
+   "severity": "medium",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "done",
+   "evidence": "`ef07e0d`: Failed windows keep the rest of the file; failed share not credited as effort."
+  },
+  {
+   "id": "REV-F19",
+   "title": "Exports join a run-level model hash rather than each answer’s artifact",
+   "severity": "high",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "in_progress",
+   "evidence": "`ebf6743`: Migration 67 records each classifier per run; exports resolve (run_id, model_id); ambiguous legacy runs export no checksum. Remains: CSV confidence still 4 decimals (JSON is full precision); per-answer artefacts in the model-scores export."
+  },
+  {
+   "id": "REV-F20",
+   "title": "Mirror credentials appear in model fetch logs and errors",
+   "severity": "high",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "done",
+   "evidence": "`355efc0`: Mirror credentials redacted from every log line and error of the model download."
+  },
+  {
+   "id": "REV-F21",
+   "title": "Model staging durability and bundle-level activation need cross-path proof",
+   "severity": "medium",
+   "already_tracked": true,
+   "mentions_conjecture": true,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "done",
+   "evidence": "`194b730`: Directory fsync via atomic_file::commit at all four placements. Mixed-generation hypothesis REJECTED by reading (per-file pin hash before rename; model then labels)."
+  },
+  {
+   "id": "REV-F22",
+   "title": "Mutation gate was not fully green in last inspected mutation run",
+   "severity": "medium",
+   "already_tracked": true,
+   "mentions_conjecture": false,
+   "work_package": "review-2026-11-26",
+   "phase": null,
+   "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
+   "status": "in_progress",
+   "evidence": "`65e2a68`: ffmpeg job annotated, model.rs shards 70->80 min; check-ci-config.py passes locally (durations not readable here). The [3/3] job's own failure (log 404) is unexplained. Needs a mutation run on the integrated head."
   }
  ]
 }

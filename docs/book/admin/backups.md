@@ -50,6 +50,8 @@ Recordings you have **locked** are never purged by either, and locking takes eff
 
 To lock a clip, open [Recordings](../guide/recordings.md) and use the 🔒 **Lock** action on a row — or select several and use the bulk **Lock** button above the grid. Locked rows show an unlock action in the same place.
 
+**Detections a stop left unprocessed** are kept in `clip-queue/`, beside the database, and recorded at the next start, under the analysis run and at the thresholds that were in force when they were kept. Each batch keeps only the stretch of audio its clips will be cut from, silent everywhere else, so on a station with the human-sound filter on nothing the filter did not judge reaches the disk. A detection the database will not take is offered again at each start; after three starts that failed, or when its line cannot be read, it is **held**: the start-up log says so at error level every time, and the station never deletes it. A held batch can be inspected and, once dealt with, removed by hand with the service stopped.
+
 ## Offsite backups
 
 A snapshot on the same SD card as the database it came from protects you from a corrupt page and a bad import. It does not protect you from the card, and SD cards in a box on a fence post are a *when*, not an *if*.
