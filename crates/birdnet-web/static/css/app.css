@@ -712,6 +712,9 @@ a:hover { text-decoration: underline; }
    health lists the models the detector last reported." axe's link-in-text-block
    caught it on its first run (UIR-12). */
 .cls-detail a,
+/* What a count counts, under the species list and a day's log (UIR-30): axe's
+   link-in-text-block caught its link to the events on its first sweep. */
+[data-counts] a,
 a.dr-link {
   text-decoration: underline;
   text-underline-offset: 2px;

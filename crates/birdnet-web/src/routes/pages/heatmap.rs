@@ -73,7 +73,7 @@ pub(crate) fn range_from_query(days: Option<&str>) -> u32 {
 /// `aria-pressed` carries the selection (a CSS class alone said nothing to a screen reader).
 fn range_control(chosen: u32) -> String {
     let mut out = String::from(
-        r#"<form class="seg" id="range-controls" method="get" action="/patterns" role="group" aria-label="Time range for every chart on this page"><input type="hidden" name="tab" value="when">"#,
+        r#"<form method="get" action="/patterns"><input type="hidden" name="tab" value="when"><div class="seg" id="range-controls" role="group" aria-label="Time range for every chart on this page">"#,
     );
     for (days, label) in RANGES {
         let on = days == chosen;
@@ -83,7 +83,9 @@ fn range_control(chosen: u32) -> String {
             if on { " active" } else { "" }
         );
     }
-    out.push_str("</form>");
+    // The group is a `div` inside the form: `role="group"` is not one a `form` may take
+    // (axe's aria-allowed-role caught it on the first sweep).
+    out.push_str("</div></form>");
     out
 }
 
