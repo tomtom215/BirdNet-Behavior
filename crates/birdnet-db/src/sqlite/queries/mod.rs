@@ -8,6 +8,7 @@ pub mod detection_reviews;
 pub mod detections;
 pub mod discards;
 pub mod effort;
+pub mod events;
 pub mod heatmap;
 pub mod images;
 pub mod imports;
@@ -16,6 +17,7 @@ pub mod maintenance;
 pub mod model_scores;
 pub mod overview;
 pub mod quarantine;
+pub mod site_effort;
 pub mod species;
 
 pub use analysis_runs::{
