@@ -13,6 +13,7 @@ pub mod pipeline;
 pub mod privacy;
 pub mod sound_class;
 pub mod types;
+pub mod window_slots;
 
 /// The two filters that judge a whole chunk rather than one detection.
 ///
