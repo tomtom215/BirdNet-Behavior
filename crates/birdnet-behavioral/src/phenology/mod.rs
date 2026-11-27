@@ -53,7 +53,8 @@ pub use abundance::{
     weekly_richness_sql,
 };
 pub use timing::{
-    first_detection_sql, interannual_trend_sql, migration_window_sql, phenology_timing_sql,
+    LISTENED_DAY_SHARE, first_detection_sql, interannual_trend_sql, migration_window_sql,
+    phenology_timing_sql,
 };
 pub use types::{
     AbundanceParams, MigrationWindow, PhenologyParams, PhenologyRecord, WeeklyAbundance,

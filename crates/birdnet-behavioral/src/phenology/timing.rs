@@ -33,6 +33,13 @@ const YEAR_EXPR: &str = "CAST(strftime(detection_date, '%Y') AS INTEGER)";
 /// row the view could not parse has no bucket to belong to.
 const PLACEABLE: &str = "detection_date IS NOT NULL";
 
+/// The share of the station's typical day a date needs to count as listened.
+///
+/// It is the one listened-day rule (`birdnet_db::sqlite::queries::site_effort::LISTENED_DAY`,
+/// which reads this number). The typical day is the median, over the ledger's dates
+/// with any audio, of the seconds recorded that date summed over sources.
+pub const LISTENED_DAY_SHARE: f64 = 0.5;
+
 /// Day-of-year of `date_expr`, projected onto a common (non-leap) year.
 ///
 /// A raw day-of-year is not comparable between years. From 1 March a leap year
@@ -126,8 +133,16 @@ const DOY_EXPR: &str = "CAST(CASE
 /// listening (no `recording_effort` row with seconds above zero, summed over
 /// sources), `false` when all 14 have some, and NULL when the listening record
 /// begins after `arrival_q05`: the station did not record its listening then,
-/// so it cannot say. A day with any listening counts as listened; the flag
-/// sees an outage, not a short day.
+/// so it cannot say.
+///
+/// A day counts as listened by the one listened-day rule
+/// ([`LISTENED_DAY_SHARE`] of the station's typical day, the median over the
+/// ledger's dates with any audio of the seconds recorded that date, summed over
+/// sources: `birdnet_db::sqlite::queries::site_effort::LISTENED_DAY`). It used
+/// to be any day with more than 0 s, a third rule beside that one and the
+/// calendar's 60 s, so a run-up of minute-long days (a full card, a dropping
+/// stream) read as "listened" here and as "not listening" everywhere else
+/// (N26-05).
 pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
     let where_sql = where_clause(&[
         Some(PLACEABLE.to_string()),
@@ -177,11 +192,22 @@ pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
             FROM detection_days
             GROUP BY Com_Name, year
         ),
-        listened_days AS (
-            SELECT TRY_CAST(date AS DATE)                       AS day
+        effort_by_day AS (
+            SELECT TRY_CAST(date AS DATE)                       AS day,
+                   SUM(seconds)                                 AS seconds
             FROM recording_effort
+            WHERE TRY_CAST(date AS DATE) IS NOT NULL
             GROUP BY day
-            HAVING day IS NOT NULL AND SUM(seconds) > 0
+        ),
+        typical_day AS (
+            SELECT MEDIAN(seconds) FILTER (WHERE seconds > 0)   AS typical
+            FROM effort_by_day
+        ),
+        listened_days AS (
+            SELECT e.day
+            FROM effort_by_day e CROSS JOIN typical_day t
+            WHERE t.typical IS NOT NULL
+              AND e.seconds >= {share} * t.typical
         ),
         effort_record AS (
             SELECT MIN(TRY_CAST(date AS DATE))                  AS begins
@@ -214,6 +240,7 @@ pub fn phenology_timing_sql(params: &PhenologyParams) -> String {
         ORDER BY t.year DESC, t.species
         LIMIT {limit}",
         limit = params.limit,
+        share = LISTENED_DAY_SHARE,
     )
 }
 

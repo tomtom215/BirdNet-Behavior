@@ -32,15 +32,14 @@
 //! the rule `birdnet_timeseries::queries::trend::is_listened_day` and its SQL
 //! apply (half the station's typical day, the median over dates with audio), with
 //! the share held equal to `trend::EFFORT_FLOOR_SHARE` by a test in
-//! `birdnet-web`, which depends on both crates. Call sites that still apply
-//! another rule, listed and not changed here (each is its own decision):
+//! `birdnet-web`, which depends on both crates.
 //!
-//! * `crates/birdnet-behavioral/src/phenology/timing.rs` (`listened_days` CTE):
-//!   any day with more than 0 s ([`ListenedDayRule::AnyAudio`], N26-05). Its own
-//!   doc says it looks for an outage, not a short day.
-//! * `crates/birdnet-web/src/routes/pages/viz/heat.rs` (calendar `listened`
-//!   closure): at least 60 s (`ListenedDayRule::AtLeastSeconds(60.0)`),
-//!   RES-26's remainder.
+//! The share is `birdnet_behavioral::phenology::LISTENED_DAY_SHARE`, which
+//! phenology's effort-gap flag (`phenology_timing_sql`) also reads, and the
+//! calendar (`birdnet-web` `viz::heat::calendar`) takes a map already judged by
+//! this rule: the two other rules those surfaces applied (any day above 0 s, and
+//! 60 s) are gone (N26-05). What still asks another question:
+//!
 //! * `effort::detection_history` and `/api/v2/detections/export/history` ask a
 //!   different question (was an *occasion* surveyed, by its best-covered source,
 //!   against a caller's `min_seconds`), and are not a listened-day rule.
@@ -54,7 +53,7 @@ use super::events::SiteMap;
 use crate::sqlite::connection::DbError;
 
 /// The share of the station's typical day a listened day needs.
-pub const LISTENED_DAY_SHARE: f64 = 0.5;
+pub const LISTENED_DAY_SHARE: f64 = birdnet_behavioral::phenology::LISTENED_DAY_SHARE;
 
 /// A rule for "the station listened to this day".
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -400,7 +400,9 @@ pub struct Calendar<'a> {
     pub to: &'a str,
     /// Count per ISO date; a date not in the map had none heard.
     pub counts: &'a BTreeMap<String, i64>,
-    /// Seconds recorded per ISO date, when the station has a ledger for the period.
+    /// Seconds recorded per ISO date, when the station has a ledger for the period,
+    /// **judged** by the one listened-day rule (`listening::effort_by_date`): a date
+    /// the ledger holds that fell short of half the station's typical day reads 0.
     pub effort: Option<&'a BTreeMap<String, f64>>,
     /// What is counted, plural.
     pub unit: &'a str,
@@ -450,9 +452,12 @@ pub fn calendar(o: &Calendar<'_>) -> String {
     };
     let off_known = o.effort.is_some_and(|e| !e.is_empty());
     let listened = |date: &str| -> bool {
-        // Today is never "off": the recorder credits on a timer.
+        // Today is never "off": the recorder credits on a timer. The map is judged, so
+        // any seconds at all are a listened day: a second floor of its own here (it was
+        // 60 s) is a third listened-day rule, which drew a station on a short schedule
+        // as off on the days the rule says it listened (N26-05).
         o.effort
-            .is_none_or(|e| e.get(date).is_some_and(|s| *s >= 60.0) || date == o.to)
+            .is_none_or(|e| e.get(date).is_some_and(|s| *s > 0.0) || date == o.to)
     };
 
     let mut svg = String::with_capacity(48 * 1024);
@@ -914,7 +919,8 @@ mod tests {
             [
                 ("2026-10-14", 86_400.0),
                 ("2026-10-15", 86_400.0),
-                ("2026-10-17", 10.0),
+                // Short of the rule: judged, it reads zero.
+                ("2026-10-17", 0.0),
             ]
             .iter()
             .map(|(d, s)| ((*d).to_string(), *s))
@@ -931,7 +937,7 @@ mod tests {
         );
         assert!(
             svg.contains("Sat 17 Oct 2026&#10;The station was not listening"),
-            "ten seconds is not a day: {svg}"
+            "a day short of the rule is not a day: {svg}"
         );
         assert!(
             svg.contains("Sun 18 Oct 2026&#10;Listened all day"),
@@ -939,6 +945,34 @@ mod tests {
         );
         let no_ledger = cal("2026-10-14", "2026-10-18", c, None);
         assert!(!no_ledger.contains("not listening"), "{no_ledger}");
+    }
+
+    /// N26-05. A station on a short schedule (a typical day of 80 s) listened to a day
+    /// of 40 s by the one rule, and the judged map keeps its seconds: the calendar must
+    /// not apply a floor of its own and hatch it.
+    #[test]
+    fn a_day_the_rule_counts_is_never_drawn_off() {
+        let c: &'static _ = Box::leak(Box::new(counts_of(&[("2026-10-14", 5)])));
+        let ledger = crate::routes::pages::listening::StationLedger::from_daily(
+            [
+                ("2026-10-14", 80.0),
+                ("2026-10-15", 40.0),
+                ("2026-10-16", 80.0),
+            ]
+            .iter()
+            .map(|(d, s)| ((*d).to_string(), *s))
+            .collect(),
+        );
+        let e: &'static _ = Box::leak(Box::new(ledger.judged("2026-10-14", "2026-10-17")));
+        assert!(
+            e["2026-10-15"] > 0.0,
+            "the rule counts 40 s of an 80 s day: {e:?}"
+        );
+        let svg = cal("2026-10-14", "2026-10-17", c, Some(e));
+        assert!(
+            svg.contains("Thu 15 Oct 2026&#10;Listened all day and heard none"),
+            "a listened day drawn as off: {svg}"
+        );
     }
 
     #[test]
