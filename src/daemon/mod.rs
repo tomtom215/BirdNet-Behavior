@@ -420,7 +420,7 @@ pub fn start_detection_daemon(
         model_path,
         labels_path,
     };
-    let extraction = extraction_config(cli, config, &state, &settings);
+    let extraction = extraction_config(cli, config, &state, &settings, &planned.privacy_rules);
     let model_thresholds = planned.model_thresholds.clone();
     let daemon_config = daemon_config(
         cli,
@@ -474,6 +474,10 @@ struct Settings {
     noise_remember_secs: f32,
     confirmation: birdnet_core::detection::corroboration::ConfirmationLevel,
     overlap: f32,
+    /// `OCCURRENCE_WEEK` (review F13).
+    occurrence_week: birdnet_core::detection::pipeline::OccurrenceWeek,
+    /// `ANALYSIS_CHANNELS` (review F12).
+    channels: birdnet_core::detection::pipeline::ChannelAnalysis,
     species_thresholds: std::collections::HashMap<String, f64>,
     species_lists: birdnet_core::inference::species_filter::SpeciesLists,
     species_lists_provider: birdnet_core::inference::species_filter::SpeciesListsProvider,
@@ -576,6 +580,8 @@ impl Settings {
                 0.0,
                 config.and_then(|c| c.get_parsed::<f32>("OVERLAP").ok()),
             ),
+            occurrence_week: config::resolve_occurrence_week(config),
+            channels: config::resolve_channel_analysis(config),
             species_thresholds,
             species_lists,
             species_lists_provider,
@@ -647,6 +653,13 @@ struct Planned {
     model_thresholds: std::collections::HashMap<String, f32>,
     routes: std::collections::HashMap<String, Vec<String>>,
     observer: birdnet_core::detection::daemon::ModelStateObserver,
+    /// Each classifier's own privacy rule (review F09).
+    privacy_rules: Vec<(
+        String,
+        birdnet_core::detection::privacy::ClassifierPrivacyRule,
+    )>,
+    /// Each classifier's own noise threshold (review F09).
+    noise_rules: Vec<(String, f32)>,
 }
 
 /// Which classifiers this machine can actually afford (`G-10` Stage 2). The
@@ -683,6 +696,8 @@ fn plan_classifiers(
         model_thresholds,
         routes: model_plan.routes,
         observer,
+        privacy_rules: model_plan.privacy_rules,
+        noise_rules: model_plan.noise_rules,
     }
 }
 
@@ -717,6 +732,8 @@ fn daemon_config(
         extra_models,
         routes,
         observer,
+        privacy_rules,
+        noise_rules,
         ..
     } = planned;
     birdnet_core::detection::daemon::DaemonConfig {
@@ -731,7 +748,11 @@ fn daemon_config(
         primary_sample_rate: primary.sample_rate,
         primary_output_scale: primary.output_scale,
         model_routes: routes,
-        pipeline: build_pipeline_config(watch_dir, settings.overlap),
+        pipeline: birdnet_core::detection::pipeline::PipelineConfig {
+            occurrence_week: settings.occurrence_week,
+            channels: settings.channels,
+            ..build_pipeline_config(watch_dir, settings.overlap)
+        },
         model: build_model_config(settings.sensitivity, settings.load_confidence),
         process_existing: cli.process_existing,
         metadata_model_path: settings.metadata_model_path.clone(),
@@ -764,6 +785,8 @@ fn daemon_config(
         privacy_clip_reach,
         noise_threshold: settings.noise_threshold,
         noise_classes: settings.noise_classes.clone(),
+        classifier_privacy: privacy_rules,
+        classifier_noise: noise_rules,
         noise_remember_secs: settings.noise_remember_secs,
         confirmation: settings.confirmation,
         latitude: settings.latitude,
@@ -779,18 +802,27 @@ fn daemon_config(
 /// With the privacy filter on, a clip stays inside its own segment, and the
 /// filter is told how far a clip reaches so it can clear the whole of it
 /// (PIPE7); "on" is the filter's own rule, so clips are kept in their segment
-/// exactly when the filter runs.
+/// exactly when the filter runs: a classifier's own rule (review F09) turns it
+/// on as the station's does, so it counts here too.
 fn extraction_config(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
     state: &birdnet_web::state::AppState,
     settings: &Settings,
+    privacy_rules: &[(
+        String,
+        birdnet_core::detection::privacy::ClassifierPrivacyRule,
+    )],
 ) -> birdnet_core::audio::extraction::ExtractionConfig {
     let mut extraction = build_extraction_config(cli, config, &state.recording_dir());
-    extraction.own_segment_only =
-        birdnet_core::detection::privacy::PrivacyFilter::new(settings.privacy_threshold)
-            .with_rank_cutoff(settings.privacy_rank)
-            .is_enabled();
+    extraction.own_segment_only = privacy_rules
+        .iter()
+        .fold(
+            birdnet_core::detection::privacy::PrivacyFilter::new(settings.privacy_threshold)
+                .with_rank_cutoff(settings.privacy_rank),
+            |filter, (id, rule)| filter.with_classifier_rule(id.clone(), *rule),
+        )
+        .is_enabled();
     extraction
 }
 
@@ -1127,10 +1159,66 @@ mod settings_tests {
         ] {
             let cli = cli(args);
             let settings = Settings::resolve(&cli, None, &state);
-            let extraction = extraction_config(&cli, None, &state, &settings);
+            let extraction = extraction_config(&cli, None, &state, &settings, &[]);
             assert_eq!(extraction.own_segment_only, own_segment, "{args:?}");
             assert_eq!(extraction.output_dir, state.recording_dir(), "{args:?}");
         }
+        // Review F09: with the station's rules off, one classifier's own rule
+        // runs the filter, so its clips stay in their segment too.
+        let cli = cli(&["--privacy-rank", "0"]);
+        let settings = Settings::resolve(&cli, None, &state);
+        let rule = birdnet_core::detection::privacy::ClassifierPrivacyRule {
+            threshold: Some(0.4),
+            rank_cutoff: None,
+        };
+        let extraction =
+            extraction_config(&cli, None, &state, &settings, &[("perch".to_owned(), rule)]);
+        assert!(
+            extraction.own_segment_only,
+            "a classifier's own privacy rule runs the filter"
+        );
+    }
+
+    /// The configuration's per-window week, chosen channel and per-classifier
+    /// privacy and noise rules (review F09, F12, F13) reach the configuration
+    /// the daemon runs with, not only the settings they are read into.
+    #[test]
+    fn the_review_s_analysis_settings_reach_the_daemon() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let model = tmp.path().join("model.onnx");
+        let labels = tmp.path().join("labels.txt");
+        let config = config(
+            "STATION_PROFILE=research\nANALYSIS_CHANNELS=right\nMODEL_ID=v24\n\
+             MODEL_PRIVACY_THRESHOLD=0.3\nMODEL_NOISE_THRESHOLD=0.6\n",
+        );
+        let cli = cli(&[]);
+        let settings = Settings::resolve(&cli, Some(&config), &state);
+        let planned = plan_classifiers(Some(&config), &state, &model, &labels);
+        let daemon = daemon_config(
+            &cli,
+            &state,
+            Paths {
+                watch_dir: tmp.path().join("recs"),
+                model_path: model,
+                labels_path: labels,
+            },
+            &settings,
+            planned,
+            birdnet_core::detection::daemon::InFlight::new(),
+            birdnet_core::detection::privacy::ClipReach::default(),
+        );
+        assert_eq!(
+            daemon.pipeline.occurrence_week,
+            birdnet_core::detection::pipeline::OccurrenceWeek::PerWindow
+        );
+        assert_eq!(
+            daemon.pipeline.channels,
+            birdnet_core::detection::pipeline::ChannelAnalysis::Only(1)
+        );
+        assert_eq!(daemon.classifier_privacy.len(), 1);
+        assert_eq!(daemon.classifier_privacy[0].0, "v24");
+        assert_eq!(daemon.classifier_noise, [("v24".to_owned(), 0.6)]);
     }
 
     /// The Species page is handed the daemon's range model, so a configured

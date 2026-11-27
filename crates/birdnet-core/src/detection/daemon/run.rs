@@ -969,13 +969,21 @@ impl DaemonLoop {
 /// speech span a second and a half short, so a clip reaching into the tail of
 /// a chunk with a human in it was kept.
 fn chunk_filters(config: &DaemonConfig, pipeline_config: &PipelineConfig) -> ChunkFilters {
-    ChunkFilters {
-        privacy: PrivacyFilter::new(config.privacy_threshold)
+    let privacy = config.classifier_privacy.iter().fold(
+        PrivacyFilter::new(config.privacy_threshold)
             .with_rank_cutoff(config.privacy_rank)
             .with_clip_reach(config.privacy_clip_reach)
             .with_chunk_secs(pipeline_config.chunk_duration_secs),
-        noise: NoiseFilter::new(config.noise_threshold, config.noise_classes.clone())
+        |filter, (id, rule)| filter.with_classifier_rule(id.clone(), *rule),
+    );
+    let noise = config.classifier_noise.iter().fold(
+        NoiseFilter::new(config.noise_threshold, config.noise_classes.clone())
             .remembering(config.noise_remember_secs),
+        |filter, (id, threshold)| filter.with_classifier_threshold(id.clone(), *threshold),
+    );
+    ChunkFilters {
+        privacy,
+        noise,
         confirmation: config.confirmation,
     }
 }
@@ -1216,6 +1224,43 @@ mod tests {
     use super::*;
     use crate::inference::model::ModelConfig;
 
+    /// Review F09: a classifier's own privacy and noise rules, from the
+    /// daemon's configuration, reach the filters every file is judged by, and
+    /// a per-classifier privacy rule turns the filter on by itself.
+    #[test]
+    fn each_classifier_s_own_filter_rules_reach_the_filters() {
+        use crate::detection::privacy::ClassifierPrivacyRule;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.noise_threshold = 0.2;
+        config.noise_classes = vec!["Dog".to_owned()];
+        config.classifier_privacy = vec![(
+            "perch".to_owned(),
+            ClassifierPrivacyRule {
+                threshold: Some(0.4),
+                rank_cutoff: None,
+            },
+        )];
+        config.classifier_noise = vec![("perch".to_owned(), 0.6)];
+        let filters = chunk_filters(&config, &config.pipeline);
+        assert_eq!(filters.privacy.rule_for("perch"), (0.4, 0));
+        assert_eq!(filters.privacy.rule_for("birdnet"), (0.0, 0));
+        assert!(filters.privacy.is_enabled(), "perch's own rule is a rule");
+        assert!((filters.noise.threshold_for(Some("perch")) - 0.6).abs() < f32::EPSILON);
+        assert!((filters.noise.threshold_for(Some("birdnet")) - 0.2).abs() < f32::EPSILON);
+    }
+
+    /// The counterpart: with no classifier rules, privacy stays off at the
+    /// station's off.
+    #[test]
+    fn with_no_classifier_rules_the_station_s_rules_stand() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tiny_config(tmp.path());
+        let filters = chunk_filters(&config, &config.pipeline);
+        assert!(!filters.privacy.is_enabled());
+        assert_eq!(filters.privacy.rule_for("perch"), (0.0, 0));
+    }
+
     /// A daemon over the tiny bundled model, watching an empty directory.
     fn tiny_config(tmp: &std::path::Path) -> DaemonConfig {
         const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
@@ -1259,6 +1304,8 @@ mod tests {
             noise_threshold: 0.0,
             noise_remember_secs: 0.0,
             noise_classes: Vec::new(),
+            classifier_privacy: Vec::new(),
+            classifier_noise: Vec::new(),
             confirmation: crate::detection::corroboration::ConfirmationLevel::Off,
             latitude: None,
             longitude: None,

@@ -562,6 +562,13 @@ fn decode_file_inner(
                 if decoded_format.is_none() {
                     decoded_format = Some(buffer_format_name(&audio_buf).to_owned());
                 }
+                // A one-channel file has no channel to choose: it is decoded
+                // as it is, and its provenance says mono. A source the capture
+                // path reduced to one channel writes such files.
+                let select = match select {
+                    Select::Channel(_) if num_channels == 1 => Select::Channel(0),
+                    other => other,
+                };
                 if let Select::Channel(c) = select
                     && c >= num_channels
                 {
@@ -768,6 +775,23 @@ pub(crate) mod tests {
             (p.channels, p.mix, r, warned),
             (1, AppliedMix::Mono, None, false)
         );
+    }
+
+    /// A one-channel file has no channel to choose: asked for the right
+    /// channel, it is decoded as it is and says it was mono. A source the
+    /// capture path already reduced to one channel (its Left, Right or Mono
+    /// pick) writes such files, and a station-wide `ANALYSIS_CHANNELS=right`
+    /// must not fail every one of them.
+    #[test]
+    fn a_mono_file_asked_for_one_channel_is_decoded_as_it_is() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mono.wav");
+        write_multichannel(&path, &[1.0]);
+        let plain = decode_file(&path).unwrap();
+        let (right, provenance) = decode_file_with_provenance(&path, ChannelMix::RIGHT)
+            .expect("a mono file is its own only channel");
+        assert_eq!(provenance.mix, AppliedMix::Mono);
+        assert_eq!(right.samples, plain.samples);
     }
 
     /// One channel, or each, can be decoded on its own; a channel the file does

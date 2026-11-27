@@ -836,6 +836,14 @@ pub struct DaemonConfig {
     pub noise_threshold: f32,
     /// Non-bird label names the noise filter watches.
     pub noise_classes: Vec<String>,
+    /// Privacy rules for single classifiers, by id, each judged on its own
+    /// scores (review F09): `PrivacyFilter::with_classifier_rule`. Empty, the
+    /// default, judges every classifier by the station's rule.
+    pub classifier_privacy: Vec<(String, crate::detection::privacy::ClassifierPrivacyRule)>,
+    /// Noise thresholds for single classifiers, by id (review F09):
+    /// `NoiseFilter::with_classifier_threshold`. Empty judges every classifier
+    /// by [`Self::noise_threshold`].
+    pub classifier_noise: Vec<(String, f32)>,
     /// How long a noise-suppressed chunk's species stay suppressed, in seconds
     /// (`G-17`). `0.0` — the default — is no window at all.
     pub noise_remember_secs: f32,
@@ -1192,6 +1200,8 @@ mod tests {
             privacy_clip_reach: crate::detection::privacy::ClipReach::default(),
             noise_threshold: 0.0,
             noise_classes: Vec::new(),
+            classifier_privacy: Vec::new(),
+            classifier_noise: Vec::new(),
             noise_remember_secs: 0.0,
             confirmation: ConfirmationLevel::Off,
             latitude: None,

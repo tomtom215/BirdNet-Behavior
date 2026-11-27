@@ -122,6 +122,11 @@ const READ_SHAPES: &[&str] = &[
     "labels_key: \"",
     "id_key: \"",
     "threshold_key: \"",
+    // The per-classifier privacy and noise keys, in the same table and the
+    // primary's (`FilterKeys`, review F09).
+    "privacy_score: \"",
+    "privacy_rank: \"",
+    "noise_score: \"",
     "sample_rate_key: \"",
     "output_scale_key: \"",
     // The primary classifier's threshold, sample rate and output scale go
