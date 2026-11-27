@@ -7788,6 +7788,150 @@
         }
       }
     },
+    "/detections/export/search": {
+      "get": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Export the rows a detection-log search lists",
+        "description": "Takes the `/search` page's query string (`q`, `species`, `from`, `to`, `hour_from`, `hour_to`, `conf_min`, `conf_max` as percentages, `source`, `verdict`, `locked`, `category`, `sort`) and answers every matching row, not one page, in the detections CSV's columns and the page's order (UIC-10). Reads the raw table, so a search for rejected rows exports them.",
+        "operationId": "exportSearch",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "hour_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "hour_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "conf_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "conf_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "verdict",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "locked",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching rows.",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "More than 1,000,000 rows match."
+          }
+        }
+      }
+    },
     "/detections/export/history": {
       "get": {
         "tags": [

@@ -276,18 +276,9 @@ async fn search_results_partial(
     if !headers.contains_key("hx-request") {
         return axum::response::Redirect::to(&page_url).into_response();
     }
-    let mut filter = params.to_filter();
-    let offset = params.offset.unwrap_or(0);
     let names = state.names_handle();
-    // What was typed is read in the station's language: the free text also covers
-    // the species whose name contains it, and an exact species name is turned into
-    // the scientific name the database matches it by.
-    filter.text_also_species = super::name_search::also_species(&names, filter.text.as_deref());
-    for species in &mut filter.species {
-        if let Some(scientific) = names.scientific_name_for(species) {
-            *species = scientific.to_owned();
-        }
-    }
+    let filter = resolved_filter(&params, &names);
+    let offset = params.offset.unwrap_or(0);
 
     let result = tokio::task::spawn_blocking(move || {
         state.with_read_db(|conn| {
@@ -317,6 +308,27 @@ async fn search_results_partial(
         html,
     )
         .into_response()
+}
+
+/// The filter a search's query string asks for, in the station's language.
+///
+/// The free text also covers the species whose name contains it, and an exact
+/// species name is turned into the scientific name the database matches it
+/// by. One translation for the page and its CSV
+/// (`/api/v2/detections/export/search`), so the two list the same rows.
+#[must_use]
+pub fn resolved_filter(
+    params: &SearchParams,
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> DetectionFilter {
+    let mut filter = params.to_filter();
+    filter.text_also_species = super::name_search::also_species(names, filter.text.as_deref());
+    for species in &mut filter.species {
+        if let Some(scientific) = names.scientific_name_for(species) {
+            *species = scientific.to_owned();
+        }
+    }
+    filter
 }
 
 /// One bulk action over the selected rows.
@@ -741,8 +753,11 @@ fn render_results(
     let shown_to = i64::from(offset).saturating_add(i64::try_from(rows.len()).unwrap_or(i64::MAX));
     let _ = write!(
         html,
-        "<p class=\"sr-count\">Showing {}\u{2013}{shown_to} of {total}</p>",
-        i64::from(offset) + 1
+        "<p class=\"sr-count\">Showing {}\u{2013}{shown_to} of {total} \u{b7} \
+         <a href=\"/api/v2/detections/export/search?{qs}\" download>Download all {total} \
+         as CSV</a></p>",
+        i64::from(offset) + 1,
+        qs = super::escape_html(params.to_query_string().trim_start_matches('&')),
     );
 
     html.push_str(

@@ -228,7 +228,7 @@ pub(super) struct RowProvenance {
 }
 
 impl RowProvenance {
-    fn load(conn: &rusqlite::Connection) -> Result<Self, birdnet_db::sqlite::DbError> {
+    pub(super) fn load(conn: &rusqlite::Connection) -> Result<Self, birdnet_db::sqlite::DbError> {
         let sources = birdnet_db::station::SourceProvenance::load(conn).map_err(|e| match e {
             birdnet_db::station::StationError::Sqlite(e) => birdnet_db::sqlite::DbError::Sqlite(e),
             birdnet_db::station::StationError::Invalid(m) => birdnet_db::sqlite::DbError::Schema(m),
@@ -343,8 +343,9 @@ fn detections_to_csv(
     detections_to_csv_with(rows, runs, &RowProvenance::default())
 }
 
-/// [`detections_to_csv`] with each row's attribution.
-fn detections_to_csv_with(
+/// [`detections_to_csv`] with each row's attribution: the detections export's
+/// and the search export's CSV (UIC-10), so the two carry the same columns.
+pub(super) fn detections_to_csv_with(
     rows: &[birdnet_db::sqlite::DetectionRow],
     runs: &birdnet_db::sqlite::ModelAttribution,
     provenance: &RowProvenance,

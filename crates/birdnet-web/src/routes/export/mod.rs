@@ -11,6 +11,7 @@
 //! | `model_scores` | Each classifier's own score per detection |
 //! | `effort`  | The hourly effort ledger, and a species' detection history |
 //! | `study`   | The study bundle: a deterministic ZIP with a manifest (RES-08) |
+//! | `search`  | Every row a detection-log search lists (UIC-10) |
 //! | `zip`     | The deterministic ZIP writer the bundle uses |
 
 mod birddb;
@@ -19,6 +20,7 @@ mod ebird;
 mod effort;
 mod model_scores;
 mod raven;
+mod search;
 mod study;
 pub(crate) mod zip;
 
@@ -52,6 +54,7 @@ pub fn router() -> Router<AppState> {
             get(model_scores::export_model_scores),
         )
         .route("/detections/export/study", get(study::export_study))
+        .route("/detections/export/search", get(search::export_search))
         .route("/recordings/{filename}/raven.txt", get(raven::clip_raven))
         .route("/recordings/{filename}/labels.txt", get(raven::clip_labels))
 }
