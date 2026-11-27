@@ -92,13 +92,16 @@ const MAX_RIDGES: usize = 12;
 
 /// Fewer listened days than this in a week column and the week's index is unknown: one or
 /// two days are a sample of anything (`viz::uncertainty::TOO_FEW_BELOW`, the same three).
-const MIN_LISTENED_DAYS: u32 = 3;
+const MIN_LISTENED_DAYS: u32 = super::viz::uncertainty::TOO_FEW_BELOW;
 
 /// A species that earned a ridge: its stored name, its detections in each week column and how
 /// sharply seasonal it is.
 struct Seasonal {
     name: String,
     counts: [f64; 52],
+    /// Detections per seven typical days of listening, `None` where too little was listened
+    /// to say: what the ridge's height draws (N26-07).
+    index: [Option<f64>; 52],
     /// Busiest week over the median week it was heard in, per listened time.
     seasonality: f64,
 }
@@ -200,6 +203,7 @@ fn pick(all: Vec<Weekly>, max_species: usize) -> Vec<Seasonal> {
             seasonal_index(&w.index, &w.counted).map(|seasonality| Seasonal {
                 name: w.name,
                 counts: w.counts,
+                index: w.index,
                 seasonality,
             })
         })
@@ -210,11 +214,17 @@ fn pick(all: Vec<Weekly>, max_species: usize) -> Vec<Seasonal> {
             .then(a.name.cmp(&b.name))
     });
     earned.truncate(max_species);
+    // The busiest week by the index the ridge draws, not by the raw count (N26-07).
     let peak_week = |s: &Seasonal| {
-        s.counts
+        s.index
             .iter()
             .enumerate()
-            .fold(0, |best, (i, c)| if *c > s.counts[best] { i } else { best })
+            .filter_map(|(i, v)| v.map(|v| (i, v)))
+            .fold(
+                (0, f64::MIN),
+                |best, (i, v)| if v > best.1 { (i, v) } else { best },
+            )
+            .0
     };
     earned.sort_by(|a, b| peak_week(a).cmp(&peak_week(b)).then(a.name.cmp(&b.name)));
     earned
@@ -276,8 +286,17 @@ impl Listening {
 }
 
 /// Every species' weeks of `year` as of the local date `today`.
+#[cfg(test)]
 fn weekly(conn: &rusqlite::Connection, year: i32, today: &str) -> rusqlite::Result<Vec<Weekly>> {
-    let listening = Listening::read(conn, year, today)?;
+    weekly_from(conn, year, &Listening::read(conn, year, today)?)
+}
+
+/// Every species' weeks of `year`, over the listening already read.
+fn weekly_from(
+    conn: &rusqlite::Connection,
+    year: i32,
+    listening: &Listening,
+) -> rusqlite::Result<Vec<Weekly>> {
     let mut stmt = conn.prepare(&format!(
         "SELECT Com_Name, Date, {WEEK_COLUMN} AS wk, COUNT(*) AS n \
          FROM detections_analytic \
@@ -322,6 +341,7 @@ fn weekly(conn: &rusqlite::Connection, year: i32, today: &str) -> rusqlite::Resu
         .collect())
 }
 
+#[cfg(test)]
 fn collect_ridges(
     conn: &rusqlite::Connection,
     year: i32,
@@ -329,6 +349,37 @@ fn collect_ridges(
     max_species: usize,
 ) -> rusqlite::Result<Vec<Seasonal>> {
     Ok(pick(weekly(conn, year, today)?, max_species))
+}
+
+/// The Migration tab's chart for `year` as of the local date `today` (in chart column
+/// `today_week`): the ridgeline, or the empty state when no species earned a ridge.
+///
+/// One read of the listening serves both the choice of species and the picture, so the
+/// weeks the chart hatches as "too little listening" are exactly the weeks that had no
+/// index when the species were chosen.
+fn ridgeline_html(
+    conn: &rusqlite::Connection,
+    year: i32,
+    today: &str,
+    today_week: u8,
+    names: &birdnet_core::i18n::NameLocalizer,
+) -> rusqlite::Result<String> {
+    let listening = Listening::read(conn, year, today)?;
+    let ridges = pick(weekly_from(conn, year, &listening)?, MAX_RIDGES);
+    if ridges.is_empty() {
+        return Ok(super::empty_states::no_migrants());
+    }
+    let diversity = weekly_diversity(conn, year)?;
+    let latitude = super::station_location(conn).map(|l| l.lat);
+    Ok(render_ridgeline(
+        &ridges,
+        &diversity,
+        &listening.days,
+        latitude,
+        year,
+        today_week,
+        names,
+    ))
 }
 
 // ---------------------------------------------------------------------------
@@ -346,26 +397,12 @@ fn collect_ridges(
 fn compute_ridgeline(state: &AppState) -> Option<String> {
     let year = current_year();
     // Every read propagates: a failed one is a failed fragment, not a quiet year.
-    let (ridges, diversity, latitude) = state
+    state
         .with_read_db(|conn| {
             let today = crate::routes::pages::today_date_string();
-            let ridges = collect_ridges(conn, year, &today, MAX_RIDGES)?;
-            let diversity = weekly_diversity(conn, year)?;
-            let latitude = super::station_location(conn).map(|l| l.lat);
-            Ok::<_, rusqlite::Error>((ridges, diversity, latitude))
+            ridgeline_html(conn, year, &today, current_week(), state.names())
         })
-        .ok()?;
-    if ridges.is_empty() {
-        return Some(super::empty_states::no_migrants());
-    }
-    Some(render_ridgeline(
-        &ridges,
-        &diversity,
-        latitude,
-        year,
-        current_week(),
-        state.names(),
-    ))
+        .ok()
 }
 
 async fn ridgeline_partial(State(state): State<AppState>) -> impl IntoResponse {
@@ -383,6 +420,7 @@ async fn ridgeline_partial(State(state): State<AppState>) -> impl IntoResponse {
 fn render_ridgeline(
     ridges: &[Seasonal],
     diversity: &[i64; 52],
+    listened_days: &[u32; 52],
     latitude: Option<f64>,
     year: i32,
     today_week: u8,
@@ -394,11 +432,13 @@ fn render_ridgeline(
         .map(|r| Ridge {
             name: names.name_of_stored(&r.name).to_owned(),
             counts: r.counts,
+            rate: r.index,
         })
         .collect();
     ridge::ridgeline(&Phenology {
         ridges: &drawn,
         diversity,
+        listened_days,
         year,
         today_week: Some(usize::from(today_week)),
         spring,
@@ -1742,6 +1782,42 @@ mod tests {
                 r#"<span class="value">-5 d</span><span class="bnb-meta">Barn Swallow</span>"#
             ),
             "{html}"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // N26-07: the page draws the outage as unknown, from the same read
+    // -----------------------------------------------------------------------
+
+    /// N26-07, end to end: the station of [`spring_all_day`] was off for columns 30–35. The
+    /// thrush (heard in 38–42) is the only species drawn, and its ridge used to lie at its
+    /// baseline through the outage like any other quiet week. The page now hatches exactly
+    /// those six weeks, in one run, and its table carries the days listened.
+    #[test]
+    fn the_page_hatches_the_weeks_the_station_was_off() {
+        let (_dir, conn) = ledger_station(
+            spring_all_day,
+            &[("Carolina Wren", &wren), ("Swainson's Thrush", &thrush)],
+        );
+        let html =
+            ridgeline_html(&conn, 2025, "2026-01-01", 51, &english()).expect("the ridgeline");
+        assert!(
+            html.contains("Swainson"),
+            "precondition: the thrush is drawn"
+        );
+        assert_eq!(
+            html.matches("<rect class=\"rd-unk\"").count(),
+            1,
+            "one run of unlistened weeks"
+        );
+        assert!(html.contains("Too little listening this week to say: 0 of 7 days listened."));
+        assert_eq!(
+            html.matches(
+                "<td class=\"num rd-unk\">0<span class=\"sr-only\"> (too few to draw)</span></td>"
+            )
+            .count(),
+            6,
+            "columns 30-35 in the table"
         );
     }
 }

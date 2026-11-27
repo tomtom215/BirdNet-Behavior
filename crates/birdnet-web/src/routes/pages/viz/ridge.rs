@@ -3,11 +3,15 @@
 //!
 //! # What the picture claims
 //!
-//! * A ridge's **height** is that species' detections in a week as a share of *its own*
-//!   busiest week. Heights are not comparable between species and the caption says so: a
-//!   wren heard twenty times a week and a robin heard two hundred have the same peak, which
-//!   is the point of the chart (when each is here, not how loud) and also the reason it
-//!   cannot say who is commoner. The tooltip carries the real counts.
+//! * A ridge's **height** is that species' detections per seven days of listening in a
+//!   week, as a share of *its own* busiest week. Heights are not comparable between
+//!   species and the caption says so: a wren heard twenty times a week and a robin heard
+//!   two hundred have the same peak, which is the point of the chart (when each is here,
+//!   not how loud) and also the reason it cannot say who is commoner. Per listened time
+//!   and not per week (N26-07): a week listened to all day on a station that usually
+//!   listens six hours holds four times the detections at the same rate, and used to stand
+//!   four times as tall. The tooltip and the table carry the real counts and the days
+//!   listened.
 //! * Its **colour** says whether it peaks in a migration window (the spring one or the fall
 //!   one: where the peak stands says which, under the window's shading) or at another time.
 //!   Species are told apart by the name beside the ridge, so the colour is free to say
@@ -17,6 +21,11 @@
 //! * Its **shape** between weeks is a monotone cubic: the curve never rises above a week's
 //!   peak or dips below a quiet one, so smoothing cannot invent a peak.
 //! * **Weeks that have not happened yet** are hatched, not drawn as zero.
+//! * **Weeks with too little listening** (fewer than [`uncertainty::TOO_FEW_BELOW`] days
+//!   listened: an outage, a station switched off) are hatched too, in the ridges and in the
+//!   lane, and the ridge stops on either side of them (N26-07). They were drawn at the
+//!   baseline, which said the bird had gone. The table's "Days listened" row says which
+//!   weeks were not drawn, and the key names the hatch.
 //!
 //! The lane under the ridges is distinct species heard per week, on the same x axis; one
 //! pointer reading speaks for both (the kit's "cols" mode: a crosshair over a week lists every
@@ -35,6 +44,7 @@
 use std::fmt::Write as _;
 
 use super::kit::{self, Col};
+use super::uncertainty;
 use super::{EMPTY, svg_a11y};
 use crate::routes::pages::escape_html;
 
@@ -99,20 +109,27 @@ pub fn migration_windows(lat: Option<f64>) -> (Weeks, Weeks) {
 pub struct Ridge {
     /// The name as the station displays it.
     pub name: String,
-    /// Detections in each week column.
+    /// Detections in each week column: what the readout and the table print.
     pub counts: [f64; WEEKS],
+    /// Detections per seven days of listening in each week column, what the ridge's height
+    /// draws; `None` where the week had too little listening to say (see
+    /// [`Phenology::listened_days`]), which is drawn as unknown and never as zero.
+    pub rate: [Option<f64>; WEEKS],
 }
 
 impl Ridge {
-    /// The week column with the most detections (the first of equals).
+    /// The week column with the highest rate (the first of equals), among the weeks with
+    /// one; week 0 when no week has a rate.
     pub fn peak_week(&self) -> usize {
-        let mut best = 0;
-        for (w, &c) in self.counts.iter().enumerate() {
-            if c > self.counts[best] {
-                best = w;
+        let mut best: Option<(usize, f64)> = None;
+        for (w, r) in self.rate.iter().enumerate() {
+            if let Some(r) = *r
+                && best.is_none_or(|(_, b)| r > b)
+            {
+                best = Some((w, r));
             }
         }
-        best
+        best.map_or(0, |(w, _)| w)
     }
 }
 
@@ -122,6 +139,11 @@ pub struct Phenology<'a> {
     pub ridges: &'a [Ridge],
     /// Distinct species heard in each week column.
     pub diversity: &'a [i64; WEEKS],
+    /// Days the station listened to in each week column (the listened-day rule of
+    /// `pages/listening.rs`; a date the ledger does not cover counts as listened). A week
+    /// with fewer than [`uncertainty::TOO_FEW_BELOW`] is not drawn: it is hatched as
+    /// "too little listening", in the ridges and in the lane.
+    pub listened_days: &'a [u32; WEEKS],
     /// The calendar year drawn.
     pub year: i32,
     /// The week column of today, or `None` when the year drawn is over (nothing is "not yet").
@@ -196,6 +218,40 @@ fn short_name(name: &str) -> String {
     }
 }
 
+/// Runs of consecutive week columns in `0..=last` for which `keep` holds, as inclusive
+/// `(first, last)` pairs.
+fn runs(last: usize, keep: impl Fn(usize) -> bool) -> Vec<Weeks> {
+    let mut out: Vec<Weeks> = Vec::new();
+    for w in 0..=last {
+        if !keep(w) {
+            continue;
+        }
+        match out.last_mut() {
+            Some(run) if run.1 + 1 == w => run.1 = w,
+            _ => out.push((w, w)),
+        }
+    }
+    out
+}
+
+/// How many days a week column covers: seven, and eight or nine for the last.
+const fn days_in_week(year: i32, week: usize) -> u32 {
+    let (a, b) = week_days(year, week);
+    b - a + 1
+}
+
+impl Phenology<'_> {
+    /// Whether week column `w` had enough listening to say anything about it.
+    const fn known(&self, w: usize) -> bool {
+        !uncertainty::too_few(self.listened_days[w])
+    }
+
+    /// The runs of week columns, up to `last`, with too little listening to draw.
+    fn unknown_runs(&self, last: usize) -> Vec<Weeks> {
+        runs(last, |w| !self.known(w))
+    }
+}
+
 /// The ridgeline and its lane, in a kit chart (`data-ck="cols"`), with the table under it.
 #[must_use]
 #[allow(clippy::too_many_lines)]
@@ -252,13 +308,30 @@ pub fn ridgeline(p: &Phenology<'_>) -> String {
             } else {
                 let kinds = p.diversity[w];
                 let under_way = p.today_week == Some(w);
-                Col {
-                    label,
-                    values: p.ridges.iter().map(|r| Some(r.counts[w])).collect(),
-                    note: Some(format!(
-                        "{kinds} species heard{}",
-                        if under_way { " so far this week" } else { "" }
-                    )),
+                let listened = format!(
+                    "{} of {} days listened{}",
+                    p.listened_days[w],
+                    days_in_week(p.year, w),
+                    if under_way { " so far" } else { "" }
+                );
+                if p.known(w) {
+                    Col {
+                        label,
+                        values: p.ridges.iter().map(|r| Some(r.counts[w])).collect(),
+                        note: Some(format!(
+                            "{kinds} species heard{} · {listened}",
+                            if under_way { " so far this week" } else { "" }
+                        )),
+                    }
+                } else {
+                    // No value, not zero: the readout says why there is none.
+                    Col {
+                        label,
+                        values: vec![None; n],
+                        note: Some(format!(
+                            "Too little listening this week to say: {listened}."
+                        )),
+                    }
                 }
             }
         })
@@ -279,8 +352,18 @@ pub fn ridgeline(p: &Phenology<'_>) -> String {
     s.push_str(&svg_a11y(
         "Twelve months of migrants",
         &format!(
-            "{n} ridges, one per species, across the {} weeks of {}: a ridge is how many of that species were heard each week, as a share of its own busiest week. Below them, how many different species were heard each week. Spring and fall migration windows are shaded.",
-            WEEKS, p.year
+            "{n} ridges, one per species, across the {} weeks of {}: a ridge is how often that species was detected each week per seven days of listening, as a share of its own busiest week. Below them, how many different species were heard each week. Spring and fall migration windows are shaded.{}",
+            WEEKS,
+            p.year,
+            match p.unknown_runs(last_week).len() {
+                0 => String::new(),
+                k => format!(
+                    " {k} stretch{} of weeks with fewer than {} days listened {} hatched and not drawn.",
+                    if k == 1 { "" } else { "es" },
+                    uncertainty::TOO_FEW_BELOW,
+                    if k == 1 { "is" } else { "are" },
+                ),
+            }
         ),
     ));
     s.push_str(&kit::gradient_defs("rd", &classes));
@@ -318,31 +401,47 @@ pub fn ridgeline(p: &Phenology<'_>) -> String {
     // Ridges, the top one first and so behind: each has an opaque base the colour of the card
     // under its fill, so the ridge in front hides the one behind it where they overlap, the way
     // a joyplot does.
+    //
+    // A ridge is drawn only through the weeks with a rate: one path per run of them, so a
+    // week with too little listening is a gap under the hatch and never a fall to zero.
+    let known_runs = runs(last_week, |w| p.known(w));
     for (i, ridge) in p.ridges.iter().enumerate() {
         let base = base_of(i);
-        let max = ridge
-            .counts
-            .iter()
-            .copied()
+        let rate = |w: usize| if p.known(w) { ridge.rate[w] } else { None };
+        let max = (0..=last_week)
+            .filter_map(rate)
             .fold(0.0_f64, f64::max)
             .max(f64::MIN_POSITIVE);
         let season = season_of(ridge.peak_week(), p.spring, p.fall);
-        let pts: Vec<(f64, f64)> = (0..=last_week)
-            .map(|w| (x(w as f64), base - ridge.counts[w] / max * amp))
-            .collect();
-        let line = kit::monotone_path(&pts, false);
-        let (first, last) = (pts[0], pts[pts.len() - 1]);
-        let area = format!(
-            "{line} L{:.1},{base:.1} L{:.1},{base:.1} Z",
-            last.0, first.0
-        );
-        let name = escape_html(&ridge.name);
         let _ = write!(
             s,
-            r#"<g class="rd-ridge {class} ck-reveal" data-ck-s="{i}"><line class="ck-grid" x1="{PAD_L}" y1="{base:.1}" x2="{xr:.1}" y2="{base:.1}"/><path class="rd-mask" d="{area}"/><path class="rd-area" d="{area}" fill="url(#rd-{class})"/><path class="ck-line rd-line" d="{line}"/><title>{name}</title></g>"#,
+            r#"<g class="rd-ridge {class} ck-reveal" data-ck-s="{i}"><line class="ck-grid" x1="{PAD_L}" y1="{base:.1}" x2="{xr:.1}" y2="{base:.1}"/>"#,
             class = season.class(),
             xr = x(WEEKS as f64 - 1.0),
         );
+        for &(a, b) in &known_runs {
+            let y = |w: usize| base - rate(w).unwrap_or(0.0) / max * amp;
+            // A week alone between two gaps is a short plateau across its own column, so it
+            // is seen, and does not reach into the hatched weeks beside it.
+            let pts: Vec<(f64, f64)> = if a == b {
+                let half = step * 0.3;
+                vec![(x(a as f64) - half, y(a)), (x(a as f64) + half, y(a))]
+            } else {
+                (a..=b).map(|w| (x(w as f64), y(w))).collect()
+            };
+            let line = kit::monotone_path(&pts, false);
+            let (first, last) = (pts[0], pts[pts.len() - 1]);
+            let area = format!(
+                "{line} L{:.1},{base:.1} L{:.1},{base:.1} Z",
+                last.0, first.0
+            );
+            let _ = write!(
+                s,
+                r#"<path class="rd-mask" d="{area}"/><path class="rd-area" d="{area}" fill="url(#rd-{class})"/><path class="ck-line rd-line" d="{line}"/>"#,
+                class = season.class(),
+            );
+        }
+        let _ = write!(s, "<title>{}</title></g>", escape_html(&ridge.name));
     }
 
     // The peaks and the names go over every ridge, not under the next one's fill.
@@ -352,7 +451,7 @@ pub fn ridgeline(p: &Phenology<'_>) -> String {
         let name = escape_html(&short_name(&ridge.name));
         // The peak.
         let pw = ridge.peak_week();
-        if pw <= last_week && ridge.counts[pw] > 0.0 {
+        if pw <= last_week && p.known(pw) && ridge.rate[pw].is_some_and(|r| r > 0.0) {
             let _ = write!(
                 s,
                 r#"<circle class="ck-dot {class}" data-ck-s="{i}" cx="{px:.1}" cy="{py:.1}" r="3.5"/>"#,
@@ -384,7 +483,7 @@ pub fn ridgeline(p: &Phenology<'_>) -> String {
         xr = x(WEEKS as f64 - 1.0),
     );
     let mut peak_kinds = (0_usize, 0_i64);
-    for w in 0..=last_week {
+    for w in (0..=last_week).filter(|&w| p.known(w)) {
         let v = p.diversity[w];
         if v > peak_kinds.1 {
             peak_kinds = (w, v);
@@ -414,6 +513,27 @@ pub fn ridgeline(p: &Phenology<'_>) -> String {
             py = (lane_base - peak_kinds.1 as f64 / max_kinds * LANE_H - 6.0).max(lane_top - 6.0),
             k = peak_kinds.1,
         );
+    }
+
+    // Weeks with too little listening: hatched over the ridges and the lane, so they read as
+    // unknown and not as none, and named where there is room.
+    for (a, b) in p.unknown_runs(last_week) {
+        let x0 = x(a as f64 - 0.5).max(PAD_L - step / 2.0);
+        let x1 = x(b as f64 + 0.5);
+        let _ = write!(
+            s,
+            r#"<rect class="rd-unk" x="{x0:.1}" y="{TOP}" width="{w:.1}" height="{hh:.1}" fill="url(#rd-nd)" pointer-events="none"/>"#,
+            w = x1 - x0,
+            hh = lane_base - TOP,
+        );
+        if x1 - x0 >= 96.0 {
+            let _ = write!(
+                s,
+                r#"<text class="ck-lbl rd-notyet" x="{tx:.1}" y="{ty:.1}" text-anchor="start">not listened</text>"#,
+                tx = x0 + 8.0,
+                ty = TOP + 14.0,
+            );
+        }
     }
 
     // Weeks that have not happened: hatched over everything, so they read as unknown and not as
@@ -461,8 +581,17 @@ fn key(p: &Phenology<'_>) -> String {
             r#"<span class="bnb-meta viz-legend-item"><span class="viz-swatch ck-sw {class}"></span>{text}</span>"#
         )
     };
+    let last_week = p.today_week.unwrap_or(WEEKS - 1).min(WEEKS - 1);
+    let unknown = if p.unknown_runs(last_week).is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"<span class="bnb-meta viz-legend-item"><span class="ck-off" aria-hidden="true"></span>fewer than {} days listened that week: not drawn</span>"#,
+            uncertainty::TOO_FEW_BELOW
+        )
+    };
     format!(
-        r#"<div class="viz-legend rd-key">{a}{c}</div><p class="bnb-meta rd-note">A ridge is a species' detections each week as a share of its own busiest week, so a rare bird and a common one reach the same height; the real counts are in the readout and the table. Colour is whether it peaks in a migration window; which window is where the peak stands. Lower: how many different species were heard.</p>"#,
+        r#"<div class="viz-legend rd-key">{a}{c}{unknown}</div><p class="bnb-meta rd-note">A ridge is a species' detections per seven days of listening each week, as a share of its own busiest week, so a rare bird and a common one reach the same height; the real counts and the days listened are in the readout and the table. Colour is whether it peaks in a migration window; which window is where the peak stands. Lower: how many different species were heard.</p>"#,
         a = swatch(
             Season::Spring.class(),
             format!(
@@ -498,9 +627,9 @@ fn table(p: &Phenology<'_>) -> String {
     for r in p.ridges {
         let _ = write!(
             t,
-            r#"<tr><th scope="row">{name}</th><td class="num">w{pk}</td><td class="num">{total}</td>"#,
+            r#"<tr><th scope="row">{name}</th><td class="num">{pk}</td><td class="num">{total}</td>"#,
             name = escape_html(&r.name),
-            pk = r.peak_week() + 1,
+            pk = week_label(p.year, r.peak_week()),
             total = r.counts.iter().sum::<f64>().round() as i64,
         );
         for c in &r.counts {
@@ -512,7 +641,27 @@ fn table(p: &Phenology<'_>) -> String {
     for k in p.diversity {
         let _ = write!(t, r#"<td class="num">{k}</td>"#);
     }
-    t.push_str("</tr></tbody></table></div></details>");
+    t.push_str("</tr>");
+    // The effort behind every column, and which columns were not drawn for want of it.
+    let last_week = p.today_week.unwrap_or(WEEKS - 1).min(WEEKS - 1);
+    t.push_str(r#"<tr class="rd-days"><th scope="row">Days listened</th><td class="num"></td><td class="num"></td>"#);
+    for (w, d) in p.listened_days.iter().enumerate() {
+        if w > last_week {
+            t.push_str(r#"<td class="num">–<span class="sr-only"> not yet</span></td>"#);
+        } else if p.known(w) {
+            let _ = write!(t, r#"<td class="num">{d}</td>"#);
+        } else {
+            let _ = write!(
+                t,
+                r#"<td class="num rd-unk">{d}<span class="sr-only"> (too few to draw)</span></td>"#
+            );
+        }
+    }
+    let _ = write!(
+        t,
+        r#"</tr></tbody></table></div><p class="bnb-meta rd-note">A week with fewer than {} days listened is not drawn. Weeks are seven days from 1 January, the last one running to 31 December, not ISO weeks.</p></details>"#,
+        uncertainty::TOO_FEW_BELOW
+    );
     t
 }
 
@@ -529,13 +678,18 @@ mod tests {
         Ridge {
             name: name.to_owned(),
             counts,
+            rate: counts.map(Some),
         }
     }
+
+    /// Every week listened to on all seven days.
+    const FULL: [u32; WEEKS] = [7; WEEKS];
 
     fn phen<'a>(ridges: &'a [Ridge], div: &'a [i64; WEEKS], today: Option<usize>) -> Phenology<'a> {
         Phenology {
             ridges,
             diversity: div,
+            listened_days: &FULL,
             year: 2026,
             today_week: today,
             spring: (8, 20),
@@ -710,8 +864,162 @@ mod tests {
         let ridges = vec![ridge("A", 12, 40.0), ridge("B", 40, 9.0)];
         let div = [2; WEEKS];
         let svg = ridgeline(&phen(&ridges, &div, Some(51)));
-        let rows = svg.split("<tr>").count() - 1 + svg.matches("<tr class=\"rd-kinds\">").count();
-        assert_eq!(rows, 4, "header, two species, species heard");
-        assert_eq!(svg.matches("<td class=\"num\">").count(), 3 * (WEEKS + 2));
+        let rows = svg.split("<tr>").count() - 1
+            + svg.matches("<tr class=\"rd-kinds\">").count()
+            + svg.matches("<tr class=\"rd-days\">").count();
+        assert_eq!(rows, 5, "header, two species, species heard, days listened");
+        assert_eq!(svg.matches("<td class=\"num\">").count(), 4 * (WEEKS + 2));
+    }
+
+    // -----------------------------------------------------------------------
+    // N26-07: a week with too little listening is unknown, not a quiet week
+    // -----------------------------------------------------------------------
+
+    /// x of week column `w` in the picture (the renderer's own constants).
+    fn wx(w: f64) -> f64 {
+        184.0 + w / (WEEKS as f64 - 1.0) * (1200.0 - 184.0 - 22.0)
+    }
+
+    /// Every point (x, y) of every ridge line, from the `d` of each `rd-line` path.
+    fn line_points(svg: &str) -> Vec<(f64, f64)> {
+        let mut out = Vec::new();
+        for chunk in svg.split("<path class=\"ck-line rd-line\" d=\"").skip(1) {
+            let d = chunk.split('"').next().expect("d");
+            for t in d.split([' ', 'C', 'M', 'L']).filter(|t| t.contains(',')) {
+                let mut it = t.split(',');
+                if let (Some(Ok(x)), Some(Ok(y))) = (
+                    it.next().map(str::parse::<f64>),
+                    it.next().map(str::parse::<f64>),
+                ) {
+                    out.push((x, y));
+                }
+            }
+        }
+        out
+    }
+
+    /// A species heard ten times in every week the station listened to, on a station that was
+    /// off for columns 20-23 and listened on only two days of column 24.
+    fn outage() -> (Vec<Ridge>, [u32; WEEKS]) {
+        let mut days = [7_u32; WEEKS];
+        let mut counts = [10.0; WEEKS];
+        let mut rate = [Some(10.0); WEEKS];
+        for w in 20..=24 {
+            days[w] = if w == 24 { 2 } else { 0 };
+            counts[w] = if w == 24 { 3.0 } else { 0.0 };
+            rate[w] = None;
+        }
+        let r = Ridge {
+            name: "Steady bird".to_owned(),
+            counts,
+            rate,
+        };
+        (vec![r], days)
+    }
+
+    /// N26-07. The outage used to be drawn as five weeks at the ridge's baseline: a bird that
+    /// vanished. Now the ridge stops at the last week it could be measured and starts again at
+    /// the next, and the weeks between are hatched as "too little listening", in the readout,
+    /// the key and the table too.
+    #[test]
+    fn a_week_with_too_little_listening_is_hatched_not_drawn_at_zero() {
+        let (ridges, days) = outage();
+        let div = [3; WEEKS];
+        let svg = ridgeline(&Phenology {
+            listened_days: &days,
+            ..phen(&ridges, &div, None)
+        });
+        let pts = line_points(&svg);
+        assert!(!pts.is_empty(), "precondition: the ridge is drawn");
+        let (lo, hi) = (wx(20.0) - 0.5, wx(24.0) + 0.5);
+        let inside: Vec<_> = pts.iter().filter(|(x, _)| (lo..=hi).contains(x)).collect();
+        assert!(
+            inside.is_empty(),
+            "the ridge is drawn through weeks nobody listened to: {inside:?}"
+        );
+        // One hatched run, from the middle of 19 | 20 to the middle of 24 | 25.
+        let rect = svg
+            .split("<rect class=\"rd-unk\"")
+            .nth(1)
+            .expect("the unlistened weeks are hatched");
+        let attr = |k: &str| -> f64 {
+            rect.split(&format!(" {k}=\""))
+                .nth(1)
+                .and_then(|v| v.split('"').next())
+                .and_then(|v| v.parse().ok())
+                .expect(k)
+        };
+        assert!((attr("x") - wx(19.5)).abs() < 0.2, "{rect:.120}");
+        assert!(
+            (attr("width") - (wx(24.5) - wx(19.5))).abs() < 0.2,
+            "{rect:.120}"
+        );
+        assert_eq!(svg.matches("<rect class=\"rd-unk\"").count(), 1);
+        assert!(svg.contains("Too little listening this week to say: 0 of 7 days listened."));
+        assert!(svg.contains("Too little listening this week to say: 2 of 7 days listened."));
+        assert!(
+            svg.contains("fewer than 3 days listened"),
+            "the key names it"
+        );
+        assert!(svg.contains("<th scope=\"row\">Days listened</th>"));
+        assert!(
+            svg.contains(
+                r#"<td class="num rd-unk">2<span class="sr-only"> (too few to draw)</span></td>"#
+            ),
+            "the table says which weeks were not drawn"
+        );
+    }
+
+    /// Counterpart: a station that listened every day has no hatch, and the ridge passes
+    /// through every week.
+    #[test]
+    fn a_fully_listened_year_has_no_unknown_weeks() {
+        let ridges = vec![ridge("A", 21, 40.0)];
+        let div = [3; WEEKS];
+        let svg = ridgeline(&phen(&ridges, &div, None));
+        assert!(!svg.contains("rd-unk"), "nothing to hatch");
+        assert!(
+            !svg.contains("days listened that week: not drawn"),
+            "no key for it"
+        );
+        let pts = line_points(&svg);
+        assert!(pts.iter().any(|(x, _)| (x - wx(21.0)).abs() < 0.2));
+    }
+
+    /// The height is the rate per listened time, not the count: a week listened to four times
+    /// as long holds four times the detections at the same rate, and is drawn at the same
+    /// height as the others (its count is still the readout's and the table's).
+    #[test]
+    fn the_height_is_per_listened_time_not_the_raw_count() {
+        let mut r = ridge("A", 10, 40.0);
+        let peak = r.rate[10].expect("peak");
+        r.counts[30] = peak * 4.0;
+        r.rate[30] = Some(peak);
+        let div = [3; WEEKS];
+        let svg = ridgeline(&phen(std::slice::from_ref(&r), &div, None));
+        let pts = line_points(&svg);
+        let y_at = |w: f64| {
+            pts.iter()
+                .find(|(x, _)| (x - wx(w)).abs() < 0.2)
+                .map(|(_, y)| *y)
+                .expect("a point")
+        };
+        assert!(
+            (y_at(30.0) - y_at(10.0)).abs() < 0.2,
+            "week 31 is drawn by its count: {} vs {}",
+            y_at(30.0),
+            y_at(10.0)
+        );
+        assert!(svg.contains("[160.0]"), "the readout keeps the real count");
+    }
+
+    /// The table names the busiest week by its days, the way the axis does, not `w43`.
+    #[test]
+    fn the_table_names_the_busiest_week_by_its_days() {
+        let ridges = vec![ridge("A", 42, 40.0)];
+        let div = [2; WEEKS];
+        let svg = ridgeline(&phen(&ridges, &div, None));
+        assert!(!svg.contains(">w43<"), "the old label");
+        assert!(svg.contains("<td class=\"num\">22 Oct – 28 Oct</td>"));
     }
 }
