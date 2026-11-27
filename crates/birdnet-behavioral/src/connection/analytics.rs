@@ -135,6 +135,22 @@ impl AnalyticsDb {
         &self,
         params: &types::RetentionParams,
     ) -> Result<Vec<types::SpeciesRetention>, AnalyticsError> {
+        self.retention_scoped(params, &crate::scope::RowScope::default())
+    }
+
+    /// [`Self::retention`] over the rows `scope` admits (one source, a
+    /// confidence floor): the weeks the station heard anything are then that
+    /// source's weeks too, so a species is never followed on one microphone
+    /// against another's record (N06-02).
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::retention`].
+    pub fn retention_scoped(
+        &self,
+        params: &types::RetentionParams,
+        scope: &crate::scope::RowScope,
+    ) -> Result<Vec<types::SpeciesRetention>, AnalyticsError> {
         // retention() accepts 2..=32 conditions; one anchors the cohort, so
         // 1..=31 day intervals are valid.
         let n = params.intervals.len();
@@ -144,7 +160,7 @@ impl AnalyticsDb {
             )));
         }
         self.require_extension()?;
-        let sql = queries::retention_sql(params);
+        let sql = scope.apply(&queries::retention_sql(params));
         let mut stmt = self.conn.prepare(&sql)?;
 
         let rows = stmt.query_map([], |row| {

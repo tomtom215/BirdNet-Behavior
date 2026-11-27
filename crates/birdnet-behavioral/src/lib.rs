@@ -46,6 +46,8 @@ pub mod null_model;
 pub mod phenology;
 pub mod queries;
 pub mod reporting;
+pub mod scope;
+pub mod solar_relative;
 pub mod types;
 
 // The build script embeds only the extension builds this file names; compiling

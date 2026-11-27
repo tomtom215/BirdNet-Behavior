@@ -400,29 +400,62 @@ pub struct EventsRead {
 /// How far [`events_between`] widens the rows it reads, at most, each side.
 const MAX_WIDENING_SECS: i64 = 86_400;
 
-fn read_rows(conn: &Connection, from: i64, to: i64) -> Result<Vec<EventRow>, DbError> {
+/// Which rows an event read admits, before any grouping (UIC-11, MSC-18).
+///
+/// Filtering happens on rows, not on events: a source left out is not a
+/// member of any event, so an event of two sources read for one of them is
+/// that source's row alone. The default admits every row
+/// `detections_analytic` holds.
+#[derive(Debug, Clone, Default, PartialEq, serde::Serialize)]
+pub struct RowFilter {
+    /// Only this source's rows.
+    pub source: Option<String>,
+    /// Only rows at or above this confidence (a score, not a probability).
+    pub min_confidence: Option<f64>,
+    /// Only this species, by scientific name.
+    pub sci_name: Option<String>,
+}
+
+fn read_rows(
+    conn: &Connection,
+    from: i64,
+    to: i64,
+    filter: &RowFilter,
+) -> Result<Vec<EventRow>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs,
                 detected_at_utc, Com_Name, Source, Confidence
            FROM detections_analytic
-          WHERE detected_at_utc >= ?1 AND detected_at_utc < ?2",
+          WHERE detected_at_utc >= ?1 AND detected_at_utc < ?2
+            AND (?3 IS NULL OR Source = ?3)
+            AND (?4 IS NULL OR Confidence >= ?4)
+            AND (?5 IS NULL OR Sci_Name = ?5)",
     )?;
     let rows = stmt
-        .query_map(params![from, to], |r| {
-            let date: String = r.get(0)?;
-            let time: String = r.get(1)?;
-            let sci: String = r.get(2)?;
-            let file: String = r.get(3)?;
-            let offset: f64 = r.get(4)?;
-            Ok(EventRow {
-                row_id: format!("{date}|{time}|{sci}|{file}|{offset}"),
-                instant: r.get(5)?,
-                sci_name: sci,
-                com_name: r.get(6)?,
-                source: r.get(7)?,
-                confidence: r.get(8)?,
-            })
-        })?
+        .query_map(
+            params![
+                from,
+                to,
+                filter.source,
+                filter.min_confidence,
+                filter.sci_name
+            ],
+            |r| {
+                let date: String = r.get(0)?;
+                let time: String = r.get(1)?;
+                let sci: String = r.get(2)?;
+                let file: String = r.get(3)?;
+                let offset: f64 = r.get(4)?;
+                Ok(EventRow {
+                    row_id: format!("{date}|{time}|{sci}|{file}|{offset}"),
+                    instant: r.get(5)?,
+                    sci_name: sci,
+                    com_name: r.get(6)?,
+                    source: r.get(7)?,
+                    confidence: r.get(8)?,
+                })
+            },
+        )?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(rows)
 }
@@ -484,12 +517,28 @@ pub fn events_between(
     tolerance_secs: f64,
     sites: &SiteMap,
 ) -> Result<EventsRead, DbError> {
+    events_between_filtered(conn, from, to, tolerance_secs, sites, &RowFilter::default())
+}
+
+/// [`events_between`] over the rows `filter` admits.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn events_between_filtered(
+    conn: &Connection,
+    from: i64,
+    to: i64,
+    tolerance_secs: f64,
+    sites: &SiteMap,
+    filter: &RowFilter,
+) -> Result<EventsRead, DbError> {
     let tol = whole_seconds(tolerance_secs).max(0);
     let mut widen = tol.max(1);
     let (rows, lo, hi, settled) = loop {
         let lo = from.saturating_sub(widen);
         let hi = to.saturating_add(widen);
-        let rows = read_rows(conn, lo, hi)?;
+        let rows = read_rows(conn, lo, hi, filter)?;
         if !edge_reaches_range(&rows, sites, tol, (lo, hi, from, to)) {
             break (rows, lo, hi, true);
         }
@@ -505,8 +554,17 @@ pub fn events_between(
     let rows_without_instant: i64 = conn.query_row(
         "SELECT COUNT(*) FROM detections_analytic
           WHERE detected_at_utc IS NULL
-            AND Date >= date(?1, 'unixepoch') AND Date <= date(?2 - 1, 'unixepoch')",
-        params![from, to],
+            AND Date >= date(?1, 'unixepoch') AND Date <= date(?2 - 1, 'unixepoch')
+            AND (?3 IS NULL OR Source = ?3)
+            AND (?4 IS NULL OR Confidence >= ?4)
+            AND (?5 IS NULL OR Sci_Name = ?5)",
+        params![
+            from,
+            to,
+            filter.source,
+            filter.min_confidence,
+            filter.sci_name
+        ],
         |r| r.get(0),
     )?;
     Ok(EventsRead {

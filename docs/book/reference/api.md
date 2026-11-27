@@ -327,6 +327,19 @@ Each source is its own site until you say otherwise, so by default nothing is me
 
 `tolerance_secs` defaults to 4, BirdNET V2.4's 3-second window plus one second, and takes 0 to 600. Every event response states what it counted with: `policy.version`, `policy.tolerance_secs`, `policy.site_map` (every source seen, with the site applied) and `rows_without_instant`. `range.edges_settled` is `false` only when detections were still within the tolerance of the edge of a read widened by a day each side, in which case an event at the very edge of the range may pair differently in a wider read. A failed read is a `500`, never zero events; a missing or out-of-range parameter is a `400`.
 
+#### Rates, comparisons and chance levels
+
+These count events, state the rule they used under `policy`, and are exploratory: a rate of acoustic events is not a count of birds, and two species heard together are not shown to interact. Each takes `sites`, `tolerance_secs`, `source` (one source's detections and listening), `min_confidence` (a classifier score from 0 to 1, not a probability) and, where it makes sense, `species` (a scientific name).
+
+| Route | What it returns |
+|---|---|
+| `GET /api/v2/analytics/rates?from=&to=&bin=` | Events per hour of each site's listening, per site, species and bin (`day`, `week` from Monday, or `hour_of_day`), over at most 400 local dates. The denominator is the site's listening as bounds, so a rate is `rate_low` (events over the upper bound) to `rate_high` (over the lower), and a quieter microphone added to a site does not lower it; `ci_lower` and `ci_upper` are the exact Poisson interval over the bounds. A bin with no listening is `status: "no_effort"` with no rate, which is not a rate of 0; events in an hour with no ledger row are `events_outside_listening` and not counted |
+| `GET /api/v2/analytics/rates/compare?days=&end=` | The last `days` complete days (ending `end`, yesterday by default) against the `days` before, per site and per species: a rate ratio with a 95 % interval, and a `direction` that is `busier` or `quieter` only when the interval excludes no change |
+| `GET /api/v2/analytics/sunrise-relative?from=&to=&bin_minutes=` | Each site and species' events by minutes from the sunrise of its own day, from four hours before to eight after. A `409` without station coordinates: there is no clock-hour stand-in |
+| `GET /api/v2/analytics/cooccurrence?days=&limit=&min_shared=&seed=` | Pairs heard in one five-minute block at one site, each with its chance level (`expected_shared`, `chance_overlap`, `lift`) from shifting one species' days within 28-day strata, a permutation `p_value` from the recorded `seed`, a Benjamini–Hochberg `q_value`, and a `verdict`: `stands_out`, `within_chance`, or `too_little_data` |
+
+`analytics/abundance`, `analytics/phenology` and `analytics/retention` also take `source` and `min_confidence`, and their responses now carry `rows`: they count detection rows, not events, and pool every source unless `source` is given.
+
 ### Diagnosing empty analytics dashboards
 
 `GET /api/v2/analytics/status` is the first thing to check when the analytics
