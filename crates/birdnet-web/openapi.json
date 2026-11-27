@@ -1934,6 +1934,507 @@
         }
       }
     },
+    "/events": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Events: one call heard by several sources, counted once",
+        "description": "The events whose first member is in the range of UTC dates (at most 7 days), from the detections a reviewer has not rejected. Computed when read, never stored: changing the tolerance or the site map changes the events and rewrites nothing. With the default site map every source is its own site, so an event is one row.",
+        "operationId": "listEvents",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First UTC date, `YYYY-MM-DD`, inclusive.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Last UTC date, `YYYY-MM-DD`, inclusive; at most 7 days after `from`.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "tolerance_secs",
+            "in": "query",
+            "description": "Members of an event lie within this many seconds of one another. Default 4 (BirdNET V2.4's 3 s window plus 1 s); 0 to 600.",
+            "schema": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 600,
+              "default": 4
+            }
+          },
+          {
+            "name": "sites",
+            "in": "query",
+            "description": "The site map: `source:site` pairs separated by commas (`mic-north:yard,cam-1:yard`), split at the last colon. A source not named is its own site, which is also the default: nothing is merged across sources until they are put at one site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The events, with how they were counted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "policy": {
+                      "type": "object",
+                      "description": "How the events were counted. An event is the detections of one call (one species, one site, at most one row per source, all within the tolerance of one another, paired nearest first and never chained). It is not an individual bird.",
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "description": "The event rule's version; hashed into every `event_id`."
+                        },
+                        "tolerance_secs": {
+                          "type": "number"
+                        },
+                        "default_tolerance_secs": {
+                          "type": "number"
+                        },
+                        "site_map": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "description": "Every source seen, and every source named, with the site applied."
+                        },
+                        "site_map_default": {
+                          "type": "string"
+                        },
+                        "unit": {
+                          "type": "string"
+                        },
+                        "instant": {
+                          "type": "string"
+                        },
+                        "rows_without_source": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "tolerance_secs",
+                        "site_map",
+                        "unit"
+                      ]
+                    },
+                    "range": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        },
+                        "from_utc": {
+                          "type": "integer"
+                        },
+                        "to_utc": {
+                          "type": "integer",
+                          "description": "Exclusive."
+                        },
+                        "read_from_utc": {
+                          "type": "integer"
+                        },
+                        "read_to_utc": {
+                          "type": "integer"
+                        },
+                        "edges_settled": {
+                          "type": "boolean",
+                          "description": "False when rows were still within the tolerance of the widened read's edge after a day each side: an event at the very edge of the range may then pair differently in a wider read."
+                        }
+                      }
+                    },
+                    "rows_without_instant": {
+                      "type": "integer",
+                      "description": "Rows in the range's dates with no `detected_at_utc`: in no event, never placed from their local time."
+                    },
+                    "total_events": {
+                      "type": "integer"
+                    },
+                    "sites": {
+                      "type": "array",
+                      "description": "Per site (point): events, the rows in them, and the sources.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "site": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Null for rows with no recorded source."
+                          },
+                          "sources": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "events": {
+                            "type": "integer"
+                          },
+                          "rows": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "event_id": {
+                            "type": "string",
+                            "description": "A hash of the sorted member row ids and the policy version."
+                          },
+                          "site": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "sci_name": {
+                            "type": "string"
+                          },
+                          "com_name": {
+                            "type": "string"
+                          },
+                          "first_utc": {
+                            "type": "integer"
+                          },
+                          "last_utc": {
+                            "type": "integer"
+                          },
+                          "members": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "row_id": {
+                                  "type": "string",
+                                  "description": "`Date|Time|Sci_Name|File_Name|chunk_offset_secs`, the table's unique key."
+                                },
+                                "source": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "instant_utc": {
+                                  "type": "integer"
+                                },
+                                "confidence": {
+                                  "type": "number"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "policy",
+                    "range",
+                    "rows_without_instant",
+                    "total_events",
+                    "sites",
+                    "events"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter is missing or out of range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The read failed. Never reported as zero events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events/daily": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Events per day, site and species",
+        "description": "Events per UTC date (of each event's first member), site and species over at most 31 days. Sites are never pooled: two sites hearing one species are two lines.",
+        "operationId": "dailyEvents",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First UTC date, `YYYY-MM-DD`, inclusive.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Last UTC date, `YYYY-MM-DD`, inclusive; at most 31 days after `from`.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "tolerance_secs",
+            "in": "query",
+            "description": "Members of an event lie within this many seconds of one another. Default 4 (BirdNET V2.4's 3 s window plus 1 s); 0 to 600.",
+            "schema": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 600,
+              "default": 4
+            }
+          },
+          {
+            "name": "sites",
+            "in": "query",
+            "description": "The site map: `source:site` pairs separated by commas (`mic-north:yard,cam-1:yard`), split at the last colon. A source not named is its own site, which is also the default: nothing is merged across sources until they are put at one site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The counts, with how they were counted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "policy": {
+                      "type": "object",
+                      "description": "How the events were counted. An event is the detections of one call (one species, one site, at most one row per source, all within the tolerance of one another, paired nearest first and never chained). It is not an individual bird.",
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "description": "The event rule's version; hashed into every `event_id`."
+                        },
+                        "tolerance_secs": {
+                          "type": "number"
+                        },
+                        "default_tolerance_secs": {
+                          "type": "number"
+                        },
+                        "site_map": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "description": "Every source seen, and every source named, with the site applied."
+                        },
+                        "site_map_default": {
+                          "type": "string"
+                        },
+                        "unit": {
+                          "type": "string"
+                        },
+                        "instant": {
+                          "type": "string"
+                        },
+                        "rows_without_source": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "tolerance_secs",
+                        "site_map",
+                        "unit"
+                      ]
+                    },
+                    "range": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        },
+                        "from_utc": {
+                          "type": "integer"
+                        },
+                        "to_utc": {
+                          "type": "integer",
+                          "description": "Exclusive."
+                        },
+                        "read_from_utc": {
+                          "type": "integer"
+                        },
+                        "read_to_utc": {
+                          "type": "integer"
+                        },
+                        "edges_settled": {
+                          "type": "boolean",
+                          "description": "False when rows were still within the tolerance of the widened read's edge after a day each side: an event at the very edge of the range may then pair differently in a wider read."
+                        }
+                      }
+                    },
+                    "rows_without_instant": {
+                      "type": "integer",
+                      "description": "Rows in the range's dates with no `detected_at_utc`: in no event, never placed from their local time."
+                    },
+                    "total_events": {
+                      "type": "integer"
+                    },
+                    "sites": {
+                      "type": "array",
+                      "description": "Per site (point): events, the rows in them, and the sources.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "site": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Null for rows with no recorded source."
+                          },
+                          "sources": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "events": {
+                            "type": "integer"
+                          },
+                          "rows": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "day": {
+                      "type": "string"
+                    },
+                    "days": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "site": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "sci_name": {
+                            "type": "string"
+                          },
+                          "com_name": {
+                            "type": "string"
+                          },
+                          "events": {
+                            "type": "integer"
+                          },
+                          "rows": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "policy",
+                    "range",
+                    "rows_without_instant",
+                    "total_events",
+                    "sites",
+                    "days"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter is missing or out of range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The read failed. Never reported as zero events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/settings": {
       "get": {
         "tags": [
@@ -7362,6 +7863,167 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/effort/sites": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Each site's listening per hour, as bounds",
+        "description": "From the hourly effort ledger, which keeps seconds of audio analysed per local hour and source, so a site's listening (the union of its sources' intervals) is not recoverable. It is reported as a lower bound (the best-covered source) and an upper bound (the sum, capped at the hour's real length on the station's local clock: 7200 s in a repeated fall-back hour), with sensor time (the sum) apart. At most 31 local dates.",
+        "operationId": "siteEffort",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First Local date, `YYYY-MM-DD`, inclusive.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Last Local date, `YYYY-MM-DD`, inclusive; at most 31 days after `from`.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "sites",
+            "in": "query",
+            "description": "The site map: `source:site` pairs separated by commas (`mic-north:yard,cam-1:yard`), split at the last colon. A source not named is its own site, which is also the default: nothing is merged across sources until they are put at one site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The hours.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "site_map": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "description": "Every source seen, and every source named, with the site applied."
+                    },
+                    "site_map_default": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "dates": {
+                      "type": "string"
+                    },
+                    "bounds": {
+                      "type": "string"
+                    },
+                    "listened_day_rule": {
+                      "type": "string",
+                      "description": "The one listened-day rule's name (`half-of-typical-day`)."
+                    },
+                    "hours": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "hour": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 23
+                          },
+                          "site": {
+                            "type": "string"
+                          },
+                          "sources": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "listened_secs_lower_bound": {
+                            "type": "number"
+                          },
+                          "listened_secs_upper_bound": {
+                            "type": "number"
+                          },
+                          "sensor_secs": {
+                            "type": "number",
+                            "description": "The sum over sources: not the site's listening."
+                          },
+                          "sensor_hours": {
+                            "type": "number"
+                          },
+                          "hour_capacity_secs": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "The hour's real length; null when the local clock skips it (the upper bound is then the sum)."
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "site_map",
+                    "bounds",
+                    "hours"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter is missing or out of range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The read failed. Never reported as zero events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }

@@ -311,6 +311,20 @@ These power the charts on the [Analytics](../guide/analytics.md) and time-series
 
 These `insights`, `dashboard` and `analytics/species` endpoints read SQLite directly, so they answer with the analytics engine off. Their parameters, defaults and field names are birdnet-go's, so a client written for either station reads both. A station whose detections cannot be read answers `500` rather than an empty list.
 
+### Events: one call heard by several sources
+
+Two microphones that hear one call write two detections. An **event** is the detections that are, by one rule, the same call: rows of one species at one site, at most one row per source, every member within `tolerance_secs` of every other. Rows are paired nearest first and never chained, so a chorus does not grow into one long event (A at 0 s, B at 3 s and C at 6 s with a tolerance of 4 s are two events). Equal distances go to the earlier row, by instant and then by the row's id, so the answer does not depend on the order rows were stored in. Events are computed when they are read and never stored, so changing the tolerance or the site map rewrites nothing. **An event is a call, not a bird**: one bird singing for a minute is many events.
+
+Each source is its own site until you say otherwise, so by default nothing is merged. `sites=` is the site map, `source:site` pairs separated by commas (`sites=mic-north:yard,cam-1:yard`). A detection's instant is `detected_at_utc`; a detection without one (its local time named no instant, such as the hour a spring-forward night skips) is in no event and is counted in `rows_without_instant`, not placed from its local time. A detection with no recorded source is an event of its own.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/v2/events?from=&to=&tolerance_secs=&sites=` | The events whose first detection falls in `from` to `to` (UTC dates, at most 7 days), each with its `event_id` (a hash of its members and the rule's version), `site`, `sci_name`, `first_utc`, `last_utc` and `members` (`row_id`, `source`, `instant_utc`, `confidence`), plus `total_events` and `sites`, the events and detections per site |
+| `GET /api/v2/events/daily?from=&to=&tolerance_secs=&sites=` | Events per UTC date, site and species over at most 31 days (`days`: `date`, `site`, `sci_name`, `com_name`, `events`, `rows`). Sites are never pooled |
+| `GET /api/v2/effort/sites?from=&to=&sites=` | Each site's listening per local hour over at most 31 local dates. The effort ledger keeps seconds per source, so a site's listening is reported as bounds: `listened_secs_lower_bound` (its best-covered source) and `listened_secs_upper_bound` (the sum, capped at the hour's real length, `hour_capacity_secs`, which is 7200 s in a repeated fall-back hour). `sensor_secs` and `sensor_hours`, the sum over sources, are a per-sensor denominator and not the site's listening. `listened_day_rule` names the one listened-day rule (`half-of-typical-day`) |
+
+`tolerance_secs` defaults to 4, BirdNET V2.4's 3-second window plus one second, and takes 0 to 600. Every event response states what it counted with: `policy.version`, `policy.tolerance_secs`, `policy.site_map` (every source seen, with the site applied) and `rows_without_instant`. `range.edges_settled` is `false` only when detections were still within the tolerance of the edge of a read widened by a day each side, in which case an event at the very edge of the range may pair differently in a wider read. A failed read is a `500`, never zero events; a missing or out-of-range parameter is a `400`.
+
 ### Diagnosing empty analytics dashboards
 
 `GET /api/v2/analytics/status` is the first thing to check when the analytics

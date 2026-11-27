@@ -12,6 +12,7 @@ pub mod charts;
 pub mod dashboard_image;
 pub mod detections;
 pub mod dynamic_thresholds;
+pub mod events;
 pub mod export;
 pub mod feeds;
 pub mod form;
@@ -77,6 +78,7 @@ pub fn public_routes() -> Router<AppState> {
     Router::new()
         .nest("/api/v2", detections::router())
         .nest("/api/v2", analysis_runs::router())
+        .nest("/api/v2", events::router())
         .nest("/api/v2", species::router())
         .nest("/api/v2", dynamic_thresholds::router())
         .nest("/api/v2", weather::router())
