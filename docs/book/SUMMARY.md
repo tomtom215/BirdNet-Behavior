@@ -37,6 +37,7 @@ phone bottom bar): **Today**, **Species**, **Patterns**, **Recordings**,
 - [Running More Than One Classifier](./admin/classifiers.md)
 - [Audio & Microphones](./admin/audio.md)
 - [Recording & Retention](./admin/recording.md)
+- [Analysing Long Recordings](./admin/ingesting-recordings.md)
 - [Notifications & Integrations](./admin/notifications.md)
 - [Remote Access & Security](./admin/remote-access.md)
 - [Backups & Recovery](./admin/backups.md)

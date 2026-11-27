@@ -30,6 +30,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`--ingest-recordings` analyses long recordings** (review F11, RES-05): an SD card's, an AudioMoth's or a Song
+  Meter's. Each recording is read a packet at a time and written into the watch directory as segments of a
+  source you name, a few at a time, for the running station to analyse; its detections are stored as imported
+  history and announced to no one. The start time is given (`--ingest-start`) or read from the name
+  (`--ingest-name-rule yyyymmdd_hhmmss` with `--ingest-utc-offset`), never guessed, and a rerun skips what was
+  imported. See *Analysing Long Recordings* in the manual.
+- **`STATION_PROFILE=research`** changes two defaults for a study: `DB_SYNCHRONOUS` becomes `full` and
+  `OCCURRENCE_WEEK` becomes `window`. A value written down is the operator's under either profile; the default
+  profile, `hobby`, changes nothing.
+- **`OCCURRENCE_WEEK=window`** (review F13) judges each window by the range model's week for its own capture
+  time, so a recording that crosses into the next of the model's 48 weeks has its later windows judged by that
+  week. `file`, BirdNET-Pi's one week per recording, stays the default.
+- **`ANALYSIS_CHANNELS=left|right|<n>`** (review F12) analyses one channel of a multichannel recording instead of
+  their mean, and every decode now warns (at most every ten minutes) when a recording's channels cancel in the
+  mean, as microphones out of phase or a channel wired inverted do. A one-channel recording is analysed as it
+  is. `each` is not available yet: detections are stored by recording, time and species, so two channels would
+  collide into one row.
+- **Each classifier's own privacy and noise rules** (review F09): `MODEL_PRIVACY_THRESHOLD`,
+  `MODEL_PRIVACY_RANK`, `MODEL_NOISE_THRESHOLD` and their `MODEL_2_`/`MODEL_3_` slots, read against that
+  classifier's own scores, since classifiers' scores are not on one scale. Unset, a classifier is judged by the
+  station's rule, as before.
+- **Migration 68 records how much of each classifier's window was padding** (review F09): on the last window of a
+  recording the classifier is given zeros past its end. The answer's window now ends where the audio does, and
+  the model-scores export gains a last column, `Padded_Secs` (empty for answers stored before).
+- **`/api/v2/events`, `/api/v2/events/daily` and `/api/v2/effort/sites`** (decisions 1 and 2 of the 2026-11
+  review). One call heard by several sources of one site is one event, grouped at read time by a stated rule
+  whose version and tolerance every answer carries, so counts no longer depend on the order rows arrived in. A
+  site's listening is given as a lower and an upper bound, with the sensor time summed over sources apart.
+- **Trends draws each day's usual range** (CHT-06, CHT-23): the 10th to 90th percentile of the 30 listened days
+  before it, with too few days before it said rather than drawn. It is not a confidence interval, and the page
+  says so.
 - **`DB_SYNCHRONOUS=full`** syncs the database at every commit, so a recorded detection is on the disk before it
   is announced. The default, `normal`, is unchanged: a commit survives the program stopping, and the last few
   before a power cut can be lost; the configuration reference now says so, and the start-up log says which is in
@@ -226,6 +257,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **A recording longer than eleven minutes is not analysed where it is dropped** (review F11). The station reads
+  its header, refuses it before decoding, and moves it to `ingest/refused/` beside the database, where the
+  stream directory's purge cannot delete it, with a journal line naming the command that takes it. It used to be
+  decoded whole, however long. A damaged packet whose claimed length is more than 10 s is now counted as dropped
+  rather than filled with that much silence.
+- **A BirdWeather upload is queued before it is sent** (review batch 2, the outbox), held back from the queue's
+  sender while the live attempt runs, so a stop or a crash mid-upload sends it later instead of losing it.
+  Delivery is at least once: a crash after BirdWeather took an upload and before the station recorded that sends
+  it twice, because BirdWeather accepts no key that would let it ignore the second.
+- **Migration's ridges are drawn per listened time** (N26-07), not as counts, and weeks with too little listening
+  are hatched as unknown instead of drawn at zero; the history calendar marks a day the station did not listen
+  and no longer draws a day to come like one (UIR-09).
 - **Perch v2 has a second origin (MDL-12).** `--install-model perch-v2`, the install panel and the station's
   own repair fetch `perch-v2.onnx` from this project's `models-perch-v2` release first and from Hugging Face
   after it, each held to the same sha256 and size. The release carries the Apache License 2.0 text and a notice
@@ -364,6 +407,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A live detection the database refuses is kept for the next start** (review F02, batch 2), as one replayed
+  from a stop already was; it used to be logged and lost. It waits in memory until the processor has had no
+  new detection for a second, or 32 are waiting, and is then written to the queue, so a power cut in that
+  moment still loses it. The queue acknowledges a settled detection only once
+  the database has made its commit durable (a checkpoint, or `DB_SYNCHRONOUS=full`), so a power cut cannot lose
+  a detection the queue had already let go. A quarantined detection keeps a clip of its own in the recordings
+  folder, which the review page plays and which is removed with the row; the row used to name a stream segment
+  or a queue file that was deleted within minutes. The queue holds at most 2 GiB of audio and leaves 512 MiB of
+  the disk free, keeping detections without their audio past that, and holds one recording's audio in memory at
+  a time however many sources and detections are waiting.
 - **A stop's queue keeps what analysed a detection, and loses nothing it could not store** (review F01-F05,
   F07, F15, F16 of the 2026-11-26 review). A detection kept at a stop is stored at the next start under the
   analysis run that produced it and judged at the bars in force when it was kept, not under the run and
@@ -374,8 +427,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   samples each clip is cut from, so on a privacy-filtered station no audio the filter did not judge is kept. Its
   files are written whole and synced. A detection the database refuses no longer opens a duplicate interval that
   suppresses the next one, no two detections the interval admits are closer than it in any order of arrival, a
-  replayed detection no longer marks its source as capturing, and a row and its classifiers' answers are written
-  in one transaction.
+  replayed detection no longer marks its source as capturing, and a row is stored with all of its classifiers'
+  answers or not at all: a failed write of the answers rolls the row back, and the detection is kept for the
+  next start, where the first batch of this work had stored the row and logged the failure.
 - **A window a classifier that can hear people failed is masked by the privacy filter** (review F08), instead of
   being judged for speech by the classifiers that answered, which may name no human class.
 - **One window no classifier answered no longer discards the rest of its recording** (review F18): the other
