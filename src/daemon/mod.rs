@@ -900,7 +900,11 @@ fn run_and_process(
             tokio::task::spawn_blocking(move || {
                 // No run, no rows: returning here drops the receiver, the
                 // daemon stops on its next send, and `?strict=1` says so.
-                let Some(provenance) = run::provenance_for(&state, &manifest) else {
+                let Some(provenance) = run::provenance_for_with(
+                    &state,
+                    &manifest,
+                    &deciding_config(&settings, &daemon_config),
+                ) else {
                     return;
                 };
                 event_processor(
@@ -993,6 +997,68 @@ fn run_manifest(
             .map(|m| (m.id.clone(), m.model_path.clone(), m.labels_path.clone()))
             .collect(),
     }
+}
+
+/// The resolved settings that decided what this run recorded and the run
+/// manifest does not carry (RES-11): recorded with the run, canonical and
+/// hashed. Enumerations are recorded by their `Debug` names, and lists sorted,
+/// so the same configuration gives the same record.
+fn deciding_config(
+    settings: &Settings,
+    daemon_config: &birdnet_core::detection::daemon::DaemonConfig,
+) -> birdnet_db::sqlite::queries::run_config::RunConfig {
+    let mut species: Vec<String> = settings
+        .species_thresholds
+        .iter()
+        .map(|(sci, t)| format!("{sci}={t}"))
+        .collect();
+    species.sort();
+    let mut privacy: Vec<String> = daemon_config
+        .classifier_privacy
+        .iter()
+        .map(|(id, r)| format!("{id}:{:?}:{:?}", r.threshold, r.rank_cutoff))
+        .collect();
+    privacy.sort();
+    let mut noise: Vec<String> = daemon_config
+        .classifier_noise
+        .iter()
+        .map(|(id, t)| format!("{id}:{t}"))
+        .collect();
+    noise.sort();
+    let mut noise_classes = settings.noise_classes.clone();
+    noise_classes.sort();
+    let sites: Vec<String> = settings
+        .source_sites
+        .explicit()
+        .iter()
+        .map(|(source, site)| format!("{source}:{site}"))
+        .collect();
+    birdnet_db::sqlite::queries::run_config::RunConfig::new()
+        .set_f32("load_confidence", settings.load_confidence)
+        .set_f32("model_confidence", settings.model_confidence)
+        .set_f32("privacy_threshold", settings.privacy_threshold)
+        .set_i64(
+            "privacy_rank",
+            i64::try_from(settings.privacy_rank).unwrap_or(i64::MAX),
+        )
+        .set_str("classifier_privacy", &privacy.join(","))
+        .set_f32("noise_threshold", settings.noise_threshold)
+        .set_str("noise_classes", &noise_classes.join(","))
+        .set_str("classifier_noise", &noise.join(","))
+        .set_f32("noise_remember_secs", settings.noise_remember_secs)
+        .set_i64("duplicate_interval_secs", settings.duplicate_interval_secs)
+        .set_str("confirmation", &format!("{:?}", settings.confirmation))
+        .set_str("dynamic_threshold", &format!("{:?}", settings.dynamic))
+        .set_str(
+            "occurrence_week",
+            &format!("{:?}", daemon_config.pipeline.occurrence_week),
+        )
+        .set_str(
+            "analysis_channels",
+            &format!("{:?}", daemon_config.pipeline.channels),
+        )
+        .set_str("source_sites", &sites.join(","))
+        .set_str("species_thresholds", &species.join(";"))
 }
 
 /// Why the detector is not set up, naming each setting that is missing.
@@ -1187,6 +1253,55 @@ mod settings_tests {
         assert!(
             extraction.own_segment_only,
             "a classifier's own privacy rule runs the filter"
+        );
+    }
+
+    /// RES-11: the run records the resolved settings that decided what it
+    /// recorded, including the review's new ones (week mode, channel, site
+    /// map, each classifier's own rules), the same way each time.
+    #[test]
+    fn a_run_records_the_settings_that_decided_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let model = tmp.path().join("model.onnx");
+        let labels = tmp.path().join("labels.txt");
+        let config = config(
+            "OCCURRENCE_WEEK=window\nANALYSIS_CHANNELS=left\nSOURCE_SITES=north:yard,south:yard\n\
+             MODEL_ID=v24\nMODEL_PRIVACY_THRESHOLD=0.3\n",
+        );
+        let cli = cli(&[]);
+        let settings = Settings::resolve(&cli, Some(&config), &state);
+        let planned = plan_classifiers(Some(&config), &state, &model, &labels);
+        let daemon = daemon_config(
+            &cli,
+            &state,
+            Paths {
+                watch_dir: tmp.path().join("recs"),
+                model_path: model,
+                labels_path: labels,
+            },
+            &settings,
+            planned,
+            birdnet_core::detection::daemon::InFlight::new(),
+            birdnet_core::detection::privacy::ClipReach::default(),
+        );
+        let recorded = deciding_config(&settings, &daemon);
+        let text = |k: &str| recorded.get(k).and_then(|v| v.as_str()).map(str::to_owned);
+        assert_eq!(text("occurrence_week").as_deref(), Some("PerWindow"));
+        assert_eq!(text("analysis_channels").as_deref(), Some("Only(0)"));
+        assert_eq!(
+            text("source_sites").as_deref(),
+            Some("north:yard,south:yard")
+        );
+        assert_eq!(
+            text("classifier_privacy").as_deref(),
+            Some("v24:Some(0.3):None")
+        );
+        assert!(recorded.get("privacy_rank").is_some());
+        assert_eq!(
+            recorded.canonical_json(),
+            deciding_config(&settings, &daemon).canonical_json(),
+            "the same configuration gives the same record"
         );
     }
 
