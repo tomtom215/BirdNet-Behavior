@@ -480,9 +480,12 @@ mod tests {
         let sql = phenology_timing_sql(&params);
         assert!(sql.contains("Com_Name = 'Eurasian Blackbird'"));
         // The species condition is joined with AND onto the placeable-rows
-        // condition rather than each carrying its own keyword, so exactly one
-        // WHERE is emitted however many filters are set.
-        assert_eq!(sql.matches("WHERE").count(), 1, "{sql}");
+        // condition rather than each carrying its own keyword, so the
+        // detections' block emits exactly one WHERE however many filters are
+        // set. Counted in that block: the effort blocks after it carry their
+        // own (N26-05).
+        let dated = &sql[..sql.find("timing AS (").expect("the timing block")];
+        assert_eq!(dated.matches("WHERE").count(), 1, "{dated}");
     }
 
     #[test]
