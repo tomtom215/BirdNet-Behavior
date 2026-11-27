@@ -27,6 +27,12 @@
 //!   baseline, which said the bird had gone. The table's "Days listened" row says which
 //!   weeks were not drawn, and the key names the hatch.
 //!
+//! * **A ridge on little evidence is drawn hollow** (CHT-09). Its height is its own busiest
+//!   week, so a bird detected three times all year stood as tall as one detected three
+//!   thousand times, and three detections can be one false positive and its echoes. A ridge
+//!   whose busiest week holds fewer than [`FEW_AT_PEAK`] detections is an outline with no
+//!   fill (`rd-few`), and its peak line says how many detections it is.
+//!
 //! The lane under the ridges is distinct species heard per week, on the same x axis; one
 //! pointer reading speaks for both (the kit's "cols" mode: a crosshair over a week lists every
 //! species heard in it and says how many kinds that was).
@@ -51,6 +57,11 @@ use crate::routes::pages::escape_html;
 /// Columns of the chart: the year in weeks of seven days, the last absorbing the remainder
 /// (`WEEK_COLUMN` in `pages/migration.rs`).
 pub const WEEKS: usize = 52;
+
+/// Fewer detections than this in a ridge's busiest week and the ridge is drawn hollow, with
+/// its count beside its peak: a peak of a handful of detections is as tall as any other on its
+/// own scale, and may be one misidentification (CHT-09).
+pub const FEW_AT_PEAK: f64 = 5.0;
 
 /// Which window of the year a species peaks in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -118,6 +129,12 @@ pub struct Ridge {
 }
 
 impl Ridge {
+    /// Whether its busiest week holds fewer than [`FEW_AT_PEAK`] detections: drawn hollow.
+    #[must_use]
+    pub fn few_at_peak(&self) -> bool {
+        self.rate[self.peak_week()].is_some() && self.counts[self.peak_week()] < FEW_AT_PEAK
+    }
+
     /// The week column with the highest rate (the first of equals), among the weeks with
     /// one; week 0 when no week has a rate.
     pub fn peak_week(&self) -> usize {
@@ -415,8 +432,9 @@ pub fn ridgeline(p: &Phenology<'_>) -> String {
         let season = season_of(ridge.peak_week(), p.spring, p.fall);
         let _ = write!(
             s,
-            r#"<g class="rd-ridge {class} ck-reveal" data-ck-s="{i}"><line class="ck-grid" x1="{PAD_L}" y1="{base:.1}" x2="{xr:.1}" y2="{base:.1}"/>"#,
+            r#"<g class="rd-ridge {class}{few} ck-reveal" data-ck-s="{i}"><line class="ck-grid" x1="{PAD_L}" y1="{base:.1}" x2="{xr:.1}" y2="{base:.1}"/>"#,
             class = season.class(),
+            few = if ridge.few_at_peak() { " rd-few" } else { "" },
             xr = x(WEEKS as f64 - 1.0),
         );
         for &(a, b) in &known_runs {
@@ -464,7 +482,12 @@ pub fn ridgeline(p: &Phenology<'_>) -> String {
         let (peak_a, _) = week_days(p.year, pw);
         let _ = write!(
             s,
-            r#"<text class="rd-name ck-sticky ck-halo" x="{nx:.1}" y="{ny:.1}" text-anchor="end" data-ck-s="{i}">{name}</text><text class="rd-sub mono ck-sticky ck-halo" x="{nx:.1}" y="{sy:.1}" text-anchor="end" data-ck-s="{i}">peak {when}</text>"#,
+            r#"<text class="rd-name ck-sticky ck-halo" x="{nx:.1}" y="{ny:.1}" text-anchor="end" data-ck-s="{i}">{name}</text><text class="rd-sub mono ck-sticky ck-halo" x="{nx:.1}" y="{sy:.1}" text-anchor="end" data-ck-s="{i}">peak {when}{few}</text>"#,
+            few = if ridge.few_at_peak() {
+                format!(", {} heard", ridge.counts[pw.min(WEEKS - 1)])
+            } else {
+                String::new()
+            },
             nx = PAD_L - 12.0,
             ny = base - 7.0,
             sy = base + 9.0,
@@ -774,6 +797,35 @@ mod tests {
             checked += 1;
         }
         assert_eq!(checked, 3, "one ridge each, or the gate is vacuous");
+    }
+
+    /// CHT-09: a ridge whose busiest week holds a handful of detections is hollow and says its
+    /// count; a ridge of forty at its peak, on the same chart and as tall, is not.
+    #[test]
+    fn a_ridge_on_a_handful_of_detections_is_drawn_hollow() {
+        let ridges = vec![
+            ridge("Rare Vagrant", 20, 3.0),
+            ridge("Barn Swallow", 14, 41.0),
+        ];
+        let div = [3; WEEKS];
+        let svg = ridgeline(&phen(&ridges, &div, None));
+        let groups: Vec<&str> = svg.split("<g class=\"rd-ridge ").skip(1).collect();
+        assert_eq!(groups.len(), 2, "precondition: two ridges");
+        assert!(
+            groups[0].split('"').next().unwrap_or("").contains("rd-few"),
+            "{}",
+            &groups[0][..80]
+        );
+        assert!(
+            !groups[1].split('"').next().unwrap_or("").contains("rd-few"),
+            "{}",
+            &groups[1][..80]
+        );
+        assert!(
+            svg.contains(", 3 heard</text>"),
+            "the count is said beside the peak"
+        );
+        assert!(!svg.contains(", 41 heard"));
     }
 
     /// A week that has not happened is hatched and has no ridge in it; when the year is over

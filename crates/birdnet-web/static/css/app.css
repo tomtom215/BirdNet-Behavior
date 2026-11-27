@@ -6178,6 +6178,9 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
 .co-controls { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-10); flex-wrap: wrap; }
 .co-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-24); align-items: start; }
 .co-chord { min-width: 0; }
+/* A migration ridge on a handful of detections is an outline (CHT-09). */
+.rd-few .rd-area { fill: none; }
+.rd-few .rd-line { stroke-dasharray: 3 3; }
 .co-ring { display: none; }
 .co-none { margin: 0; }
 .co-chord .viz-svg-chord { max-width: 800px; }
