@@ -330,7 +330,12 @@ fn infer_chunk(
                 .map(|l| l.common_name.as_str())
         });
     }
-    attach_answers(registry, &windows, chunk.start_secs, &mut detections);
+    attach_answers(
+        registry,
+        &windows,
+        (chunk.start_secs, chunk.end_secs),
+        &mut detections,
+    );
     Ok(ChunkPrediction {
         detections,
         human_score,
@@ -360,7 +365,7 @@ type Lookup<'a> = Box<dyn Fn(&str) -> crate::detection::answers::ClassScore + 'a
 fn attach_answers(
     registry: &ClassifierRegistry,
     windows: &[(usize, bool)],
-    chunk_start_secs: f32,
+    (chunk_start_secs, chunk_end_secs): (f32, f32),
     detections: &mut [crate::detection::types::Detection],
 ) {
     use crate::detection::answers::{WindowOutcome, answers_for};
@@ -386,12 +391,20 @@ fn attach_answers(
     let outcomes: Vec<WindowOutcome<'_>> = listening
         .iter()
         .zip(&lookups)
-        .map(|(&(registered, _), lookup)| WindowOutcome {
-            model_id: &registered.id,
-            bar: registered.own_threshold,
-            window_start_secs: chunk_start_secs,
-            window_end_secs: chunk_start_secs + registered.spec.window_secs(),
-            scores: lookup.as_deref(),
+        .map(|(&(registered, _), lookup)| {
+            let (window_end_secs, padded_secs) = crate::detection::answers::window_support(
+                chunk_start_secs,
+                registered.spec.window_secs(),
+                chunk_end_secs,
+            );
+            WindowOutcome {
+                model_id: &registered.id,
+                bar: registered.own_threshold,
+                window_start_secs: chunk_start_secs,
+                window_end_secs,
+                padded_secs,
+                scores: lookup.as_deref(),
+            }
         })
         .collect();
     for detection in detections {
@@ -1252,6 +1265,8 @@ mod tests {
         let mut registry = two_classifiers_with(tmp.path(), (Some(0.60), Some(0.70)), 11);
         let mut chunk = chunk_scoring(&[0.9]);
         chunk.start_secs = 6.0;
+        // A whole chunk, as the pipeline cuts one: it ends a chunk later.
+        chunk.end_secs = 9.0;
         let out = infer_chunk(&mut registry, &[0, 1], &chunk, 20).unwrap();
         let d = &out.detections[0];
         // birdnet: 144 000 samples at 48 kHz = 3 s. v3: 96 000 declared at 48 kHz = 2 s.
@@ -1263,6 +1278,53 @@ mod tests {
         let v = answer_of(d, "v3");
         assert!(
             (v.window_start_secs - 6.0).abs() < 1e-6 && (v.window_end_secs - 8.0).abs() < 1e-6,
+            "{v:?}"
+        );
+    }
+
+    /// Review F09: on the zero-padded last chunk of a recording a classifier's
+    /// window runs past the audio. Its answer records the audio that exists
+    /// (clamped to the recording's end, as the detection row is) and how much
+    /// of its window was padding. A 7 s recording's chunk at 6 s holds one
+    /// second of audio: birdnet's 3 s window is 2 s padding, v3's 2 s window 1 s.
+    ///
+    /// Counterpart: a whole chunk (ending at 9 s) is clamped nowhere and padded
+    /// nowhere, so the clamp is the recording's end and not a property of the
+    /// windows.
+    #[test]
+    fn a_padded_tail_window_records_the_audio_that_exists_and_its_padding() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers_with(tmp.path(), (Some(0.60), Some(0.70)), 11);
+        let mut tail = chunk_scoring(&[0.9]);
+        tail.start_secs = 6.0;
+        tail.end_secs = 7.0;
+        let out = infer_chunk(&mut registry, &[0, 1], &tail, 20).unwrap();
+        let d = &out.detections[0];
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-6;
+        let b = answer_of(d, "birdnet");
+        assert!(
+            close(b.window_end_secs, 7.0) && close(b.padded_secs, 2.0),
+            "birdnet's answer claims audio past the recording's end: {b:?}"
+        );
+        let v = answer_of(d, "v3");
+        assert!(
+            close(v.window_end_secs, 7.0) && close(v.padded_secs, 1.0),
+            "v3's answer claims audio past the recording's end: {v:?}"
+        );
+
+        let mut whole = chunk_scoring(&[0.9]);
+        whole.start_secs = 6.0;
+        whole.end_secs = 9.0;
+        let out = infer_chunk(&mut registry, &[0, 1], &whole, 20).unwrap();
+        let d = &out.detections[0];
+        let b = answer_of(d, "birdnet");
+        assert!(
+            close(b.window_end_secs, 9.0) && close(b.padded_secs, 0.0),
+            "{b:?}"
+        );
+        let v = answer_of(d, "v3");
+        assert!(
+            close(v.window_end_secs, 8.0) && close(v.padded_secs, 0.0),
             "{v:?}"
         );
     }

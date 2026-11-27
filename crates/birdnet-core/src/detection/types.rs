@@ -94,7 +94,20 @@ pub struct ModelAnswer {
     pub window_start_secs: f32,
     /// Where it ended. Classifiers' windows differ in length, so "the same
     /// chunk" is not "the same instants".
+    ///
+    /// The end of the audio that exists (review F09): on the zero-padded last
+    /// chunk of a recording the classifier's window runs past the recording's
+    /// end, and this is clamped to that end, as the detection row's own `stop`
+    /// is. What the window held beyond it is [`Self::padded_secs`].
     pub window_end_secs: f32,
+    /// How much of the classifier's window was zero padding rather than
+    /// recorded audio, seconds: `0.0` for every window but one that the
+    /// recording ends inside. The window the classifier was handed is
+    /// `window_end_secs - window_start_secs + padded_secs` long. A score from a
+    /// window that was mostly padding was given mostly silence, and a reader
+    /// comparing classifiers can now tell.
+    #[serde(default)]
+    pub padded_secs: f32,
 }
 
 /// What one inference pass says about one chunk of audio.
