@@ -46,6 +46,7 @@ CI_TESTS=(
     model-pins-match-catalogue.sh
     pipefail-sigpipe.sh
     quickstart-env.sh
+    quickstart-release.sh
     reset-password.sh
     release-tag-gate.sh
     rollback-geomodel.sh
