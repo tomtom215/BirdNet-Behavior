@@ -55,6 +55,7 @@ pub use db::{
 };
 pub use private_mode::{PrivateModeSetting, init_private_mode, resolve_private_mode};
 pub use secret_files::resolve_secret_files;
+pub use settings_overlay::apply_setting_overrides;
 pub use settings_overlay::{overlay_db_settings, seed_db_settings_from_config};
 pub use state::{
     apply_db_durability, info_site, init_i18n, init_image_cache, init_site_name,
@@ -62,7 +63,8 @@ pub use state::{
     run_verify_extension,
 };
 pub use system::{
-    maybe_install_avahi_service, start_disk_manager, start_live_spectrogram, stream_dir,
+    DEFAULT_STREAM_MAX_MB, DEFAULT_STREAM_RETENTION_SECS, maybe_install_avahi_service,
+    start_disk_manager, start_live_spectrogram, stream_dir,
 };
 
 #[cfg(feature = "analytics")]

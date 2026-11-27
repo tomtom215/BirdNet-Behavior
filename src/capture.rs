@@ -45,6 +45,7 @@ pub fn schedule_config_for_test(
     schedule::parse_schedule_config(cli, config)
 }
 mod sources;
+pub mod stream_budget;
 mod supervisor;
 mod uptime;
 pub mod watchdog;

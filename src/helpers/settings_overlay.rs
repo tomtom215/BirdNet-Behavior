@@ -531,7 +531,7 @@ fn config_key_for(setting_key: &str) -> Option<&'static str> {
 /// a database. Empty values are skipped so clearing a field falls back to the
 /// file config rather than blanking a key. When the file config is absent but
 /// overrides exist, a fresh [`Config`] is created to carry them.
-fn apply_setting_overrides<'a, I>(config: Option<Config>, settings: I) -> Option<Config>
+pub fn apply_setting_overrides<'a, I>(config: Option<Config>, settings: I) -> Option<Config>
 where
     I: IntoIterator<Item = (&'a str, &'a str)>,
 {
