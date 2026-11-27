@@ -235,7 +235,7 @@ async fn run_loop(
         .await
         {
             if clock_is_safe_for_retention() {
-                run_log_retention(&db_path).await;
+                run_log_retention(&db_path, &recordings_dir).await;
             }
             mark_ran(&db_path, JOB_LOG_RETENTION, &mut attempted).await;
         }
@@ -340,12 +340,13 @@ async fn present(path: &Path) -> bool {
 /// All are best-effort and no failure is fatal: a station that cannot prune its
 /// logs should keep recording birds. The whole job is skipped when the clock is
 /// implausible — see `clock_is_safe_for_retention`.
-async fn run_log_retention(db_path: &Path) {
+async fn run_log_retention(db_path: &Path, recordings_dir: &Path) {
     if !present(db_path).await {
         tracing::debug!("log retention skipped: db not present yet");
         return;
     }
     let db_path = db_path.to_path_buf();
+    let recordings_dir = recordings_dir.to_path_buf();
     let result = tokio::task::spawn_blocking(move || -> Result<LogRetention, String> {
         use birdnet_db::accounts::AuditLog as _;
         let conn = birdnet_db::sqlite::open_or_create(&db_path).map_err(|e| e.to_string())?;
@@ -366,11 +367,27 @@ async fn run_log_retention(db_path: &Path) {
         let sound_levels =
             birdnet_db::sound_levels::prune(&conn, birdnet_db::sqlite::SOUND_LEVEL_RETENTION_DAYS)
                 .map_err(|e| e.to_string())?;
+        // The clips cut for the rows being pruned (review F03, second batch)
+        // go with them, unless a detection approved from one names it.
+        let clips = birdnet_db::sqlite::prunable_quarantine_clips(
+            &conn,
+            birdnet_db::sqlite::QUARANTINE_RETENTION_DAYS,
+        )
+        .map_err(|e| e.to_string())?;
         let quarantine = birdnet_db::sqlite::prune_quarantine(
             &conn,
             birdnet_db::sqlite::QUARANTINE_RETENTION_DAYS,
         )
         .map_err(|e| e.to_string())?;
+        for name in
+            birdnet_db::sqlite::unreferenced_clips(&conn, &clips).map_err(|e| e.to_string())?
+        {
+            if let Err(e) = std::fs::remove_file(recordings_dir.join(&name))
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!(error = %e, clip = %name, "could not remove a pruned quarantine clip");
+            }
+        }
         Ok(LogRetention {
             audit,
             notifications,
@@ -1832,7 +1849,7 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let db = station_with_old_logs(tmp.path());
 
-        run_log_retention(&db).await;
+        run_log_retention(&db, &db.with_file_name("recordings")).await;
 
         assert_eq!(
             count(&db, "audit_log"),
@@ -1865,6 +1882,73 @@ mod tests {
         );
     }
 
+    /// Review F03, second batch: a pruned quarantine row's clip goes with it;
+    /// a clip a detection was approved from stays, as does any file an old row
+    /// named by path (that row never owned it).
+    #[tokio::test]
+    async fn a_pruned_quarantine_rows_clip_goes_with_it_and_no_other() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = tmp.path().join("birds.db");
+        let recordings = tmp.path().join("recordings");
+        std::fs::create_dir_all(&recordings).unwrap();
+        {
+            let conn = birdnet_db::sqlite::open_or_create(&db).unwrap();
+            for (time, file) in [
+                ("06:00:00", "Pica_pica-60-2025-05-19-birdnet-06:00:00.wav"),
+                (
+                    "06:00:05",
+                    "Corvus_corax-60-2025-05-19-birdnet-06:00:05.wav",
+                ),
+                ("06:00:10", "/stream/2025-05-19-birdnet-06:00:10.wav"),
+            ] {
+                conn.execute(
+                    "INSERT INTO quarantine (date, time, sci_name, com_name, confidence, reason,
+                         file_name, reviewed, created_at)
+                     VALUES ('2025-05-19', ?1, 'Pica pica', 'Magpie', 0.6, 'low_confidence', ?2, 1,
+                             datetime('now', '-400 days'))",
+                    rusqlite::params![time, file],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES ('2025-05-19', '06:00:05', 'Corvus corax', 'Raven', 0.6,
+                         'Corvus_corax-60-2025-05-19-birdnet-06:00:05.wav')",
+                [],
+            )
+            .unwrap();
+        }
+        for name in [
+            "Pica_pica-60-2025-05-19-birdnet-06:00:00.wav",
+            "Corvus_corax-60-2025-05-19-birdnet-06:00:05.wav",
+            "2025-05-19-birdnet-06:00:10.wav",
+        ] {
+            std::fs::write(recordings.join(name), b"RIFF").unwrap();
+        }
+        run_log_retention(&db, &recordings).await;
+        assert_eq!(
+            count(&db, "quarantine"),
+            0,
+            "precondition: the rows were pruned"
+        );
+        assert!(
+            !recordings
+                .join("Pica_pica-60-2025-05-19-birdnet-06:00:00.wav")
+                .exists(),
+            "a pruned quarantine row's clip was left on the disk"
+        );
+        assert!(
+            recordings
+                .join("Corvus_corax-60-2025-05-19-birdnet-06:00:05.wav")
+                .exists(),
+            "a clip a detection names was removed"
+        );
+        assert!(
+            recordings.join("2025-05-19-birdnet-06:00:10.wav").exists(),
+            "a file an old row named by path was removed"
+        );
+    }
+
     /// The counterpart, so the gate above is a discrimination and not an
     /// indiscriminate `DELETE`: rows inside the retention window survive, and a
     /// second pass removes nothing further.
@@ -1873,8 +1957,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let db = station_with_old_logs(tmp.path());
 
-        run_log_retention(&db).await;
-        run_log_retention(&db).await;
+        run_log_retention(&db, &db.with_file_name("recordings")).await;
+        run_log_retention(&db, &db.with_file_name("recordings")).await;
 
         let conn = rusqlite::Connection::open(&db).unwrap();
         let action: String = conn

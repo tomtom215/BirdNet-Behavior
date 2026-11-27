@@ -445,6 +445,28 @@ fn row_share_button(token: &str) -> String {
     )
 }
 
+/// Remove from the recordings directory those of `names` that no detection
+/// and no quarantine row names any longer. A failed read removes nothing.
+pub(crate) fn remove_unreferenced_clips(state: &AppState, names: &[String]) {
+    let unreferenced = match state
+        .with_read_db(|conn| birdnet_db::sqlite::unreferenced_clips(conn, names))
+    {
+        Ok(found) => found,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not tell which quarantine clips are unreferenced; none removed");
+            return;
+        }
+    };
+    let dir = state.recording_dir();
+    for name in unreferenced {
+        if let Err(e) = std::fs::remove_file(dir.join(&name))
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(error = %e, clip = %name, "could not remove a quarantine clip");
+        }
+    }
+}
+
 /// Render an inline `<audio>` player for a quarantine row's source recording, if any.
 fn row_audio_player(file_name: Option<&str>) -> String {
     file_name.filter(|f| !f.is_empty()).map_or_default(|f| {
@@ -587,7 +609,21 @@ async fn quarantine_delete(
     let offset = form.offset.unwrap_or(0);
 
     let result = tokio::task::spawn_blocking(move || {
+        // The clip cut for the row (review F03, second batch) goes with it,
+        // unless a detection approved from it, or another row, names it.
+        let clip = match state.with_read_db(|conn| birdnet_db::sqlite::quarantine_clip_of(conn, id)) {
+            Ok(clip) => clip,
+            Err(e) => {
+                tracing::warn!(id, error = %e, "could not read a quarantine row's clip; it is kept");
+                None
+            }
+        };
         let result = state.with_db(|conn| birdnet_db::sqlite::delete_quarantine(conn, id));
+        if result.is_ok()
+            && let Some(name) = clip
+        {
+            remove_unreferenced_clips(&state, &[name]);
+        }
         if result.is_ok() {
             crate::audit::audit(
                 &state,
