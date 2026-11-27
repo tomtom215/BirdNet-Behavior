@@ -39,6 +39,8 @@ fi
 # or "NONE"; logs each curl call to ${WORK}/calls.
 resolve() {
     (
+        # Read by the eval'd resolve_release, which shellcheck cannot see.
+        # shellcheck disable=SC2034
         REPO="tomtom215/BirdNet-Behavior"
         API_ANSWER="$1"
         curl() { echo "curl $*" >>"${WORK}/calls"; [ -n "${API_ANSWER}" ] || return 22; printf '%s' "${API_ANSWER}"; }

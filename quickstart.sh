@@ -388,7 +388,7 @@ qs_detect_alsa_device() {
             | awk -v id="${first_id}" '$1 == "card" && $3 == id { n++ } END { print n+0 }')"
     fi
     if [ -n "${first_id}" ] \
-        && printf '%s' "${first_id}" | grep -qE '^[A-Za-z0-9_-]+$' \
+        && grep -qE '^[A-Za-z0-9_-]+$' <<<"${first_id}" \
         && [ "${id_count}" = "1" ]; then
         echo "plughw:CARD=${first_id},DEV=${first_device:-0}"
     else

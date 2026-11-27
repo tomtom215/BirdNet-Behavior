@@ -68,7 +68,9 @@ else
     fail "R1: other lines changed"
 fi
 if [ "$(stat -c %a "$(flow_config "${SB}")")" = 640 ]; then pass "R1: mode kept"; else fail "R1: mode is $(stat -c %a "$(flow_config "${SB}")")"; fi
-if ls "${SB}/etc/birdnet/" | grep -q reset; then fail "R1: a temporary file was left behind"; else pass "R1: no temporary file left"; fi
+left=0
+for f in "${SB}/etc/birdnet/"*reset*; do [ -e "${f}" ] && left=1; done
+if [ "${left}" = 1 ]; then fail "R1: a temporary file was left behind"; else pass "R1: no temporary file left"; fi
 
 echo "=== R2 a station with no CADDY_PWD ==="
 new_sandbox
