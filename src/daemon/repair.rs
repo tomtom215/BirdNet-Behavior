@@ -131,21 +131,36 @@ pub struct Watched {
     pub part: Part,
     /// The file, and what reads it.
     pub file: Configured,
+    /// Whether the configuration names it by the name an earlier installer
+    /// gave it rather than the one `--install-model` gives it (MDL-25).
+    pub legacy_name: bool,
 }
 
 /// The catalogue's file at `path`, when it is one: its name is the one
-/// `--install-model` gives an entry's model or labels.
+/// `--install-model` gives an entry's model or labels, or the one an earlier
+/// installer gave it (the V3.0 files' long upstream names), which a station
+/// the installer has not run on since still has in its configuration.
 #[must_use]
 pub fn catalogue_file(file: &Configured) -> Option<Watched> {
     let dir = file.path.parent()?.to_path_buf();
-    catalog::CATALOG.iter().find_map(|entry| {
-        catalog::part_at(entry, &dir, &file.path).map(|part| Watched {
-            entry,
-            dir: dir.clone(),
-            part,
-            file: file.clone(),
+    let watched = |entry, part, legacy_name| Watched {
+        entry,
+        dir: dir.clone(),
+        part,
+        file: file.clone(),
+        legacy_name,
+    };
+    catalog::CATALOG
+        .iter()
+        .find_map(|entry| {
+            catalog::part_at(entry, &dir, &file.path).map(|part| watched(entry, part, false))
         })
-    })
+        .or_else(|| {
+            catalog::CATALOG.iter().find_map(|entry| {
+                catalog::legacy_part_at(entry, &dir, &file.path)
+                    .map(|part| watched(entry, part, true))
+            })
+        })
 }
 
 /// The configured files the catalogue knows, each once, in the order the
@@ -449,7 +464,13 @@ impl<S: Station> Repair<S> {
         let rehash = first.unwrap_or(Rehash::IfChanged);
         t.next = Instant::now() + self.policy.repair_interval;
         let w = &t.watched;
-        let state = catalog::part_state(w.entry, &w.dir, w.part, rehash);
+        // The file the configuration names, which for an earlier installer's
+        // name is not the one `part_state` reads.
+        let state = if w.legacy_name {
+            catalog::state_at(w.entry, w.part, &w.file.path, rehash)
+        } else {
+            catalog::part_state(w.entry, &w.dir, w.part, rehash)
+        };
         if first.is_some() {
             t.loaded_damaged = state == Some(FileState::Damaged);
         }
@@ -546,7 +567,18 @@ impl<S: Station> Repair<S> {
                     },
                 ));
             };
-            catalog::install_part(w.entry.id, &w.dir, w.part, &policy, &mut progress)
+            if w.legacy_name {
+                catalog::install_part_under_legacy_name(
+                    w.entry.id,
+                    &w.dir,
+                    w.part,
+                    &w.file.path,
+                    &policy,
+                    &mut progress,
+                )
+            } else {
+                catalog::install_part(w.entry.id, &w.dir, w.part, &policy, &mut progress)
+            }
         };
         match result {
             Ok(()) => self.verified(i),
@@ -643,6 +675,51 @@ mod tests {
         );
         assert!(at("/m/my-own-model.onnx").is_none());
         assert!(at("/m/birdnet-v24.onnx.download").is_none());
+    }
+
+    /// MDL-25: a station whose configuration still names the V3.0 files by the
+    /// names an earlier installer gave them is looked after too, under those
+    /// names.
+    #[test]
+    fn a_file_under_an_earlier_installers_name_is_the_catalogues_too() {
+        let w = at("/m/BirdNET+_V3.0-preview3_Global_11K_FP32.onnx").expect("watched");
+        assert_eq!(
+            (w.entry.id, w.part, w.legacy_name),
+            ("birdnet-v3", Part::Model, true)
+        );
+        let w = at("/m/BirdNET+_V3.0-preview3_Global_11K_Labels.csv").expect("watched");
+        assert_eq!(
+            (w.entry.id, w.part, w.legacy_name),
+            ("birdnet-v3", Part::Labels, true)
+        );
+        let w = at("/m/BirdNET+_Geomodel_V3.0.2_Global_12K_FP32.onnx").expect("watched");
+        assert_eq!(w.entry.id, "birdnet-v3-geomodel");
+        // Counterparts: the installed name is not a legacy one, and a name that
+        // is neither is still the operator's own.
+        assert!(!at("/m/birdnet-v3.onnx").unwrap().legacy_name);
+        assert!(at("/m/BirdNET+_V3.0-preview3_Global_11K_FP16.onnx").is_none());
+    }
+
+    /// And the repair acts on it: missing under its configured name, it is
+    /// published under that name and, with no way to fetch, said so, where the
+    /// station used to say nothing at all about it.
+    #[test]
+    fn a_missing_file_under_an_earlier_installers_name_is_reported_under_that_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let legacy = dir
+            .path()
+            .join("BirdNET+_V3.0-preview3_Global_11K_FP32.onnx");
+        let station = Recorder::default();
+        let mut repair = repair_of(&legacy, Reader::Primary, &station);
+        assert_eq!(repair.tracked.len(), 1, "the file is watched");
+        assert!(!repair.pass());
+        let published = station.published.lock().unwrap().last().cloned().unwrap();
+        assert_eq!(published.path, legacy);
+        assert!(
+            matches!(published.repair, RepairState::NotFetched { .. }),
+            "{:?}",
+            published.repair
+        );
     }
 
     /// Every slot the detector reads is looked after, the command line

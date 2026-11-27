@@ -963,6 +963,98 @@ pub fn part_at(entry: &CatalogEntry, dir: &Path, path: &Path) -> Option<Part> {
     }
 }
 
+/// Which of `entry`'s files `path` is, by the name an earlier installer gave
+/// it in `dir` ([`CatalogEntry::legacy_model_name`],
+/// [`CatalogEntry::legacy_labels_name`]); `None` for any other name.
+///
+/// A station whose configuration still names those files (MDL-25: one the
+/// installer has not run on since the binary took over the names) is looked
+/// after by its own repair too, under the name it is configured with.
+#[must_use]
+pub fn legacy_part_at(entry: &CatalogEntry, dir: &Path, path: &Path) -> Option<Part> {
+    let named = |name: Option<&str>| name.is_some_and(|n| dir.join(n) == path);
+    if named(entry.legacy_model_name) {
+        Some(Part::Model)
+    } else if named(entry.legacy_labels_name) {
+        Some(Part::Labels)
+    } else {
+        None
+    }
+}
+
+/// The state of `path`, held to the pin of `entry`'s `part`.
+///
+/// For labels, the files [`CatalogEntry::labels_also_accepted`] names count
+/// too. For a file under a name other than the installed one: [`part_state`]
+/// reads the installed name.
+#[must_use]
+pub fn state_at(
+    entry: &CatalogEntry,
+    part: Part,
+    path: &Path,
+    rehash: Rehash,
+) -> Option<FileState> {
+    let mut spec = match part {
+        Part::Model => entry.model_spec(&FetchPolicy::default()),
+        Part::Labels => entry.labels_spec(&FetchPolicy::default())?,
+    };
+    let dir = path.parent()?;
+    spec.name = path.file_name()?.to_string_lossy().into_owned();
+    Some(spec.state_in(dir, rehash))
+}
+
+/// [`install_part`], and then the verified file also under `legacy`.
+///
+/// `legacy` is the name an earlier installer gave it in the same directory:
+/// a hard link (the same file, no second copy on disk), or a verified copy
+/// where links are refused.
+///
+/// # Errors
+///
+/// As [`install_part`]; [`InstallError::Unverifiable`] when `legacy` is not one
+/// of the entry's earlier names, or the installed file does not verify once
+/// linked.
+pub fn install_part_under_legacy_name(
+    id: &str,
+    dest_dir: &Path,
+    part: Part,
+    legacy: &Path,
+    policy: &FetchPolicy,
+    progress: &mut dyn FnMut(&Progress),
+) -> Result<(), InstallError> {
+    let entry = lookup(id)?;
+    if legacy_part_at(entry, dest_dir, legacy) != Some(part) {
+        return Err(InstallError::Unverifiable {
+            id: entry.id,
+            why: format!("{} is not an earlier name of this file", legacy.display()),
+        });
+    }
+    install_part(id, dest_dir, part, policy, progress)?;
+    let spec = match part {
+        Part::Model => entry.model_spec(policy),
+        Part::Labels => entry
+            .labels_spec(policy)
+            .ok_or_else(|| InstallError::Unverifiable {
+                id: entry.id,
+                why: "it ships no labels file".to_owned(),
+            })?,
+    };
+    let installed = dest_dir.join(&spec.name);
+    if !stage::adopt(&installed, legacy, spec.sha256, spec.bytes)? {
+        return Err(InstallError::Unverifiable {
+            id: entry.id,
+            why: format!(
+                "{} did not verify when given the name {}",
+                installed.display(),
+                legacy.display()
+            ),
+        });
+    }
+    record::write(legacy, spec.sha256);
+    tracing::info!(id, path = %legacy.display(), "put the verified file under the name the configuration gives it");
+    Ok(())
+}
+
 /// [`installed_state`] for one of the entry's files; `None` for the labels
 /// of an entry that ships none.
 #[must_use]
