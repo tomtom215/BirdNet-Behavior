@@ -1558,18 +1558,16 @@ pub(super) fn event_processor(
         // daily integrity check stops taking detection rows, and this is one of
         // the three writes that stop.
         let model_scores = db_model_scores(&detection.model_scores);
+        // The row and its answers are one transaction, so a crash or a power
+        // cut between the two cannot leave a row without the answers it was
+        // stored with (review F15). A failure of the answers alone is rolled
+        // back to their savepoint and the row still commits, as before: the
+        // detail is lost, not the detection.
         let Some(insert_result) = state.with_ingest_db(|conn| {
-            // The row and its answers are one transaction, so a crash or a
-            // power cut between the two cannot leave a row without the answers
-            // it was stored with (review F15). A failure of the answers alone
-            // is rolled back to their savepoint and the row still commits, as
-            // before: the detail is lost, not the detection.
-            let tx = match conn.unchecked_transaction() {
-                Ok(tx) => tx,
-                Err(e) => return Err(birdnet_db::sqlite::DbError::from(e)),
-            };
-            let conn: &rusqlite::Connection = &tx;
-            let inserted = birdnet_db::sqlite::insert_detection(conn, &record);
+            let tx = conn
+                .unchecked_transaction()
+                .map_err(birdnet_db::sqlite::DbError::from)?;
+            let inserted = birdnet_db::sqlite::insert_detection(&tx, &record);
             // What each classifier said, kept beside the row so a page can show
             // it (migrations 57 and 58). Only for a row that was stored: an
             // answer set for a detection the station has no record of would be
@@ -1582,7 +1580,7 @@ pub(super) fn event_processor(
             if inserted.is_ok()
                 && !model_scores.is_empty()
                 && let Err(e) = birdnet_db::sqlite::insert_model_scores(
-                    conn,
+                    &tx,
                     &birdnet_db::sqlite::DetectionKey {
                         date: record.date,
                         time: record.time,
@@ -1602,7 +1600,7 @@ pub(super) fn event_processor(
             }
             let rowid = inserted?;
             tx.commit().map_err(birdnet_db::sqlite::DbError::from)?;
-            Ok(rowid)
+            Ok::<_, birdnet_db::sqlite::DbError>(rowid)
         }) else {
             // Not a database failure — a refusal. Counted through the same
             // metric anyway, because that metric's contract is "a classified

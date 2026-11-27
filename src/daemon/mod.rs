@@ -59,7 +59,9 @@ pub mod repair;
 mod run;
 mod spool;
 
+// Under `tests/` so the repository's source scans read it as test code.
 #[cfg(test)]
+#[path = "tests/replay.rs"]
 mod replay_tests;
 #[cfg(test)]
 mod test_support;

@@ -176,6 +176,7 @@ task-panic	src/app.rs	build_integrations	match-err	match tokio::task::spawn_bloc
 handled	src/capture/sources.rs	resolve_sources_from_db	ok	AudioSourceStore::list(conn).ok()
 handled	src/capture/sources.rs	seed_sources_from_config	match-err	match state.with_db(|conn| conn.insert(&new)) { Err .. }
 handled	src/daemon/duplicate.rs	reread	match-err	match state.with_db(birdnet_db::sqlite::get_species_interval_map) { Err .. }
+fail-closed	src/daemon/processor.rs	already_recorded	match-err	match state.with_read_db(|conn| birdnet_db::sqlite::detection_recorded(conn, &key)) { Err .. }
 fail-closed	src/daemon/processor.rs	before_this_one	map_or	self.state .with_db(|conn| { birdnet_db::sqlite::species_detection_count_between(conn, sci_name, from, self.da
 fail-closed	src/daemon/processor.rs	current	match-err	match state.with_db(birdnet_db::sqlite::get_species_threshold_map) { Err .. }
 fail-closed	src/daemon/processor.rs	event_processor	is_ok_and	birdnet_db::sqlite::detection_count_for_species_date( conn, &detection.date, &detection.scientific_name, )
@@ -191,6 +192,7 @@ setting-default	src/helpers/settings_overlay.rs	overlay_db_settings	unwrap_or_de
 setting-default	src/helpers/settings_overlay.rs	seed_db_settings_from_config	is_ok	set(conn, key, value, *category).is_ok()
 setting-default	src/helpers/settings_overlay.rs	seed_db_settings_from_config	ok	ensure_settings_table(conn).ok()
 setting-default	src/helpers/settings_overlay.rs	seed_db_settings_from_config	map_or_default	list(conn, None) .map_or_default(|rows| rows.into_iter().map(|s| s.key).collect())
+handled	src/helpers/state.rs	apply_db_durability	match-err	match state.with_db(|c| c.query_row("PRAGMA synchronous", [], |r| r.get::<_, i64>(0))) { Err .. }
 handled	src/helpers/state.rs	observed_names	match-err	match state.with_db(|conn| birdnet_db::sqlite::top_species(conn, 100_000)) { Err .. }
 fail-closed	src/helpers/system.rs	locked_clips	match-err	match state.with_db(|conn| birdnet_db::sqlite::kept_back_file_names(conn, retain_reviewed)) { Err .. }
 handled	src/integrations/acoustic_health.rs	sample_once	match-err	match state.with_db(|conn| record_sample(conn, &date, hour, &source, assessment.level)) { Err .. }
