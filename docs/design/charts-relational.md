@@ -34,21 +34,24 @@ linked to both ends also holds: three arcs stayed in the foreground, not two. Th
 
 ## Who sings together
 
-**The data.** Species are ranked by how much overlap they take part in (the sum of their pair
-overlaps), the top ten are kept, and a pair's strength is its overlap scaled to the strongest pair
-among those ten. The overlap is the pair's share of the five-minute blocks either was heard in
-(Jaccard), and it travels with the picture: the reading says "38%", not "0.71 of the strongest".
-Each species is drawn in the colour it owns on the station (`kit::SpeciesSlots`, see
-[charts.md](charts.md)), the same as on every other chart, so it keeps its colour when the order
-round the ring changes; a species that owns none is the neutral.
+**The data, and chance.** The ten species heard in most five-minute blocks of the window are
+kept (by blocks, not by how connected they are: choosing by connectedness would pick the pairs to
+test by their result), and every pair of them is tested against chance within each clock hour
+(`correlation::cooccurrence_strata`, `birdnet_behavioral::null`; see "Chance levels for
+relational figures" in [charts.md](charts.md)). A pair's reading says the blocks it shared, what
+chance gives, how many times chance that is and whether it stands out, beside the Jaccard share
+the figure used to draw ("38% of the blocks either was heard in"). Each species is drawn in the
+colour it owns on the station (`kit::SpeciesSlots`).
 
-**The ring is for wide screens, the ladder for narrow ones.** The ring's names stand upright on
-either side of it and the whole picture needs about 760 units of width. At 390 px that is drawn at
-about 0.45 of its size, so a 12-unit name is 5.4 px against the 8.5 px floor of the legibility gate,
-and a ring's worth of ribbons in 340 px is a knot in any order. A matrix has no such limit. So the
-figure carries both, and the stylesheet shows the ring from 1000 px up (where a 12-unit name is
-about 9 px) and the ladder below. This was decided by measuring the two against the gate, not by
-taste: the ring on a phone fails `legibility.mjs` and the ladder passes.
+**The ladder is the figure; the ring is folded under it (CHT-08).** A ring can draw only a
+positive: an arc's length is the sum of its ribbons, so a species heard with the others less often
+than chance, or no differently, has nothing on the ring. The ladder matrix can say all three, so it
+is the figure at every width: a cell is coloured on the diverging ramp only where the pair stands
+out (warm above chance, cool below), and a pair within chance is the empty track. With nothing
+marked the figure opens with "Nothing stands out" and still draws every cell. The ring is in a
+disclosure under it, from 1000 px up (below that its names fall under the legibility floor), drawn
+from the same verdicts with only the positives, and it says so. Its ribbons' width and colour are
+the log of the lift, relative to the furthest above chance.
 
 **The order is chosen, not inherited.** `cograph::chord_order` searches for the arrangement round
 the ring with the least weighted crossing (a local search from a dozen deterministic starts: swaps,
@@ -61,7 +64,7 @@ ladder uses the same order, so groups that sing together are blocks of dark cell
 **What a mark says.**
 
 * A ribbon's **width** and **colour** (the seven steps of the sequential sun ramp, `ck-q1`..`ck-q7`)
-  are one number, how much of their time two species share. Both ends of a ribbon are as wide as the
+  are one number, how far above chance the pair was heard together. Both ends of a ribbon are as wide as the
   link is strong, on one angular scale for the whole ring, so an arc is exactly as long as the
   ribbons that end on it: no species owns a stretch of ring with nothing on it.
 * The ribbons are cubic curves that dip towards the middle in proportion to how far apart their ends
@@ -74,8 +77,10 @@ ladder uses the same order, so groups that sing together are blocks of dark cell
   their arc by a hairline. The old tangent names ran into one another. Nothing is written in the
   middle (the old caption sat over the ribbons and needed a halo).
 * The ladder draws each pair once, as a staircase, with each name at the foot of its own step.
-* "What does a ribbon mean" is under the picture: the ramp, the measured share at its two ends and
-  what an arc's length is. A ranked list of the eight strongest pairs sits beside it.
+* The key under the ladder names both sides of the diverging ramp and the empty middle, counts the
+  pairs marked on each side, and prints the method line with its seed. The list beside it holds the
+  pairs heard together more often than chance, furthest first; the table under the card holds every
+  pair with what chance gives.
 
 ## The dawn-chorus rings
 
@@ -151,7 +156,7 @@ four layers.
 |---|---|---|
 | Bursts of singing | A lane per day, the hours along it, a bar for each burst from where it began to where it ended, packed into sub-lanes so none overlaps; the legend brings one species forward | `sessionize` |
 | Who keeps coming back | A ledger: species grouped as resident / regular / migrant / rarity, a bar of weeks heard, and six return rates on the moss ramp, each printing its number | `retention` |
-| Neighbouring species | A flow with the species in the middle (wide screens) or ranked bars (narrow ones), ribbon width the share of the sessions that had a bird on that side (a session the bird opens has no bird before it, one it closes none after: the engine's denominator) | `sequence_next_node`, both directions |
+| Neighbouring species | A flow with the species in the middle (wide screens) or ranked bars (narrow ones), ribbon width the share of the sessions that had a bird on that side (a session the bird opens has no bird before it, one it closes none after: the engine's denominator). Since CHT-12 each neighbour is set against the share chance gives it (how often it is beside every other species' first detection in the trigger's own clock hours, `null::neighbour_base`, exact binomial test, Benjamini–Hochberg over both sides); the five kept are the furthest from chance, a ribbon is coloured on the diverging ramp only where it stands out and is the grey track where it does not, and the card says "Nothing stands out" when nothing does | `sequence_next_node`, both directions; `neighbours_by_hour_sql` |
 | The morning running order | A lane per voice, the clock 04:00–09:00 along it, a dot per morning, a thin line joining one morning's dots, a tick for the typical time, the newest complete morning large | `window_funnel`, `sequence_match_events` |
 | The chorus assembling | A field of discs: a column is a time allowed (1 minute to 5 hours, evenly spaced rungs), a row is how many of the station's usual dawn voices have joined, in their usual order, and a disc's *area* is the share of mornings with at least that many together within that time; a bold line round the cells is the typical morning (the most voices half of the mornings had), a pale band the middle half. A phone gets its own drawing | `window_funnel`, once per rung, `strict_increase` |
 
@@ -254,6 +259,14 @@ What each promises, and what a test holds it to:
   Blackbird heard in one audio chunk answer each other both ways: `live_answers` was watched failing against that
   pattern), a bird repeating itself is not an exchange, and a pair seen fewer than three times is a small ring and
   never a finding. A best pair at the floor is "nothing stands out yet". The grid prints its own sample size.
+  Since CHT-14 the page draws it against chance: the same count with the answering bird's times moved by each of
+  19 seeded shifts of 5 to 30 minutes either way (`answers_shifted_sql`, `AnalyticsDb::answers_chance_in`), which
+  keeps how much and when in the morning each bird sings and breaks only the timing a reply is. A disc is drawn
+  only where the count stands above its shifts (normal tail on the shifts' spread, never narrower than Poisson,
+  Benjamini–Hochberg over every ordered pair), its area is how many times chance, a cell within chance is a small
+  ring, and the table prints "(chance n)" beside each count. `live_answers_against_chance` holds the independence
+  fixture (nothing marked), a planted 20-second reply (the one cell marked) and that a shift of zero counts what
+  the grid counts. The `analytics/answers` JSON route is unchanged and carries no chance level yet.
 
 ## Gates
 

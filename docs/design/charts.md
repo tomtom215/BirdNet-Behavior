@@ -63,6 +63,9 @@ These are the reason the charts are not simply "prettier". Each one is held by a
    for the likeness (by year, or by an effective n) is not written yet.
    Held for the reporting-frequency figure and the retention table by their tests; the
    other figures that print a share do not follow it yet (CHT-23).
+   A relational figure's verdict ("more often than chance") is the same rule in another form:
+   it is drawn only when the test can say it, and otherwise it is the empty track and a sentence
+   (see "Chance levels for relational figures").
 11. **Words do not name a lightness.** Every sequential ramp runs dark-to-light on paper
    and light-to-dark in the dark theme, so "darker squares were busier" tells half the
    readers to read the chart backwards. Chart copy says "a stronger colour"
@@ -124,10 +127,63 @@ a rate uses, so they look and read the same everywhere.
   because the Wilson interval of 0 of 2 reaches 66 % and that of 2 of 2 falls to 34 %: one or
   two trials are consistent with anything.
 * **The key** (`uncertainty::key`) names the three states under every figure that draws them.
+* **The band** (`uncertainty::band`, `.ck-band`): a range around a run of points, one closed path
+  under the marks it surrounds, in the chart tokens. Each point is widened to its slot, so one day
+  is a column and a run of days covers its days edge to edge; the edges are straight segments and
+  steps, never a smoothed curve, because a band's edge is a statement about each day and a spline
+  between two days would invent values neither had. Trends draws the "usual range" with it
+  (`trend::expected_ranges`): the 10th to 90th percentile (nearest rank) of the last
+  `RANGE_WINDOW` (30) *listened* days strictly before each day, so a day is never part of its own
+  range and an outage is part of no range. A day is outside its range only against that band.
+* **Too few to say, for a band.** A day with fewer than `RANGE_MIN_DAYS` (14) listened days before
+  it has no usual range: no band is drawn over it and nothing about it is called usual or unusual.
+  This is the band's form of the rule above: a percentile of a handful of days is one of those
+  days, and a band drawn from it would say more than the data does. Below the floor the figure
+  claims nothing, and the readout says why.
 
 The arithmetic is `birdnet_behavioral::interval::wilson` (shares) and the existing
 `phenology::abundance::poisson_interval_exact` (rates), each tested against values worked by
 hand.
+
+## Chance levels for relational figures
+
+A figure that says two birds are "together", that one is heard "just after" another, or that one
+"answers" another has to say how often that would happen by chance, or it draws the species list
+(CHT-08, CHT-12, CHT-14). The arithmetic is `birdnet_behavioral::null`, one module, so the method,
+the seed and the rule for many tests are printed in the same words under every such figure.
+
+* **The null keeps what is not the question.** Each null holds each bird's amount of activity and
+  its daily rhythm and breaks only the relation asked about. Co-occurrence: one bird's five-minute
+  blocks are put back at random among the blocks the station *listened to* in the same clock hour
+  (`null::stratified_shuffle`, the hourly ledger `recording_effort_hourly` giving the listened
+  blocks; a station with none takes every hour with a detection as listened, and says so), so two
+  dawn singers are not "together" for both singing at dawn. Before and after: a neighbour's share
+  against how often it is beside every *other* species' first detection in the trigger's own clock
+  hours (`null::neighbour_base`), so the commonest bird of those hours is not first for being
+  common. Who answers whom: the same count with the answering bird's times moved by each of 19
+  shifts of 5 to 30 minutes, either way (`null::answer_shifts`), which keeps when in the morning
+  each sings and breaks the sub-minute timing a reply is.
+* **The seed is recorded.** Shuffles and shifts are drawn from a seeded generator
+  (`null::NULL_SEED`, printed in the method line), each test from its own stream named by its
+  pair, so the same data give the same answer on every request and from the cache, and a reader
+  can reproduce them. Co-occurrence shuffles 999 times (`NULL_ROUNDS`); the before/after test is
+  exact (binomial), so it needs no seed.
+* **Many tests at once are allowed for.** Every pair of a figure is tested together and marked by
+  Benjamini–Hochberg at a false-discovery rate of 5 % (`null::benjamini_hochberg`, `FDR_Q`): of
+  the cells marked, at most one in twenty is expected to be chance, on average.
+* **Only what stands out is coloured, and nothing standing out is said.** A cell, ribbon or disc
+  within chance is the empty track (`ck-track`, `ck-ctrack`), never the palest step of a ramp. A
+  measure with a middle (how many times chance) takes the diverging ramp (`ck-dn1..3` below
+  chance, `ck-dp1..3` above, one step under 1.5 times, two under 3 times, three beyond, symmetric
+  on a log scale). A figure with nothing marked opens with a sentence that says so ("Nothing
+  stands out: …") and still draws the cells, empty, with their counts in the readout: that is a
+  finding, not a fault.
+* **Positive-only forms say they are.** The chord diagram can draw only a positive (an arc is the
+  sum of its ribbons), so the co-occurrence figure is the ladder matrix at every width, and the
+  ring is folded under it, drawn from the same verdicts, with a sentence saying a pair heard
+  together less often, or no differently, has no ribbon.
+* **Exploratory and associational.** Every such figure's method line says so: being heard
+  together, next, or within a minute is a timing, not a behaviour or a cause.
 
 ## Reporting frequency (species page)
 
