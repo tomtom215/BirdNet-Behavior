@@ -20,7 +20,7 @@
    "title": "Replay binds historical inference to the new process run and current policy",
    "status": "implemented",
    "checklist_status": "done",
-   "commit": "ce3de58, 4f0a504",
+   "commit": "`ce3de58`, `4f0a504`",
    "note": "Bars computed once per detection at processing time and recorded with it; deciding at inference time not done. Other gates apply under the settings in force at replay (declared)."
   },
   {
@@ -28,7 +28,7 @@
    "title": "Replay acknowledges dequeue progress without a durable outcome",
    "status": "implemented",
    "checklist_status": "done",
-   "commit": "ce3de58, 4f0a504, 95d6d34",
+   "commit": "`ce3de58`, `4f0a504`, `95d6d34`",
    "note": "Live refusals kept through the same queue (after up to a second in memory); acknowledgement only once durable; BirdWeather parked before sending (at least once; duplicate window, no idempotency key). Other channels not outboxed; no page for held detections."
   },
   {
@@ -36,15 +36,15 @@
    "title": "Shutdown persists unfiltered raw segments and neighbours despite clip privacy",
    "status": "implemented",
    "checklist_status": "done",
-   "commit": "ce3de58, 4f0a504, 3439d6a",
-   "note": "Quarantine rows have clips of their own in the recordings directory, removed with the row; neighbour samples kept only where a clip reaches (fc52a6e)."
+   "commit": "`ce3de58`, `4f0a504`, `3439d6a`",
+   "note": "Quarantine rows have clips of their own in the recordings directory, removed with the row; neighbour samples kept only where a clip reaches (`fc52a6e`)."
   },
   {
    "id": "F04",
    "title": "Spool commit lacks complete file/directory durability and atomic checkpoint",
    "status": "implemented",
    "checklist_status": "done",
-   "commit": "ce3de58, 4f0a504",
+   "commit": "`ce3de58`, `4f0a504`",
    "note": "Acknowledged only once the commit is durable (checkpoint or synchronous=FULL). Not power-cut tested (V04)."
   },
   {
@@ -84,7 +84,7 @@
    "title": "Multi-model window length and score semantics are conflated",
    "status": "implemented",
    "checklist_status": "done",
-   "commit": "2003fdd, 8aa6040, f1d2533, ec1fecb",
+   "commit": "`2003fdd`, `8aa6040`, `f1d2533`, `ec1fecb`",
    "note": "Padding recorded (migration 68), per-classifier privacy and noise on each classifier's own scale. The merge still picks its winner by raw confidence across scales (named, left alone)."
   },
   {
@@ -100,7 +100,7 @@
    "title": "Detection decode uses uncapped in-memory path",
    "status": "implemented",
    "checklist_status": "done",
-   "commit": "dfd2c76, 2f0731a, a7a46d9, ba1e1e6, 90aec89, 1f4a5d5",
+   "commit": "`dfd2c76`, `2f0731a`, `a7a46d9`, `ba1e1e6`, `90aec89`, `1f4a5d5`",
    "note": "Bounded streaming ingestion (--ingest-recordings), admission before decode, refused recordings set aside, imported history not announced."
   },
   {
@@ -108,7 +108,7 @@
    "title": "Downmix can erase valid stereo content",
    "status": "implemented",
    "checklist_status": "in_progress",
-   "commit": "e2ffccf, c5fe96b, ec1fecb",
+   "commit": "`e2ffccf`, `c5fe96b`, `ec1fecb`",
    "note": "Cancellation warned, one channel selectable (ANALYSIS_CHANNELS); each-channel analysis built and refused in configuration (rows keyed by file, time and species); provenance logged, not stored."
   },
   {
@@ -116,7 +116,7 @@
    "title": "Geomodel week fixed at file start even across civil boundaries",
    "status": "implemented",
    "checklist_status": "done",
-   "commit": "d5dabf3, ec1fecb",
+   "commit": "`d5dabf3`, `ec1fecb`",
    "note": "OCCURRENCE_WEEK=window, the research profile's default; per-file week stays the default."
   },
   {
@@ -132,7 +132,7 @@
    "title": "Detection row and per-model answer evidence are not atomically coupled",
    "status": "implemented",
    "checklist_status": "done",
-   "commit": "ce3de58, 4f0a504",
+   "commit": "`ce3de58`, `4f0a504`",
    "note": "Batch 1 was wrong: the answers insert failure was swallowed. Now propagated and rolled back; red by an injected trigger."
   },
   {
@@ -148,7 +148,7 @@
    "title": "WAL NORMAL intentionally sacrifices committed data durability under power loss",
    "status": "implemented",
    "checklist_status": "done",
-   "commit": "b00076e, 2ba51db",
+   "commit": "`b00076e`, `2ba51db`",
    "note": "FULL by default under STATION_PROFILE=research. Power-loss behaviour not measured (V04)."
   },
   {
@@ -201,7 +201,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): each clip's SHA-256 and length recorded at write time, permanent, NULL meaning unknown; GET /api/v2/recordings/verify/{detection_uuid} checks on demand (17e2218, 105c8ae)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): each clip's SHA-256 and length recorded at write time, permanent, NULL meaning unknown; GET /api/v2/recordings/verify/{detection_uuid} checks on demand (`17e2218`, `105c8ae`)."
   },
   {
    "id": "RES-25",
@@ -211,7 +211,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): every detection has a permanent detection_uuid (migration 69: trigger-stamped, backfilled, unique, unchangeable), carried by the exports and kept by the CSV import (17e2218); the read-time event layer names members by it, policy events-2 (98d316b)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): every detection has a permanent detection_uuid (migration 69: trigger-stamped, backfilled, unique, unchangeable), carried by the exports and kept by the CSV import (`17e2218`); the read-time event layer names members by it, policy events-2 (`98d316b`)."
   },
   {
    "id": "RES-29",
@@ -221,7 +221,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): full backups carry a clip manifest, sha256sum-checkable checksums and a backup manifest, and a restore verifies them; ?audio=kept|none (0d11af4). Offsite copies are still the database only."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): full backups carry a clip manifest, sha256sum-checkable checksums and a backup manifest, and a restore verifies them; ?audio=kept|none (`0d11af4`). Offsite copies are still the database only."
   },
   {
    "id": "N25-07",
@@ -231,7 +231,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): swept every .filter_map(Result::ok) / .flatten() over a query or directory outside tests; the clip reconciliation, retention and species-cap passes fail on a read error and a failed reconciliation no longer publishes orphaned_clips = 0 (5323ab0)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): swept every .filter_map(Result::ok) / .flatten() over a query or directory outside tests; the clip reconciliation, retention and species-cap passes fail on a read error and a failed reconciliation no longer publishes orphaned_clips = 0 (`5323ab0`)."
   },
   {
    "id": "N25-10",
@@ -241,7 +241,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the stream manager has its own purge-ineffective flag; purge_ineffective() is the OR of the two (79e52cc)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the stream manager has its own purge-ineffective flag; purge_ineffective() is the OR of the two (`79e52cc`)."
   },
   {
    "id": "N25-11",
@@ -261,7 +261,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a full backup carries the configuration file the station was started with, and a restore puts it back, keeping the replaced file as .before-restore (0d11af4)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a full backup carries the configuration file the station was started with, and a restore puts it back, keeping the replaced file as .before-restore (`0d11af4`)."
   },
   {
    "id": "N26-02",
@@ -271,7 +271,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the disk modules count OGG clips through is_kept_audio_file (b6a77f3)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the disk modules count OGG clips through is_kept_audio_file (`b6a77f3`)."
   },
   {
    "id": "MSC-04",
@@ -281,7 +281,7 @@
    "status_before": "in_progress",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): already fixed by 7bef7b7 (quarantine keyed by recording, source kept through approval) with playable quarantine clips from 4f0a504/3439d6a; approval now also carries the clip checksum (17e2218)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): already fixed by `7bef7b7` (quarantine keyed by recording, source kept through approval) with playable quarantine clips from `4f0a504`/`3439d6a`; approval now also carries the clip checksum (`17e2218`)."
   },
   {
    "id": "MMP-09",
@@ -291,7 +291,7 @@
    "status_before": "in_progress",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): two names of one species (101 renames from the taxonomy table with two or more sources) merge as one row with agreement 2; one-classifier stations unchanged (0b73c9e). The 20 single-source renames are not applied."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): two names of one species (101 renames from the taxonomy table with two or more sources) merge as one row with agreement 2; one-classifier stations unchanged (`0b73c9e`). The 20 single-source renames are not applied."
   },
   {
    "id": "MMP-15",
@@ -301,7 +301,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): instruments and protocol only (d51e165)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): instruments and protocol only (`d51e165`)."
   },
   {
    "id": "MMP-21",
@@ -311,7 +311,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): invariants I1-I12 indexed and tested, each seen red against its mutant (a6f4e64); no run with two real models."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): invariants I1-I12 indexed and tested, each seen red against its mutant (`a6f4e64`); no run with two real models."
   },
   {
    "id": "ACC-06",
@@ -321,7 +321,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): conditioning::describe() names the capture filtering and a test measures it on a fixture (-3.80 dB residual through the tee's filters) (cd34079); not yet recorded with the run. The tee uses one-pole filters where EqChain uses two-pole."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): conditioning::describe() names the capture filtering and a test measures it on a fixture (-3.80 dB residual through the tee's filters) (`cd34079`); not yet recorded with the run. The tee uses one-pole filters where EqChain uses two-pole."
   },
   {
    "id": "ACC-19",
@@ -331,7 +331,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): read-side window_slots (policy slots-1) counts distinct zero-overlap slots (6dbdb9b); not yet wired into the event API."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): read-side window_slots (policy slots-1) counts distinct zero-overlap slots (`6dbdb9b`); not yet wired into the event API."
   },
   {
    "id": "ACC-20",
@@ -341,7 +341,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): instruments and protocol only (d51e165, guides/evaluation.md)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): instruments and protocol only (`d51e165`, guides/evaluation.md)."
   },
   {
    "id": "MSC-09",
@@ -351,7 +351,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as ACC-19 (6dbdb9b)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as ACC-19 (`6dbdb9b`)."
   },
   {
    "id": "MDL-23",
@@ -371,7 +371,7 @@
    "status_before": "in_progress",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): audio_source_devices keeps a device number per source that survives re-adding the same device and changes on a URL edit; every existing source id unchanged (1309946, b829f62)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): audio_source_devices keeps a device number per source that survives re-adding the same device and changes on a URL edit; every existing source id unchanged (1309946, `b829f62`)."
   },
   {
    "id": "MSC-14",
@@ -391,7 +391,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): stream budget arithmetic and a doctor check (cd241dc); the disk-manager cap and the shed threshold are not wired."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): stream budget arithmetic and a doctor check (`cd241dc`); the disk-manager cap and the shed threshold are not wired."
   },
   {
    "id": "MSC-20",
@@ -401,7 +401,7 @@
    "status_before": "in_progress",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): \"Also heard by\" compares detected_at_utc within the event tolerance and names it (161e8f1); the failed-read half was 5be0ece."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): \"Also heard by\" compares detected_at_utc within the event tolerance and names it (`161e8f1`); the failed-read half was `5be0ece`."
   },
   {
    "id": "MSC-21",
@@ -421,7 +421,7 @@
    "status_before": "in_progress",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as RES-12: an unsynchronised clock is recorded and warned about while recording (fb48963); RTC guidance in the hardware guide."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as RES-12: an unsynchronised clock is recorded and warned about while recording (`fb48963`); RTC guidance in the hardware guide."
   },
   {
    "id": "OOB-21",
@@ -441,7 +441,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): clock_observations records the clock's state at capture (synced, unsynced, unknown, unset; a step of 2 s or more); on /api/v2/health and a Clock_State export column (1309946, fb48963, b829f62)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): clock_observations records the clock's state at capture (synced, unsynced, unknown, unset; a step of 2 s or more); on /api/v2/health and a Clock_State export column (1309946, `fb48963`, `b829f62`)."
   },
   {
    "id": "RES-13",
@@ -451,7 +451,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): effort keyed on UTC hours with uptime split by clock state, exported at /api/v2/effort/export/utc (1309946, fb48963); the levels tables are not done."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): effort keyed on UTC hours with uptime split by clock state, exported at /api/v2/effort/export/utc (1309946, `fb48963`); the levels tables are not done."
   },
   {
    "id": "RES-20",
@@ -471,7 +471,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): quickstart.sh carries the installer's card-id detector, held equal by alsa-device-detect.sh (74c867d)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): quickstart.sh carries the installer's card-id detector, held equal by alsa-device-detect.sh (`74c867d`)."
   },
   {
    "id": "OOB-14",
@@ -491,7 +491,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the doctor lays the settings table over the configuration file before checking (cd241dc)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the doctor lays the settings table over the configuration file before checking (`cd241dc`)."
   },
   {
    "id": "MSC-02",
@@ -501,7 +501,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): /api/v2/analytics/rates counts events over a site's listening bounds (14d8853); legacy row-count routes now say they count rows."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): /api/v2/analytics/rates counts events over a site's listening bounds (`14d8853`); legacy row-count routes now say they count rows."
   },
   {
    "id": "MSC-07",
@@ -511,7 +511,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): SOURCE_SITES says which sources share a site; BirdWeather gets one post per event at a site (3fdf6e0). Unset, every source is posted as before."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): SOURCE_SITES says which sources share a site; BirdWeather gets one post per event at a site (`3fdf6e0`). Unset, every source is posted as before."
   },
   {
    "id": "MSC-18",
@@ -521,7 +521,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): per-query filters only (14d8853); stored per-source thresholds or lists not done."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): per-query filters only (`14d8853`); stored per-source thresholds or lists not done."
   },
   {
    "id": "MMP-08",
@@ -541,7 +541,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the threshold suggester needs 20 verdicts and 5 of each class, and says reviews are not random (17d6839)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the threshold suggester needs 20 verdicts and 5 of each class, and says reviews are not random (`17d6839`)."
   },
   {
    "id": "ACC-09",
@@ -561,7 +561,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): an opt-in per-window score store with a floor and retention, measured at about 134 MB for 30 days of one source (ba19f84); not wired into inference."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): an opt-in per-window score store with a floor and retention, measured at about 134 MB for 30 days of one source (`ba19f84`); not wired into inference."
   },
   {
    "id": "RES-05",
@@ -571,7 +571,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): bounded streaming ingestion: --ingest-recordings, the admission check, segments staged a few at a time, imported history not announced, refused recordings set aside (dfd2c76, 2f0731a, a7a46d9, ba1e1e6, 90aec89, 1f4a5d5). Re-analysis of stored audio is not built."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): bounded streaming ingestion: --ingest-recordings, the admission check, segments staged a few at a time, imported history not announced, refused recordings set aside (`dfd2c76`, `2f0731a`, `a7a46d9`, `ba1e1e6`, `90aec89`, `1f4a5d5`). Re-analysis of stored audio is not built."
   },
   {
    "id": "RES-07",
@@ -581,7 +581,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): seeded stratified validation samples, blind review, verdict export under /admin/validation (5509f5b); JSON only, detections only (no recall)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): seeded stratified validation samples, blind review, verdict export under /admin/validation (`5509f5b`); JSON only, detections only (no recall)."
   },
   {
    "id": "RES-08",
@@ -591,7 +591,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): GET /api/v2/detections/export/study: a deterministic ZIP with every provenance table and a manifest of schema, generator, parameters and member hashes (1a10850)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): GET /api/v2/detections/export/study: a deterministic ZIP with every provenance table and a manifest of schema, generator, parameters and member hashes (`1a10850`)."
   },
   {
    "id": "RES-11",
@@ -601,7 +601,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a run records its deciding configuration canonically with its SHA-256 (5c387c7), and the daemon records the resolved settings (aede030); capture conditioning and the profile name are not in it."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a run records its deciding configuration canonically with its SHA-256 (`5c387c7`), and the daemon records the resolved settings (`aede030`); capture conditioning and the profile name are not in it."
   },
   {
    "id": "RES-16",
@@ -611,7 +611,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): co-occurrence has a seeded permutation null with Benjamini-Hochberg and verdicts stands_out / within_chance / too_little_data (e388b82); answers, next-species and retention have none."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): co-occurrence has a seeded permutation null with Benjamini-Hochberg and verdicts stands_out / within_chance / too_little_data (`e388b82`); answers, next-species and retention have none."
   },
   {
    "id": "RES-17",
@@ -621,7 +621,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): /api/v2/analytics/sunrise-relative uses each day's own sunrise (14d8853); charts not moved."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): /api/v2/analytics/sunrise-relative uses each day's own sunrise (`14d8853`); charts not moved."
   },
   {
    "id": "RES-18",
@@ -631,7 +631,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as MSC-02 (14d8853)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as MSC-02 (`14d8853`)."
   },
   {
    "id": "RES-21",
@@ -641,7 +641,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): each weather hour records its provider and product (f8f5391); no archive endpoint, no licence."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): each weather hour records its provider and product (`f8f5391`); no archive endpoint, no licence."
   },
   {
    "id": "RES-22",
@@ -651,7 +651,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): station_identity (one UUID), operator-stated deployments (append-only by trigger), GET /api/v2/station/record and POST /api/v2/deployments; exports name station and deployment (1309946, b829f62)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): station_identity (one UUID), operator-stated deployments (append-only by trigger), GET /api/v2/station/record and POST /api/v2/deployments; exports name station and deployment (1309946, `b829f62`)."
   },
   {
    "id": "RES-24",
@@ -661,7 +661,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Research Use chapter with a fill-in methods paragraph (dcaa06b)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Research Use chapter with a fill-in methods paragraph (`dcaa06b`)."
   },
   {
    "id": "RES-27",
@@ -691,7 +691,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the taxonomy edition is stamped per run in the study bundle (1a10850); not stored in the database."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the taxonomy edition is stamped per run in the study bundle (`1a10850`); not stored in the database."
   },
   {
    "id": "UIR-18",
@@ -701,7 +701,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as RES-17 (14d8853)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as RES-17 (`14d8853`)."
   },
   {
    "id": "UIR-21",
@@ -721,7 +721,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): data for chance-aware co-occurrence (e388b82); the figure is not redrawn here."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): data for chance-aware co-occurrence (`e388b82`); the figure is not redrawn here."
   },
   {
    "id": "UIR-34",
@@ -731,7 +731,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): /api/v2/analytics/rates/compare gives a direction only when the interval excludes 1 (14d8853); no red test, page not changed."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): /api/v2/analytics/rates/compare gives a direction only when the interval excludes 1 (`14d8853`); no red test, page not changed."
   },
   {
    "id": "UIC-02",
@@ -741,7 +741,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the effort-corrected rates API exists with intervals (14d8853); no chart draws it yet."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the effort-corrected rates API exists with intervals (`14d8853`); no chart draws it yet."
   },
   {
    "id": "UIC-10",
@@ -751,7 +751,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): GET /api/v2/detections/export/search exports what the log found, with the same columns as the detections export (36b599b, 105c8ae)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): GET /api/v2/detections/export/search exports what the log found, with the same columns as the detections export (`36b599b`, `105c8ae`)."
   },
   {
    "id": "UIC-11",
@@ -761,7 +761,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): source, confidence and species filters on the analytic API (14d8853); not on the pages."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): source, confidence and species filters on the analytic API (`14d8853`); not on the pages."
   },
   {
    "id": "N06-02",
@@ -771,7 +771,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): co-occurrence and companions are per site (e388b82); retention, phenology and abundance take ?source= and say they pool by default (14d8853)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): co-occurrence and companions are per site (`e388b82`); retention, phenology and abundance take ?source= and say they pool by default (`14d8853`)."
   },
   {
    "id": "N25-02",
@@ -781,7 +781,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the reporting-frequency interval is a Wilson interval at the effective number of days a design effect leaves (two-state Markov chain); coverage 0.687 plain vs 0.961 on a simulated autocorrelated series, seeded (e388b82). Not checked on station data."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the reporting-frequency interval is a Wilson interval at the effective number of days a design effect leaves (two-state Markov chain); coverage 0.687 plain vs 0.961 on a simulated autocorrelated series, seeded (`e388b82`). Not checked on station data."
   },
   {
    "id": "N26-05",
@@ -791,7 +791,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): phenology's effort gap and the heat calendar use the one listened-day rule (2dd1a5e)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): phenology's effort gap and the heat calendar use the one listened-day rule (`2dd1a5e`)."
   },
   {
    "id": "N26-06",
@@ -801,7 +801,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): rates divide by site listening bounds, never summed sensor time (14d8853); pages not yet on it."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): rates divide by site listening bounds, never summed sensor time (`14d8853`); pages not yet on it."
   },
   {
    "id": "CHT-24",
@@ -811,7 +811,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a data-level gate: a pair at chance is drawn as chance (e388b82)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a data-level gate: a pair at chance is drawn as chance (`e388b82`)."
   },
   {
    "id": "OOB-01",
@@ -831,7 +831,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the installer refuses a BirdNET-Pi host (link or enabled services) before writing anything; installer/test/birdnet-pi-host.sh (4da5ede). Only a real host can prove the fixture matches BirdNET-Pi."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the installer refuses a BirdNET-Pi host (link or enabled services) before writing anything; installer/test/birdnet-pi-host.sh (`4da5ede`). Only a real host can prove the fixture matches BirdNET-Pi."
   },
   {
    "id": "OOB-07",
@@ -841,7 +841,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): install.sh reset-password (4da5ede); the setup token (decision 6) is not built."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): install.sh reset-password (`4da5ede`); the setup token (decision 6) is not built."
   },
   {
    "id": "OOB-08",
@@ -861,7 +861,7 @@
    "status_before": "in_progress",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): live audio needs a sign-in on a new station; a station that already holds detections keeps anyone, and the control is on the audio page (fdaf180). HLS status still returns playlist URLs with tokens to anyone on an anyone station."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): live audio needs a sign-in on a new station; a station that already holds detections keeps anyone, and the control is on the audio page (`fdaf180`). HLS status still returns playlist URLs with tokens to anyone on an anyone station."
   },
   {
    "id": "OOB-18",
@@ -871,7 +871,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): card-failure and remote-access pages describe recovery with reset-password; configuration in backups (0d11af4); no first-boot recovery path."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): card-failure and remote-access pages describe recovery with reset-password; configuration in backups (`0d11af4`); no first-boot recovery path."
   },
   {
    "id": "OOB-20",
@@ -891,7 +891,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): quickstart takes compose files and image from one release, falling back with a warning (355b703); quickstart.sh itself is still fetched from main."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): quickstart takes compose files and image from one release, falling back with a warning (`355b703`); quickstart.sh itself is still fetched from main."
   },
   {
    "id": "N25-14",
@@ -901,7 +901,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the sign-in hint says a refusal means the password was changed in the browser and gives install.sh reset-password and the Docker way (34136c4)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the sign-in hint says a refusal means the password was changed in the browser and gives install.sh reset-password and the Docker way (`34136c4`)."
   },
   {
    "id": "N26-04",
@@ -941,7 +941,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): repair recognises the old V3.0 file names and links a fetched file back to the configured name (4da12e9). A real V3.0 fetch was not run."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): repair recognises the old V3.0 file names and links a fetched file back to the configured name (`4da12e9`). A real V3.0 fetch was not run."
   },
   {
    "id": "MDL-27",
@@ -951,7 +951,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the skip-model texts say the station fetches its models and BIRDNET_OFFLINE=1 stops it (4da5ede); whether to opt out is the maintainer's call."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the skip-model texts say the station fetches its models and BIRDNET_OFFLINE=1 stops it (`4da5ede`); whether to opt out is the maintainer's call."
   },
   {
    "id": "MDL-28",
@@ -961,7 +961,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): NO_COLOR=1 in the unit (d410b62); colour only on a terminal, and the start line only from the station, not its pre-start doctor (1b9d060)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): NO_COLOR=1 in the unit (`d410b62`); colour only on a terminal, and the start line only from the station, not its pre-start doctor (`1b9d060`)."
   },
   {
    "id": "UIR-05",
@@ -971,7 +971,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the invented waveform glyph is removed; a real envelope would need stored RMS values (6863e83)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the invented waveform glyph is removed; a real envelope would need stored RMS values (`6863e83`)."
   },
   {
    "id": "UIR-09",
@@ -981,7 +981,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the history calendar marks off days and no longer draws a day to come like one (a515ba6)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the history calendar marks off days and no longer draws a day to come like one (`a515ba6`)."
   },
   {
    "id": "UIR-15",
@@ -1001,7 +1001,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as UIC-06 (83d2005)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as UIC-06 (`83d2005`)."
   },
   {
    "id": "UIR-17",
@@ -1031,7 +1031,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): one date format on History (251e437); feeds, species pages and the life list not converted."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): one date format on History (`251e437`); feeds, species pages and the life list not converted."
   },
   {
    "id": "UIR-25",
@@ -1071,7 +1071,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a \"Score from\" row, a counted-rows note on lists, and the terrain card's range line fixed (251e437, 6107bb9); n and listened hours on each figure remain."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a \"Score from\" row, a counted-rows note on lists, and the terrain card's range line fixed (`251e437`, `6107bb9`); n and listened hours on each figure remain."
   },
   {
    "id": "UIR-32",
@@ -1091,7 +1091,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as UIC-07 (83d2005)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as UIC-07 (`83d2005`)."
   },
   {
    "id": "UIR-36",
@@ -1101,7 +1101,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Dawn's scope is a sentence, not pills (83d2005); season colours not changed."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Dawn's scope is a sentence, not pills (`83d2005`); season colours not changed."
   },
   {
    "id": "UIC-05",
@@ -1111,7 +1111,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): an orphan-route gate naming the 16 routes in TD-6 (83d2005)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): an orphan-route gate naming the 16 routes in TD-6 (`83d2005`)."
   },
   {
    "id": "UIC-06",
@@ -1121,7 +1121,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Settings keeps its label (the maintainer's) and its accessible name says station health (83d2005)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Settings keeps its label (the maintainer's) and its accessible name says station health (`83d2005`)."
   },
   {
    "id": "UIC-07",
@@ -1131,7 +1131,7 @@
    "status_before": "in_progress",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): one Review strip shared by /quarantine and /detection-reviews (83d2005)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): one Review strip shared by /quarantine and /detection-reviews (`83d2005`)."
   },
   {
    "id": "UIC-08",
@@ -1181,7 +1181,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): History reads only the month it draws and a day page lists one page; 1287 ms to 24 ms per month click on a 3.3M-row table in this container, not a Pi (251e437)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): History reads only the month it draws and a day page lists one page; 1287 ms to 24 ms per month click on a 3.3M-row table in this container, not a Pi (`251e437`)."
   },
   {
    "id": "UIC-23",
@@ -1191,7 +1191,7 @@
    "status_before": "in_progress",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the remaining cached figures say how old they are (52f2a99)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the remaining cached figures say how old they are (`52f2a99`)."
   },
   {
    "id": "UIC-25",
@@ -1301,7 +1301,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Trends draws each day's usual range (10th-90th percentile of the 30 listened days before; too few days said, not drawn) (713d7c4)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Trends draws each day's usual range (10th-90th percentile of the 30 listened days before; too few days said, not drawn) (`713d7c4`)."
   },
   {
    "id": "CHT-07",
@@ -1391,7 +1391,7 @@
    "status_before": "in_progress",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the kit has a band mark (viz::uncertainty::band) and a \"too few to say\" rule (713d7c4)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the kit has a band mark (viz::uncertainty::band) and a \"too few to say\" rule (`713d7c4`)."
   },
   {
    "id": "CHT-17",
@@ -1481,7 +1481,7 @@
    "status_before": "open",
    "status_after": "done",
    "disposition": "done_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Migration's ridges are drawn per listened time and weeks with too little listening hatched as unknown (20cf387)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Migration's ridges are drawn per listened time and weeks with too little listening hatched as unknown (`20cf387`)."
   },
   {
    "id": "N26-08",
@@ -1511,7 +1511,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): model_check bench reports per-window timing with spread (d51e165); no Pi measurement."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): model_check bench reports per-window timing with spread (`d51e165`); no Pi measurement."
   },
   {
    "id": "ACC-03",
@@ -1521,7 +1521,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): instruments only: selection-table scoring with Wilson and recording-cluster bootstrap intervals, examples/model_check.rs (d51e165). No ground truth measured."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): instruments only: selection-table scoring with Wilson and recording-cluster bootstrap intervals, examples/model_check.rs (`d51e165`). No ground truth measured."
   },
   {
    "id": "ACC-12",
@@ -1531,7 +1531,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): golden-output record and compare, and a described aarch64 job (d51e165); no workflow added, no aarch64 run."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): golden-output record and compare, and a described aarch64 job (`d51e165`); no workflow added, no aarch64 run."
   },
   {
    "id": "RES-31",
@@ -1541,7 +1541,7 @@
    "status_before": "open",
    "status_after": "in_progress",
    "disposition": "narrowed_in_batch_2",
-   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): tests/model_output_is_reproducible.rs checks two runs bit for bit and against a golden record (d51e165)."
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): tests/model_output_is_reproducible.rs checks two runs bit for bit and against a golden record (`d51e165`)."
   },
   {
    "id": "N25-15",

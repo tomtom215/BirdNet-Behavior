@@ -85,7 +85,7 @@ pub struct AnalysisRun {
     pub lat: Option<f64>,
     /// Station longitude.
     pub lon: Option<f64>,
-    /// The run's deciding configuration as canonical JSON ([`RunConfig`]),
+    /// The run's deciding configuration as canonical JSON ([`RunConfig`](crate::sqlite::queries::run_config::RunConfig)),
     /// `None` for a run registered before it was recorded (RES-11).
     pub config_json: Option<String>,
     /// Lowercase hex SHA-256 of `config_json`.

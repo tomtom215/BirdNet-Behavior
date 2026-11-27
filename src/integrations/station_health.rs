@@ -473,7 +473,7 @@ fn probe_ntp_state() -> NtpState {
     probe_ntp().0
 }
 
-/// [`probe_ntp_state`], with the name of what answered: `timedatectl`,
+/// `probe_ntp_state`, with the name of what answered: `timedatectl`,
 /// `timesync-file`, or `none` when nothing could.
 fn probe_ntp() -> (NtpState, &'static str) {
     match birdnet_core::process::run_with_timeout(

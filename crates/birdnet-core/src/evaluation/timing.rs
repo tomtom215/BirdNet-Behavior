@@ -1,6 +1,6 @@
 //! Per-window inference time, with its spread (audit MMP-13).
 //!
-//! [`bench`] times a classifier on one window, many times, after a warm-up,
+//! [`bench()`] times a classifier on one window, many times, after a warm-up,
 //! and [`TimingSummary`] reports the distribution: a median alone hides the
 //! slow tail a Pi under thermal throttling produces, and a mean alone hides
 //! everything. The numbers describe the machine they ran on, under the load

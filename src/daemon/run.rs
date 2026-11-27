@@ -102,13 +102,13 @@ pub(super) fn register_run(
     register_run_with(state, manifest, &RunConfig::new())
 }
 
-/// As [`register_run`], recording [`manifest_config`] with `extra` laid over
+/// As `register_run`, recording [`manifest_config`] with `extra` laid over
 /// it as the run's deciding configuration (RES-11), in the same transaction
 /// as the run.
 ///
 /// # Errors
 ///
-/// As [`register_run`].
+/// As `register_run`.
 pub(super) fn register_run_with(
     state: &AppState,
     manifest: &RunManifest,
@@ -210,7 +210,7 @@ pub(super) fn provenance_for(
     provenance_for_with(state, manifest, &RunConfig::new())
 }
 
-/// As [`provenance_for`], recording `extra` (the resolved filters the manifest
+/// As `provenance_for`, recording `extra` (the resolved filters the manifest
 /// does not carry) with the run's deciding configuration (RES-11).
 pub(super) fn provenance_for_with(
     state: &AppState,

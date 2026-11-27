@@ -343,8 +343,8 @@ fn detections_to_csv(
     detections_to_csv_with(rows, runs, &RowProvenance::default())
 }
 
-/// [`detections_to_csv`] with each row's attribution: the detections export's
-/// and the search export's CSV (UIC-10), so the two carry the same columns.
+/// The detections CSV with each row's attribution: the detections export's
+/// and the search export's (UIC-10), so the two carry the same columns.
 pub(super) fn detections_to_csv_with(
     rows: &[birdnet_db::sqlite::DetectionRow],
     runs: &birdnet_db::sqlite::ModelAttribution,
