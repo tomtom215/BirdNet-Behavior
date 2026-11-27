@@ -276,6 +276,16 @@ pub fn probe_duration_secs(path: &Path) -> Option<f64> {
     Some(num_frames as f64 / f64::from(sample_rate))
 }
 
+/// The longest packet, in seconds, whose claimed length a refused packet is
+/// filled to.
+///
+/// The length of a packet the decoder refused comes from the container, and a
+/// damaged container can claim anything. No codec this station reads puts more
+/// than a fraction of a second in one packet (MP3 1152 frames, FLAC at most
+/// 65 535, WAV 1152 as symphonia reads it), so a claim past this is not a
+/// packet length: the packet is counted as dropped rather than allocated.
+pub const MAX_LOST_PACKET_SECS: u32 = 10;
+
 /// How many mono frames of silence stand in for a packet the decoder refused.
 ///
 /// `dur` is the packet's duration in its track's time base
@@ -283,7 +293,8 @@ pub fn probe_duration_secs(path: &Path) -> Option<f64> {
 /// frames at `sample_rate`, rounded to the nearest frame. With no time base the
 /// container's units cannot be trusted to be frames, so the answer is `None`
 /// and the caller counts the packet as lost rather than guessing its length.
-/// A zero duration is `None` too: the container did not say how long it was.
+/// A zero duration is `None` too: the container did not say how long it was,
+/// and so is one past [`MAX_LOST_PACKET_SECS`], which no packet is.
 #[must_use]
 fn lost_packet_frames(dur: u64, time_base: Option<(u32, u32)>, sample_rate: u32) -> Option<usize> {
     let (numer, denom) = time_base?;
@@ -292,9 +303,28 @@ fn lost_packet_frames(dur: u64, time_base: Option<(u32, u32)>, sample_rate: u32)
     }
     let num = u128::from(dur) * u128::from(numer) * u128::from(sample_rate);
     let den = u128::from(denom);
-    usize::try_from((num + den / 2) / den)
-        .ok()
-        .filter(|&n| n > 0)
+    let limit = u128::from(MAX_LOST_PACKET_SECS) * u128::from(sample_rate);
+    let frames = (num + den / 2) / den;
+    if frames == 0 || frames > limit {
+        return None;
+    }
+    usize::try_from(frames).ok()
+}
+
+/// Put `frames` of silence for a refused packet at the end of `samples`, and
+/// never past `max_samples`.
+///
+/// Clamped before the resize, not truncated after it: `frames` is the
+/// container's claim, so appending it whole and cutting back allocated
+/// whatever the claim was before the cap was looked at (review F11).
+fn fill_lost_packet(samples: &mut Vec<f32>, frames: usize, max_samples: Option<usize>) {
+    let room = room_under_cap(samples.len(), frames, max_samples);
+    samples.resize(samples.len() + room, 0.0);
+}
+
+/// How many of `frames` fit after `held` frames without passing `max_samples`.
+fn room_under_cap(held: usize, frames: usize, max_samples: Option<usize>) -> usize {
+    max_samples.map_or(frames, |cap| cap.saturating_sub(held).min(frames))
 }
 
 /// Which channels [`decode_file_inner`] collects.
@@ -554,7 +584,10 @@ fn decode_file_inner(
                     }
                 }
 
-                for frame in 0..num_frames {
+                // Stop at the cap: the outputs never hold more than it, even
+                // for one packet (review F11).
+                let keep = room_under_cap(frames_out, num_frames, max_samples);
+                for frame in 0..keep {
                     let row = &interleaved[frame * num_channels..(frame + 1) * num_channels];
                     // Mix to mono by averaging channels: the same sum, in the
                     // same order, as this has always been.
@@ -582,7 +615,7 @@ fn decode_file_inner(
                         }
                     }
                 }
-                frames_out += num_frames;
+                frames_out += keep;
             }
             // A damaged packet. Skipping it would move every later sample
             // earlier, so detections after it would be stamped, clipped and
@@ -597,12 +630,16 @@ fn decode_file_inner(
                 };
                 filled_packets += 1;
                 filled_frames += frames;
-                frames_out += frames;
+                // Clamped before the resize, never cut back after it: the
+                // length is the container's claim (review F11). Every output
+                // holds `frames_out` frames, so each is filled to the same room.
+                let room = room_under_cap(frames_out, frames, max_samples);
+                frames_out += room;
                 if outputs.is_empty() {
-                    owed_frames += frames;
+                    owed_frames += room;
                 }
                 for out in &mut outputs {
-                    out.resize(out.len() + frames, 0.0);
+                    fill_lost_packet(out, frames, max_samples);
                 }
             }
             Err(e) => return Err(DecodeError::Format(e.to_string())),
@@ -611,14 +648,11 @@ fn decode_file_inner(
         // Stop once the optional sample cap is reached. The spectrogram views
         // pass a cap so a pathologically long recording can't allocate an
         // unbounded buffer on a Pi; the detection path passes `None` and keeps
-        // every sample. Peak overshoot is one packet's worth of frames before
-        // the truncate, which symphonia bounds per packet.
+        // every sample. Both arms above stop at the cap, so the buffer never
+        // holds more than it.
         if let Some(cap) = max_samples
             && frames_out >= cap
         {
-            for out in &mut outputs {
-                out.truncate(cap);
-            }
             tracing::warn!(
                 path = %path.display(),
                 cap,
@@ -957,6 +991,62 @@ mod tests {
         assert_eq!(lost_packet_frames(24, Some((1, 1000)), 48_000), Some(1152));
         assert_eq!(lost_packet_frames(1152, None, 48_000), None);
         assert_eq!(lost_packet_frames(0, Some((1, 48_000)), 48_000), None);
+    }
+
+    /// Review F11: with no cap (the detection path) a packet's claimed length
+    /// was believed whatever it was, so one damaged packet claiming a day of
+    /// audio allocated a day of silence. A claim past
+    /// [`MAX_LOST_PACKET_SECS`] is not a packet length; it is counted as
+    /// dropped, like a packet of unknown length.
+    #[test]
+    fn an_implausibly_long_lost_packet_is_not_filled() {
+        let limit = u64::from(MAX_LOST_PACKET_SECS) * 48_000;
+        assert_eq!(
+            lost_packet_frames(86_400, Some((1, 1)), 48_000),
+            None,
+            "a packet claiming a day is not filled"
+        );
+        assert_eq!(
+            lost_packet_frames(limit + 1, Some((1, 48_000)), 48_000),
+            None
+        );
+        // The counterpart: exactly the limit is still a length.
+        assert_eq!(
+            lost_packet_frames(limit, Some((1, 48_000)), 48_000),
+            Some(usize::try_from(limit).unwrap())
+        );
+    }
+
+    /// Review F11: the silence that stands in for a refused packet is the
+    /// container's claim of its length, so it must not take the buffer past
+    /// the cap even for an instant. It used to be appended whole and cut back
+    /// after, so a packet claiming hours was allocated before the cap check.
+    #[test]
+    fn a_lost_packet_never_takes_the_buffer_past_the_cap() {
+        let mut samples = vec![0.5_f32; 900];
+        fill_lost_packet(&mut samples, 1_000_000_000, Some(1_000));
+        assert_eq!(samples.len(), 1_000, "filled to the cap and no further");
+        assert!(
+            samples.capacity() < 1_000_000,
+            "nothing near the claimed length was allocated: capacity {}",
+            samples.capacity()
+        );
+        // Already at the cap: nothing is added.
+        fill_lost_packet(&mut samples, 10, Some(1_000));
+        assert_eq!(samples.len(), 1_000);
+    }
+
+    /// The counterpart: within the cap, and with no cap, the packet's whole
+    /// length is filled, so a timeline the cap does not reach stays true.
+    #[test]
+    fn a_lost_packet_inside_the_cap_is_filled_to_its_own_length() {
+        let mut samples = vec![0.5_f32; 100];
+        fill_lost_packet(&mut samples, 1152, Some(10_000));
+        assert_eq!(samples.len(), 100 + 1152);
+        let mut uncapped = vec![0.5_f32; 100];
+        fill_lost_packet(&mut uncapped, 1152, None);
+        assert_eq!(uncapped.len(), 100 + 1152);
+        assert!(uncapped[100..].iter().all(|&s| s == 0.0));
     }
 
     #[test]
