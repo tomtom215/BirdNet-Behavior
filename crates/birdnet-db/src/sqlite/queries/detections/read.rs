@@ -1156,6 +1156,71 @@ mod tests {
     };
     use crate::sqlite::types::DetectionRecord;
 
+    /// The History calendar's two bounded reads (UIC-21): the first and last
+    /// dates, and one month's day counts, oldest first, with each day's species.
+    #[test]
+    fn the_calendar_reads_its_bounds_and_its_month() {
+        let (_tmp, conn) = temp_db_with_data();
+        assert_eq!(
+            detection_date_bounds(&conn).unwrap(),
+            Some(("2026-03-10".to_owned(), "2026-03-11".to_owned()))
+        );
+        assert_eq!(
+            detection_date_bounds(&test_conn()).unwrap(),
+            None,
+            "no rows, no bounds"
+        );
+        let days: Vec<(String, i64, i64)> =
+            detections_per_day_between(&conn, "2026-03-01", "2026-03-31")
+                .unwrap()
+                .into_iter()
+                .map(|d| (d.date, d.count, d.species))
+                .collect();
+        assert_eq!(
+            days,
+            [
+                ("2026-03-10".to_owned(), 1, 1),
+                ("2026-03-11".to_owned(), 3, 2)
+            ]
+        );
+        assert_eq!(
+            detections_per_day_between(&conn, "2026-03-11", "2026-03-11")
+                .unwrap()
+                .len(),
+            1,
+            "both ends are inclusive"
+        );
+        assert!(
+            detections_per_day_between(&conn, "2026-04-01", "2026-04-30")
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// A day's detections come back a page at a time, newest first, and the
+    /// pages neither repeat nor skip a row (UIC-21; the mutation gate on PR
+    /// #313 found the function untested by any unit test).
+    #[test]
+    fn a_day_is_read_a_page_at_a_time_newest_first() {
+        let (_tmp, conn) = temp_db_with_data();
+        let times = |limit, offset| -> Vec<String> {
+            detections_by_date_page(&conn, "2026-03-11", limit, offset)
+                .unwrap()
+                .into_iter()
+                .map(|r| r.time)
+                .collect()
+        };
+        assert_eq!(times(2, 0), ["07:00:00", "06:45:00"]);
+        assert_eq!(times(2, 2), ["06:30:00"]);
+        assert!(times(2, 4).is_empty());
+        assert!(
+            detections_by_date_page(&conn, "2026-03-09", 10, 0)
+                .unwrap()
+                .is_empty(),
+            "a day with none has none"
+        );
+    }
+
     /// 2026-10-25T00:30:00Z — local 02:30 in Berlin on the first pass through
     /// the hour daylight saving repeats. Arbitrary but *specific*: the point of
     /// the tests below is that a caller reading it back gets this value and not
