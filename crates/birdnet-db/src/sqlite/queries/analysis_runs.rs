@@ -85,6 +85,11 @@ pub struct AnalysisRun {
     pub lat: Option<f64>,
     /// Station longitude.
     pub lon: Option<f64>,
+    /// The run's deciding configuration as canonical JSON ([`RunConfig`]),
+    /// `None` for a run registered before it was recorded (RES-11).
+    pub config_json: Option<String>,
+    /// Lowercase hex SHA-256 of `config_json`.
+    pub config_sha256: Option<String>,
 }
 
 /// The two model fields an export attaches to every row: the label and the
@@ -99,7 +104,8 @@ pub struct RunModel {
 
 const RUN_COLS: &str = "id, started_at, app_version, model_name, model_path, model_sha256, \
                         model_bytes, labels_path, labels_sha256, label_count, geomodel_sha256, \
-                        confidence, sensitivity, overlap, sf_thresh, lat, lon";
+                        confidence, sensitivity, overlap, sf_thresh, lat, lon, \
+                        config_json, config_sha256";
 
 fn map_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnalysisRun> {
     Ok(AnalysisRun {
@@ -120,6 +126,8 @@ fn map_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnalysisRun> {
         sf_thresh: row.get(14)?,
         lat: row.get(15)?,
         lon: row.get(16)?,
+        config_json: row.get(17)?,
+        config_sha256: row.get(18)?,
     })
 }
 

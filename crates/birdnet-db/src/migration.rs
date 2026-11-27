@@ -3207,6 +3207,94 @@ pub const MIGRATIONS: &[Migration] = &[
             PRIMARY KEY (hour_start_utc, source)
         );",
     },
+    Migration {
+        version: 71,
+        description: "What decided a run, a blind validation sample, and where weather came from",
+        // RES-11, RES-07, RES-21. Three additive records a methods section needs.
+        //
+        // `analysis_runs.config_json` is the run's deciding configuration as one
+        // canonical JSON object (keys sorted, no secrets), and `config_sha256` its
+        // digest, written by `record_run_config` when the run is registered. NULL
+        // for a run registered before: what it was configured with beyond the
+        // columns it already has was not recorded, and nothing is inferred.
+        //
+        // `validation_samples` / `validation_sample_items` hold a review sample
+        // drawn by a recorded seed from a recorded frame, each item with its
+        // stratum and inclusion probability; `validation_verdicts` the verdicts
+        // given on it. All three are append-only: a sample is the protocol, and a
+        // verdict on record is never rewritten (a correction is a later verdict).
+        //
+        // `weather.provider` and `weather.product` say where an hour's weather
+        // came from and what it is (an observation, a model's analysis, a
+        // forecast). NULL for every row stored before: not recorded.
+        up_sql: "ALTER TABLE analysis_runs ADD COLUMN config_json TEXT;
+        ALTER TABLE analysis_runs ADD COLUMN config_sha256 TEXT;
+        CREATE TABLE IF NOT EXISTS validation_samples (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            seed            INTEGER NOT NULL,
+            blind           INTEGER NOT NULL CHECK (blind IN (0, 1)),
+            protocol_json   TEXT NOT NULL,
+            protocol_sha256 TEXT NOT NULL,
+            frame_size      INTEGER NOT NULL CHECK (frame_size >= 0)
+        );
+        CREATE TABLE IF NOT EXISTS validation_sample_items (
+            sample_id             INTEGER NOT NULL REFERENCES validation_samples(id),
+            position              INTEGER NOT NULL CHECK (position >= 0),
+            date                  TEXT NOT NULL,
+            time                  TEXT NOT NULL,
+            sci_name              TEXT NOT NULL,
+            file_name             TEXT NOT NULL DEFAULT '',
+            stratum               TEXT NOT NULL,
+            stratum_size          INTEGER NOT NULL CHECK (stratum_size > 0),
+            inclusion_probability REAL NOT NULL
+                CHECK (inclusion_probability > 0.0 AND inclusion_probability <= 1.0),
+            PRIMARY KEY (sample_id, position)
+        );
+        CREATE TABLE IF NOT EXISTS validation_verdicts (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            sample_id     INTEGER NOT NULL,
+            position      INTEGER NOT NULL,
+            verdict       TEXT NOT NULL
+                CHECK (verdict IN ('present', 'absent', 'uncertain', 'not_identifiable')),
+            reviewer_name TEXT,
+            at            TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (sample_id, position)
+                REFERENCES validation_sample_items(sample_id, position)
+        );
+        CREATE TRIGGER validation_samples_are_append_only
+            BEFORE UPDATE ON validation_samples
+        BEGIN
+            SELECT RAISE(ABORT, 'validation_samples is append-only: a drawn sample is its protocol');
+        END;
+        CREATE TRIGGER validation_samples_are_never_deleted
+            BEFORE DELETE ON validation_samples
+        BEGIN
+            SELECT RAISE(ABORT, 'validation_samples is append-only: a drawn sample is its protocol');
+        END;
+        CREATE TRIGGER validation_sample_items_are_append_only
+            BEFORE UPDATE ON validation_sample_items
+        BEGIN
+            SELECT RAISE(ABORT, 'validation_sample_items is append-only');
+        END;
+        CREATE TRIGGER validation_sample_items_are_never_deleted
+            BEFORE DELETE ON validation_sample_items
+        BEGIN
+            SELECT RAISE(ABORT, 'validation_sample_items is append-only');
+        END;
+        CREATE TRIGGER validation_verdicts_are_append_only
+            BEFORE UPDATE ON validation_verdicts
+        BEGIN
+            SELECT RAISE(ABORT, 'validation_verdicts is append-only: a correction is a later verdict');
+        END;
+        CREATE TRIGGER validation_verdicts_are_never_deleted
+            BEFORE DELETE ON validation_verdicts
+        BEGIN
+            SELECT RAISE(ABORT, 'validation_verdicts is append-only: a correction is a later verdict');
+        END;
+        ALTER TABLE weather ADD COLUMN provider TEXT;
+        ALTER TABLE weather ADD COLUMN product TEXT;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing

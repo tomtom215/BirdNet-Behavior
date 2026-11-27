@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 
 use birdnet_core::inference::identity::{IdentityError, ModelIdentity};
 use birdnet_core::inference::labels::{LabelError, LabelSet};
+use birdnet_db::sqlite::queries::run_config::{RunConfig, record_run_config};
 use birdnet_web::state::AppState;
 
 /// Everything a run is registered with that is known before any file is read.
@@ -93,10 +94,27 @@ impl std::error::Error for RunError {}
 /// # Errors
 ///
 /// The first file that cannot be read or parsed, or the failed insert.
+#[cfg(test)]
 pub(super) fn register_run(
     state: &AppState,
     manifest: &RunManifest,
 ) -> Result<RegisteredRun, RunError> {
+    register_run_with(state, manifest, &RunConfig::new())
+}
+
+/// As [`register_run`], recording [`manifest_config`] with `extra` laid over
+/// it as the run's deciding configuration (RES-11), in the same transaction
+/// as the run.
+///
+/// # Errors
+///
+/// As [`register_run`].
+pub(super) fn register_run_with(
+    state: &AppState,
+    manifest: &RunManifest,
+    extra: &RunConfig,
+) -> Result<RegisteredRun, RunError> {
+    let deciding = manifest_config(manifest).merged(extra.clone());
     let identity = ModelIdentity::resolve(
         &manifest.model_path,
         &manifest.labels_path,
@@ -142,6 +160,7 @@ pub(super) fn register_run(
         .with_db(|conn| {
             let tx = conn.unchecked_transaction()?;
             let id = birdnet_db::sqlite::insert_analysis_run(&tx, &new)?;
+            record_run_config(&tx, id, &deciding)?;
             let classifiers = std::iter::once((manifest.primary_id.as_str(), &identity, true))
                 .chain(extras.iter().map(|(model_id, i)| (*model_id, i, false)));
             for (model_id, i, is_primary) in classifiers {
@@ -187,7 +206,17 @@ pub(super) fn provenance_for(
     state: &AppState,
     manifest: &RunManifest,
 ) -> Option<super::processor::RunProvenance> {
-    match register_run(state, manifest) {
+    provenance_for_with(state, manifest, &RunConfig::new())
+}
+
+/// As [`provenance_for`], recording `extra` (the resolved filters the manifest
+/// does not carry) with the run's deciding configuration (RES-11).
+pub(super) fn provenance_for_with(
+    state: &AppState,
+    manifest: &RunManifest,
+    extra: &RunConfig,
+) -> Option<super::processor::RunProvenance> {
+    match register_run_with(state, manifest, extra) {
         Ok(run) => Some(super::processor::RunProvenance {
             run_id: run.id,
             algorithm: birdnet_integrations::birdweather::algorithm_for_model(
@@ -209,6 +238,40 @@ pub(super) fn provenance_for(
             None
         }
     }
+}
+
+/// The deciding configuration a manifest alone can state (RES-11): the run
+/// columns, which classifiers ran, each one's own threshold, and whether an
+/// occurrence model filtered. [`provenance_for_with`] lays a caller's
+/// resolved filters over it.
+pub(super) fn manifest_config(manifest: &RunManifest) -> RunConfig {
+    let mut ids: Vec<&str> = std::iter::once(manifest.primary_id.as_str())
+        .chain(
+            manifest
+                .extra_classifiers
+                .iter()
+                .map(|(id, _, _)| id.as_str()),
+        )
+        .collect();
+    ids.sort_unstable();
+    ids.dedup();
+    let mut config = RunConfig::new()
+        .set_str("app_version", manifest.app_version)
+        .set_f64("confidence", manifest.confidence)
+        .set_f64("sensitivity", manifest.sensitivity)
+        .set_f64("overlap", manifest.overlap)
+        .set_f64("sf_thresh", manifest.sf_thresh)
+        .set_opt_f64("lat", manifest.lat)
+        .set_opt_f64("lon", manifest.lon)
+        .set_str("classifier.primary", &manifest.primary_id)
+        .set_str("classifiers", &ids.join(","))
+        .set_bool("filter.occurrence.model", manifest.geomodel_path.is_some());
+    let mut thresholds: Vec<(&String, &f32)> = manifest.model_thresholds.iter().collect();
+    thresholds.sort_by(|a, b| a.0.cmp(b.0));
+    for (id, t) in thresholds {
+        config = config.set_f32(&format!("classifier.{id}.threshold"), *t);
+    }
+    config
 }
 
 fn path_text(path: &Path) -> String {
@@ -276,6 +339,46 @@ mod tests {
         assert!(rows[0].2 && !rows[1].2);
         assert_eq!(rows[0].1, run.identity.model.sha256);
         assert_ne!(rows[1].1, rows[0].1, "each its own file's checksum");
+    }
+
+    /// RES-11: a run records the configuration that decided what it recorded,
+    /// beyond the five numbers `analysis_runs` has columns for: each
+    /// classifier's own threshold, which classifiers ran, and what the caller
+    /// adds (the resolved filters), as canonical JSON with its digest.
+    #[test]
+    fn a_run_records_the_configuration_that_decided_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut m = manifest(tmp.path());
+        std::fs::write(&m.model_path, b"abc").unwrap();
+        std::fs::write(&m.labels_path, "Pica pica_Eurasian Magpie\n").unwrap();
+        m.model_thresholds.insert("perch".into(), 0.55);
+        let perch = tmp.path().join("perch.onnx");
+        std::fs::write(&perch, b"second").unwrap();
+        m.extra_classifiers = vec![("perch".into(), perch, m.labels_path.clone())];
+        let state = AppState::new(tmp.path().join("birds.db")).unwrap();
+        let extra = birdnet_db::sqlite::queries::run_config::RunConfig::new()
+            .set_str("filter.occurrence.week", "Birdnet48");
+        let p = provenance_for_with(&state, &m, &extra).expect("registered");
+        let row = state
+            .with_db(|c| birdnet_db::sqlite::analysis_run(c, p.run_id))
+            .unwrap()
+            .unwrap();
+        let json = row
+            .config_json
+            .expect("the run's deciding configuration is recorded");
+        for needle in [
+            "\"classifier.perch.threshold\":0.55",
+            "\"classifier.primary\":\"birdnet\"",
+            "\"classifiers\":\"birdnet,perch\"",
+            "\"filter.occurrence.week\":\"Birdnet48\"",
+            "\"confidence\":0.7",
+        ] {
+            assert!(json.contains(needle), "{needle} missing from {json}");
+        }
+        assert_eq!(
+            row.config_sha256.as_deref(),
+            Some(birdnet_db::sqlite::queries::run_config::sha256_hex(json.as_bytes()).as_str())
+        );
     }
 
     #[test]

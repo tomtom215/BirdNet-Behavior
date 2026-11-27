@@ -18,6 +18,7 @@ pub mod maintenance;
 pub mod model_scores;
 pub mod overview;
 pub mod quarantine;
+pub mod run_config;
 pub mod site_effort;
 pub mod species;
 
