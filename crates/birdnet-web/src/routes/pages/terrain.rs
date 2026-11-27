@@ -523,10 +523,22 @@ pub(super) fn content(days: u32) -> String {
         .copied()
         .find(|&r| r >= days)
         .unwrap_or(RANGES[RANGES.len() - 1]);
+    // The range line is written for that range too, so a reader without the script (and the
+    // first paint with it) is told what the picture covers.
+    let says = if opens == 365 {
+        "Last year".to_owned()
+    } else {
+        format!("Last {opens} days")
+    };
     CARD.replace("{{version}}", env!("CARGO_PKG_VERSION"))
         .replacen(
             r#"data-tr-days="30""#,
             &format!(r#"data-tr-days="{opens}""#),
+            1,
+        )
+        .replacen(
+            r#"role="status">Last 30 days</span>"#,
+            &format!(r#"role="status">{says}</span>"#),
             1,
         )
 }
@@ -534,6 +546,30 @@ pub(super) fn content(days: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// UIR-30. The card's range line is the figure's own statement of what it covers. It is
+    /// written by the server for the range it opens at: it said "Last 30 days" over a year's
+    /// terrain, and terrain.js never corrected it (its range `say()` was shadowed by a second
+    /// method of the same name).
+    #[test]
+    fn the_card_says_the_range_it_draws() {
+        for (days, opens, says) in [
+            (7, 30, "Last 30 days"),
+            (30, 30, "Last 30 days"),
+            (90, 90, "Last 90 days"),
+            (365, 365, "Last year"),
+        ] {
+            let html = content(days);
+            assert!(
+                html.contains(&format!(r#"data-tr-days="{opens}""#)),
+                "{days}"
+            );
+            assert!(
+                html.contains(&format!(r#"role="status">{says}</span>"#)),
+                "the card at {days} days must say {says}"
+            );
+        }
+    }
 
     fn row(date: &str, hour: u32, sp: &str, n: u32) -> Row {
         (date.to_owned(), hour, sp.to_owned(), n)

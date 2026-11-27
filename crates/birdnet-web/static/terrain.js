@@ -365,13 +365,14 @@ class Terrain {
     this.readout = card.querySelector(".tr-readout");
     this.legend = card.querySelector(".tr-legend");
     this.idleText = this.readout ? this.readout.textContent : "";
-    this.say();
+    this.sayRange();
     this.bind();
     this.load();
   }
 
-  /** Which range the card is showing, in words. */
-  say() {
+  /** Which range the card is showing, in words. (It was a second `say`, which the message
+   * `say(text)` below replaced, so the line never followed the range: UIR-30.) */
+  sayRange() {
     if (!this.span) return;
     this.span.textContent = this.days === 365 ? "Last year" : `Last ${this.days} days`;
   }
@@ -399,7 +400,7 @@ class Terrain {
       const days = RANGES.find((r) => r >= want) || RANGES[RANGES.length - 1];
       if (days === this.days) return;
       this.days = days;
-      this.say();
+      this.sayRange();
       this.load();
     });
     seg("view", (b) => this.setView(b.dataset.view));
