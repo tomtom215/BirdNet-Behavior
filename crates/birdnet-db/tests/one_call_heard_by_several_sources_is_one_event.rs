@@ -448,12 +448,15 @@ fn the_query_reads_instants_not_local_times_and_counts_rows_without_one() {
     assert!(read.edges_settled);
     let sizes: Vec<usize> = read.events.iter().map(|e| e.members.len()).collect();
     assert_eq!(sizes, vec![1, 1, 2], "{:?}", read.events);
-    // The row id is the table's unique key, not the rowid.
-    assert!(
-        read.events[2].members[0]
-            .row_id
-            .starts_with("2026-10-25|08:00:00|Turdus merula|a2.wav|")
-    );
+    // The row id is the detection's permanent identifier, not the rowid.
+    let uuid: String = conn
+        .query_row(
+            "SELECT detection_uuid FROM detections WHERE File_Name = 'a2.wav'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("uuid");
+    assert_eq!(read.events[2].members[0].row_id, uuid);
 
     // Counterpart: with the default site map nothing merges.
     let read = events_between(
@@ -465,6 +468,42 @@ fn the_query_reads_instants_not_local_times_and_counts_rows_without_one() {
     )
     .expect("read");
     assert_eq!(read.events.len(), 4);
+}
+
+/// RES-25 in the event layer: relabelling a detection keeps the identity of
+/// the event it is in; the composite key the layer used to name a row by
+/// included the species, so a relabel made it another event.
+#[test]
+fn a_relabelled_detection_keeps_its_event_s_identity() {
+    let conn = conn();
+    insert(
+        &conn,
+        "2026-10-25",
+        "08:00:00",
+        "a.wav",
+        "A",
+        Some(DAY + 8 * 3600),
+    );
+    let id = || {
+        events_between(
+            &conn,
+            DAY,
+            DAY + 86_400,
+            DEFAULT_TOLERANCE_SECS,
+            &SiteMap::identity(),
+        )
+        .expect("read")
+        .events[0]
+            .event_id
+            .clone()
+    };
+    let before = id();
+    conn.execute(
+        "UPDATE detections SET Sci_Name = 'Turdus philomelos', Com_Name = 'Song Thrush'",
+        [],
+    )
+    .expect("relabel");
+    assert_eq!(id(), before, "a relabel made the detection another event");
 }
 
 #[test]

@@ -27,7 +27,7 @@ nothing are counted only as seconds of effort.
 
 An **event** (`/api/v2/events`) groups detections of one species at one site,
 at most one per source, within a tolerance of one another (policy
-`events-1`). It is a call heard once or by several microphones, still not a
+`events-2`). It is a call heard once or by several microphones, still not a
 bird.
 
 ## What a run records

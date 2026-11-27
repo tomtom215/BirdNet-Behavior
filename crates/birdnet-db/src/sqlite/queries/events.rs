@@ -78,7 +78,11 @@ use crate::sqlite::connection::DbError;
 
 /// The version of the event rule this module implements. Every response that
 /// counts events states it, and it is hashed into every [`event_id`].
-pub const EVENT_POLICY_VERSION: &str = "events-1";
+///
+/// `events-2`: a member is named by its detection's permanent identifier
+/// (RES-25) where it has one, so a relabel no longer changes an event's id;
+/// ties in time are broken by that identifier.
+pub const EVENT_POLICY_VERSION: &str = "events-2";
 
 /// `BirdNET` V2.4's analysis window, in seconds.
 pub const V24_WINDOW_SECS: f64 = 3.0;
@@ -424,7 +428,7 @@ fn read_rows(
 ) -> Result<Vec<EventRow>, DbError> {
     let mut stmt = conn.prepare(
         "SELECT Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs,
-                detected_at_utc, Com_Name, Source, Confidence
+                detected_at_utc, Com_Name, Source, Confidence, COALESCE(detection_uuid, '')
            FROM detections_analytic
           WHERE detected_at_utc >= ?1 AND detected_at_utc < ?2
             AND (?3 IS NULL OR Source = ?3)
@@ -446,8 +450,17 @@ fn read_rows(
                 let sci: String = r.get(2)?;
                 let file: String = r.get(3)?;
                 let offset: f64 = r.get(4)?;
+                let uuid: String = r.get(9)?;
+                // The detection's permanent identifier (RES-25), which a
+                // relabel or a VACUUM does not change; the table's unique key
+                // for a row that has none.
+                let row_id = if uuid.is_empty() {
+                    format!("{date}|{time}|{sci}|{file}|{offset}")
+                } else {
+                    uuid
+                };
                 Ok(EventRow {
-                    row_id: format!("{date}|{time}|{sci}|{file}|{offset}"),
+                    row_id,
                     instant: r.get(5)?,
                     sci_name: sci,
                     com_name: r.get(6)?,

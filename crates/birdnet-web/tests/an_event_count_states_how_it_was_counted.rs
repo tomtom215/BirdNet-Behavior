@@ -68,7 +68,7 @@ async fn events_state_their_policy_and_count_once_only_when_told_the_sites() {
 
     let (status, body) = get(&state, "/api/v2/events?from=2026-05-01&to=2026-05-01").await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["policy"]["version"], "events-1");
+    assert_eq!(body["policy"]["version"], "events-2");
     assert_eq!(body["policy"]["tolerance_secs"], 4.0);
     assert_eq!(body["policy"]["site_map"]["mic"], "mic");
     assert_eq!(body["policy"]["site_map"]["cam"], "cam");
