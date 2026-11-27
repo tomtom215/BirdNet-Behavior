@@ -5,7 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::audio::capture::process::is_audio_file;
+use super::is_kept_audio_file as is_audio_file;
 
 /// Check whether a file is protected from purge.
 ///
@@ -544,6 +544,25 @@ mod tests {
         let removed = purge_oldest_files(dir.path(), &[], &[]);
         // 10% of 20 = 2
         assert_eq!(removed, 2);
+    }
+
+    /// N26-02: an `.ogg` clip is one the flat age drain sees and removes like
+    /// a `.wav`; the counterpart: a file that is not audio is still left.
+    #[test]
+    fn an_ogg_clip_is_audio_the_disk_manager_can_remove() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let old = filetime::FileTime::from_unix_time(1_000_000, 0);
+        for name in ["a.ogg", "b.OGG", "c.wav", "notes.txt"] {
+            let p = dir.path().join(name);
+            std::fs::write(&p, b"x").expect("write");
+            filetime::set_file_mtime(&p, old).expect("set mtime");
+        }
+        let mut files: Vec<String> = collect_flat_audio(dir.path())
+            .into_iter()
+            .map(|(p, _, _)| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
+        files.sort();
+        assert_eq!(files, ["a.ogg", "b.OGG", "c.wav"]);
     }
 
     #[test]
