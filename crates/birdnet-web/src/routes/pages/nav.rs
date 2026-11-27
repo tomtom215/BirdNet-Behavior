@@ -40,6 +40,17 @@ pub struct Primary {
     pub key: &'static str,
     /// Glyph for the phone bottom-bar slot.
     pub glyph: &'static str,
+    /// The accessible name, where it says more than the label. It starts with the label
+    /// (WCAG 2.5.3, label in name).
+    pub name: Option<&'static str>,
+}
+
+impl Primary {
+    /// The name a screen reader announces: [`Primary::name`], or the label.
+    #[must_use]
+    pub fn accessible_name(&self) -> &'static str {
+        self.name.unwrap_or(self.label)
+    }
 }
 
 /// The six homes of the v3 spine, in display order.
@@ -49,30 +60,35 @@ pub const PRIMARY: &[Primary] = &[
         label: "Today",
         key: "today",
         glyph: "⌂",
+        name: None,
     },
     Primary {
         path: "/species",
         label: "Species",
         key: "species",
         glyph: "⌬",
+        name: None,
     },
     Primary {
         path: "/patterns",
         label: "Patterns",
         key: "patterns",
         glyph: "▦",
+        name: None,
     },
     Primary {
         path: "/recordings",
         label: "Recordings",
         key: "recordings",
         glyph: "♪",
+        name: None,
     },
     Primary {
         path: "/reports",
         label: "Reports",
         key: "reports",
         glyph: "¶",
+        name: None,
     },
     Primary {
         // The path stays `/station` — it is bookmarked, linked from a couple of
@@ -84,6 +100,9 @@ pub const PRIMARY: &[Primary] = &[
         label: "Settings",
         key: "station",
         glyph: "⌗",
+        // Its first tab is Health, "is it working?", and the label said only Settings
+        // (UIC-06): the name says both, starting with the word on the screen.
+        name: Some("Settings and station health"),
     },
 ];
 
@@ -113,9 +132,12 @@ pub fn topnav_links(current: &str) -> String {
     for p in PRIMARY {
         let a = active(p.key, current);
         let ac = aria_current(p.key, current);
+        let title = p
+            .name
+            .map_or_else(String::new, |n| format!(r#" title="{n}""#));
         let _ = write!(
             out,
-            r#"<a href="{}" class="topnav-link {a}"{ac}>{}</a>"#,
+            r#"<a href="{}" class="topnav-link {a}"{ac}{title}>{}</a>"#,
             p.path, p.label
         );
     }
@@ -131,7 +153,10 @@ pub fn tabbar_slots(current: &str) -> String {
         let _ = write!(
             out,
             r#"<a href="{}" class="bnb-tabbar__slot {a}"{ac} aria-label="{}"><span class="glyph" aria-hidden="true">{}</span><span class="label">{}</span></a>"#,
-            p.path, p.label, p.glyph, p.label
+            p.path,
+            p.accessible_name(),
+            p.glyph,
+            p.label
         );
     }
     out
@@ -205,6 +230,41 @@ mod tests {
         for p in PRIMARY {
             assert!(top.contains(p.label));
             assert!(bar.contains(&format!("<span class=\"label\">{}</span>", p.label)));
+        }
+    }
+
+    /// UIC-06 / UIR-16. The section whose first tab answers "is it working?" is labelled
+    /// Settings, and its name said nothing else: a screen reader, or a birder reading the tab
+    /// bar, could not tell that the station's health lives there. The label stays (people
+    /// looking to configure the station went hunting for "Settings"); the accessible name, which
+    /// starts with the visible word as WCAG 2.5.3 asks, says what else is inside.
+    #[test]
+    fn the_settings_section_is_named_for_its_health_too() {
+        let bar = tabbar_slots("");
+        let top = topnav_links("");
+        let slot = bar
+            .split("<a ")
+            .find(|a| a.contains(r#"href="/station""#))
+            .expect("the station slot");
+        assert!(
+            slot.contains(r#"aria-label="Settings and station health""#),
+            "the tab bar's Settings slot must name the health it holds: {slot}"
+        );
+        let link = top
+            .split("<a ")
+            .find(|a| a.contains(r#"href="/station""#))
+            .expect("the station link");
+        assert!(
+            link.contains(r#"title="Settings and station health""#),
+            "{link}"
+        );
+        // The counterpart: every other home's name is its label, unchanged.
+        for p in PRIMARY.iter().filter(|p| p.path != "/station") {
+            assert!(
+                bar.contains(&format!(r#"aria-label="{}""#, p.label)),
+                "{}",
+                p.label
+            );
         }
     }
 }

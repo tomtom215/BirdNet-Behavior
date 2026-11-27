@@ -66,8 +66,10 @@ pub(super) fn content() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0_i64, |x| i64::try_from(x.as_secs()).unwrap_or(i64::MAX));
     let moon_badge = super::overlays::moon_badge(now_secs);
+    // What the tab covers, as a sentence: "Last 60 days" and the scaling were pills, the shape
+    // of the range buttons on the When tab beside this one, and a reader pressed them (UIR-36).
     let pills = format!(
-        r#"<div class="pill-row dc-pills"><span class="bnb-pill">Last 60 days</span><span class="bnb-pill">Each bird scaled to its own busiest hour</span>{moon_badge}<a class="bnb-pill" href="/patterns?tab=migration">Phenology →</a></div>"#
+        r#"<p class="bnb-meta dc-cover">Drawn from the last 60 days, each bird scaled to its own busiest hour. {moon_badge} <a href="/patterns?tab=migration">Phenology →</a></p>"#
     );
     let head = super::frame::page_head(&super::frame::Head {
         eyebrow: "Patterns",
@@ -1626,5 +1628,23 @@ mod tests {
             !joined.contains("SCAN detections"),
             "the chorus window is scanning the detections table: {joined}"
         );
+    }
+
+    /// UIR-36. The tab's head carried "Last 60 days" and "Each bird scaled to its own busiest
+    /// hour" as pills, the shape of the range buttons on the When tab beside it, and a reader
+    /// pressed them. What the page covers is a sentence, as on Migration (`b59908b`).
+    #[test]
+    fn what_the_dawn_tab_covers_is_a_sentence_not_pills() {
+        let html = content();
+        let head_end = html.find("</header>").unwrap_or(html.len());
+        let head = &html[..head_end];
+        assert!(
+            !head.contains(r#"<span class="bnb-pill">"#),
+            "the scope must not be drawn as pills: {head}"
+        );
+        // The counterpart: the same facts are still on the page, and the link still goes.
+        assert!(html.contains("last 60 days"), "{head}");
+        assert!(html.contains("its own busiest hour"), "{head}");
+        assert!(html.contains(r#"href="/patterns?tab=migration""#), "{head}");
     }
 }

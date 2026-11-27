@@ -113,7 +113,8 @@ pub struct DismissForm {
 }
 
 async fn detection_reviews_page(headers: HeaderMap) -> Html<String> {
-    let content = "<div class=\"dr-head\">\
+    let content = super::quarantine::review_tabs("/detection-reviews")
+        + "<div class=\"dr-head\">\
   <div class=\"bnb-eyebrow\">Quality control</div>\
   <h1 class=\"display dr-h1\">Detection reviews</h1>\
   <p class=\"dr-lede\">Confirm detections that look right or reject likely misidentifications. \
@@ -123,7 +124,7 @@ async fn detection_reviews_page(headers: HeaderMap) -> Html<String> {
 <div id=\"dr-queue\" hx-get=\"/pages/detection-reviews-queue\" hx-trigger=\"load\" hx-swap=\"innerHTML\">\
   <p class=\"dr-loading\">Loading review queue…</p>\
 </div>";
-    super::render_page_for_request("Detection reviews", content, "species", &headers)
+    super::render_page_for_request("Detection reviews", &content, "species", &headers)
 }
 
 /// How the operator has narrowed the verdict list.

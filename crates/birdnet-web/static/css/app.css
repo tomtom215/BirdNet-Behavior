@@ -3803,7 +3803,7 @@ a.spp-inherit    { color: inherit; }
       the dc-row*/dc-strip/dc-polar-svg partial classes already. ──────────── */
 .dc-head       { align-items: flex-start; }
 
-.dc-pills      { margin: 0; }
+.dc-cover      { margin: 0; }
 .dc-cols       { grid-template-columns: 1.05fr 0.95fr; }
 .dc-polar-card { display: flex; align-items: center; justify-content: center; min-height: 560px; }
 .dc-polar-wrap { width: 100%; display: flex; align-items: center; justify-content: center; }
