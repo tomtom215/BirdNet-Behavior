@@ -99,6 +99,10 @@ User=${SERVICE_USER}
 # from the release tarball to ${HELP_DIR}; harmless if absent on older releases —
 # the ServeDir simply returns 404 for /help, exactly as before.
 Environment=BNB_HELP_DIR=${HELP_DIR}
+# The journal is not a terminal: without this the log layer writes ANSI colour
+# codes into every line journalctl shows and a support bundle carries (MDL-28).
+# Environment= applies to the ExecStartPre doctor as well.
+Environment=NO_COLOR=1
 
 # Recreate the ephemeral stream/watch dir before anything else runs. With
 # PrivateTmp=yes (below) the service gets a FRESH, EMPTY /tmp on every start,

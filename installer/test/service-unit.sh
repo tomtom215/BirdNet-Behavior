@@ -196,6 +196,18 @@ on an unwritable recordings directory"
 fi
 
 echo
+echo "=== 4a. journal lines carry no colour codes (MDL-28) ==="
+# The binary's log layer writes ANSI colour unless NO_COLOR is set, and under
+# systemd its stderr is the journal: every line read with journalctl or exported
+# in a support bundle carried escape codes. The unit sets NO_COLOR for the
+# service and its preflight alike (Environment= applies to ExecStartPre too).
+if grep -qxE 'Environment=NO_COLOR=1' "${UNIT}"; then
+    pass "Environment=NO_COLOR=1"
+else
+    fail "the unit does not set NO_COLOR, so journal lines carry ANSI colour codes"
+fi
+
+echo
 echo "=== 4b. the start is blocked only by what the station cannot run past ==="
 # The preflight ran the plain doctor, whose exit 2 covers every Fail: an
 # offsite key with the wrong mode, a misspelt PUBLIC_ACCESS carve-out, a model
