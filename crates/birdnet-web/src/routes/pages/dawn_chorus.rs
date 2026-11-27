@@ -251,13 +251,9 @@ async fn polar_partial(State(state): State<AppState>) -> impl IntoResponse {
     })
     .await;
 
-    let (ribbons, sky, slots) = match result {
-        Ok((Ok(slots), (Ok(r), sky))) if !r.is_empty() => (r, sky, slots),
-        Ok((Err(e), _)) => {
-            tracing::warn!(error = %e, "dawn chorus: the species colours could not be read");
-            return super::error_states::failed_partial("the dawn chorus");
-        }
-        _ => return ok_html(super::empty_states::no_chorus()),
+    let (ribbons, sky, slots) = match settle(result, "the dawn chorus") {
+        Ok(found) => found,
+        Err(page) => return page,
     };
 
     // `sky_over` reads the station's configured coordinates and returns **local** hours, the
@@ -746,13 +742,9 @@ async fn list_partial(State(state): State<AppState>) -> impl IntoResponse {
         (slots, chorus)
     })
     .await;
-    let (ribbons, sky, slots) = match result {
-        Ok((Ok(slots), (Ok(r), sky))) if !r.is_empty() => (r, sky, slots),
-        Ok((Err(e), _)) => {
-            tracing::warn!(error = %e, "dawn chorus: the species colours could not be read");
-            return super::error_states::failed_partial("each bird's day");
-        }
-        _ => return ok_html(super::empty_states::no_chorus()),
+    let (ribbons, sky, slots) = match settle(result, "each bird's day") {
+        Ok(found) => found,
+        Err(page) => return page,
     };
     ok_html(day_strips(&ribbons, sky, &names, &slots))
 }
@@ -960,12 +952,102 @@ fn hour_to_angle(h: f64) -> f64 {
     (h / 24.0) * 2.0 * PI - PI / 2.0
 }
 
+/// What a dawn-chorus partial draws from its blocking read: the rings, or the page to answer
+/// instead. Only a read that succeeded and found nothing is "no chorus yet" (N25-04): a failed
+/// chorus read, a failed colour read and a task that died are each the failed-partial notice,
+/// which they all used to be drawn as the empty state's "no chorus yet" except the colours.
+type Answer = (StatusCode, [(header::HeaderName, &'static str); 1], String);
+
+#[allow(clippy::type_complexity)]
+fn settle<E: std::fmt::Display, J: std::fmt::Display>(
+    result: Result<
+        (
+            Result<SpeciesSlots, E>,
+            (rusqlite::Result<Vec<ChorusRibbon>>, Option<Sky>),
+        ),
+        J,
+    >,
+    what: &str,
+) -> Result<(Vec<ChorusRibbon>, Option<Sky>, SpeciesSlots), Answer> {
+    match result {
+        Ok((Ok(slots), (Ok(r), sky))) => {
+            if r.is_empty() {
+                Err(ok_html(super::empty_states::no_chorus()))
+            } else {
+                Ok((r, sky, slots))
+            }
+        }
+        Ok((Err(e), _)) => {
+            tracing::warn!(error = %e, "dawn chorus: the species colours could not be read");
+            Err(super::error_states::failed_partial(what))
+        }
+        Ok((Ok(_), (Err(e), _))) => {
+            tracing::warn!(error = %e, "dawn chorus: the chorus could not be read");
+            Err(super::error_states::failed_partial(what))
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "dawn chorus: the read task failed");
+            Err(super::error_states::failed_partial(what))
+        }
+    }
+}
+
 fn ok_html(body: String) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], body)
 }
 
 #[cfg(test)]
 mod tests {
+    /// N25-04: a chorus read that failed is the failed-partial notice, not "no chorus yet";
+    /// a read that succeeded and found nothing is the empty state (counterpart).
+    #[test]
+    #[allow(clippy::type_complexity)] // the blocking read's own result type, spelled out
+    fn a_failed_chorus_read_is_not_no_chorus_yet() {
+        let failed: Result<
+            (
+                Result<SpeciesSlots, String>,
+                (rusqlite::Result<Vec<ChorusRibbon>>, Option<Sky>),
+            ),
+            String,
+        > = Ok((
+            Ok(SpeciesSlots::default()),
+            (Err(rusqlite::Error::InvalidQuery), None),
+        ));
+        let Err(page) = super::settle(failed, "the dawn chorus") else {
+            panic!("no rings to draw")
+        };
+        let no_chorus = super::super::empty_states::no_chorus();
+        assert_ne!(page.2, no_chorus, "a failed read is not an empty chorus");
+        assert_eq!(
+            page.2,
+            super::super::error_states::failed_partial("the dawn chorus").2
+        );
+
+        let empty: Result<
+            (
+                Result<SpeciesSlots, String>,
+                (rusqlite::Result<Vec<ChorusRibbon>>, Option<Sky>),
+            ),
+            String,
+        > = Ok((Ok(SpeciesSlots::default()), (Ok(Vec::new()), None)));
+        let Err(page) = super::settle(empty, "the dawn chorus") else {
+            panic!("no rings to draw")
+        };
+        assert_eq!(page.2, no_chorus);
+
+        let died: Result<
+            (
+                Result<SpeciesSlots, String>,
+                (rusqlite::Result<Vec<ChorusRibbon>>, Option<Sky>),
+            ),
+            String,
+        > = Err("panicked".to_owned());
+        let Err(page) = super::settle(died, "the dawn chorus") else {
+            panic!("no rings to draw")
+        };
+        assert_ne!(page.2, no_chorus, "a task that died is not an empty chorus");
+    }
+
     use super::*;
 
     fn english() -> birdnet_core::i18n::NameLocalizer {
