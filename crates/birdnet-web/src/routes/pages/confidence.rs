@@ -21,8 +21,8 @@
 //!
 //! | Tier | Whole percent | Reads as |
 //! |---|---|---|
-//! | [`Tier::High`] | `>= 90` ([`SURE`]) | very sure |
-//! | [`Tier::Mid`] | from the borderline edge up to 89 | sure |
+//! | [`Tier::High`] | `>= 90` ([`SURE`]) | high score |
+//! | [`Tier::Mid`] | from the borderline edge up to 89 | clear of the cut-off |
 //! | [`Tier::Low`] | below the borderline edge | borderline |
 //!
 //! The borderline edge is **relative to the station's own cut-off**: the
@@ -54,7 +54,8 @@
 
 use birdnet_core::config::DEFAULT_CONFIDENCE_THRESHOLD;
 
-/// The whole-percent score from which a detection is "very sure".
+/// The whole-percent score from which a detection is a "high score". A high
+/// score is the model's output, not a measured chance of being right (ACC-09).
 pub const SURE: u32 = 90;
 
 /// How many points above the station's cut-off still count as borderline.
@@ -89,8 +90,8 @@ impl Tier {
     #[must_use]
     pub(crate) const fn word(self) -> &'static str {
         match self {
-            Self::High => "very sure",
-            Self::Mid => "sure",
+            Self::High => "high score",
+            Self::Mid => "clear of the cut-off",
             Self::Low => "borderline",
         }
     }
@@ -180,14 +181,14 @@ pub fn legend(floor: f64) -> String {
     let cut = whole_percent(floor);
     let mid = if edge < SURE {
         format!(
-            r#"<span class="bnb-conf-key mid"><i aria-hidden="true"></i>{edge}–{top}% sure</span>"#,
+            r#"<span class="bnb-conf-key mid"><i aria-hidden="true"></i>{edge}–{top}% clear of the cut-off</span>"#,
             top = SURE - 1,
         )
     } else {
         String::new()
     };
     format!(
-        r#"<p class="bnb-conf-legend" aria-label="What the confidence colours mean"><span class="bnb-conf-key high"><i aria-hidden="true"></i>{SURE}% and up very sure</span>{mid}<span class="bnb-conf-key low"><i aria-hidden="true"></i>under {edge}% borderline</span><span class="bnb-conf-cut">this station's cut-off is {cut}%</span></p>"#,
+        r#"<p class="bnb-conf-legend" aria-label="What the confidence colours mean"><span class="bnb-conf-key high"><i aria-hidden="true"></i>{SURE}% and up high score</span>{mid}<span class="bnb-conf-key low"><i aria-hidden="true"></i>under {edge}% borderline</span><span class="bnb-conf-cut">this station's cut-off is {cut}%</span></p>"#,
     )
 }
 
@@ -315,8 +316,8 @@ mod tests {
     #[test]
     fn the_legend_states_the_stations_numbers() {
         let l = legend(0.70);
-        assert!(l.contains("90% and up very sure"), "{l}");
-        assert!(l.contains("80–89% sure"), "{l}");
+        assert!(l.contains("90% and up high score"), "{l}");
+        assert!(l.contains("80–89% clear of the cut-off"), "{l}");
         assert!(l.contains("under 80% borderline"), "{l}");
         assert!(l.contains("cut-off is 70%"), "{l}");
     }

@@ -274,7 +274,7 @@ mod tests {
                 .collect()
         };
         // Cut-off 70: buckets mid 45/55/65 are below it; 75 is within ten points
-        // of it (borderline); 85 is sure; 95 is very sure.
+        // of it (borderline); 85 is clear of the cut-off; 95 is a high score.
         assert_eq!(
             fills(0.70),
             [
