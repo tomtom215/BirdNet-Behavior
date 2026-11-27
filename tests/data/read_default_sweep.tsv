@@ -272,3 +272,6 @@ fail-closed	src/capture/sources.rs	table_ever_used	ok	state .with_db(|conn| { co
 handled	src/integrations/effort.rs	flush_analysed	match-err	match state.with_db(|conn| credit_analysed(conn, &credits)) { Err .. }
 handled	src/integrations/effort.rs	sample_once	match-err	match state.with_db(|conn| { use birdnet_db::audio_sources::AudioSourceStore; AudioSourceStore::list(conn) }) 
 task-panic	src/main.rs	main	unwrap_or	tokio::task::spawn_blocking(move || { helpers::models::install_from_catalogue(&id, &dest, from.as_deref()) }) 
+fail-closed	crates/birdnet-web/src/routes/pages/quarantine.rs	quarantine_delete	match-err	match state.with_read_db(|conn| birdnet_db::sqlite::quarantine_clip_of(conn, id)) { Err .. }
+fail-closed	crates/birdnet-web/src/routes/pages/quarantine.rs	remove_unreferenced_clips	match-err	match state .with_read_db(|conn| birdnet_db::sqlite::unreferenced_clips(conn, names)) { Err .. }
+fail-closed	src/daemon/processor.rs	quarantine_already_recorded	match-err	match state.with_read_db(|conn| { birdnet_db::sqlite::quarantine_recorded( conn, &detection.date, &detection.t

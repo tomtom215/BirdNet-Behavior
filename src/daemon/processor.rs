@@ -990,6 +990,11 @@ async fn post_soundscape_for_row(
     })
 }
 
+/// How long a parked `BirdWeather` upload is held back from the drainer while
+/// the live attempt that parked it runs: far longer than its in-flight retries,
+/// short enough that one a crash orphaned is sent within the hour.
+const BIRDWEATHER_SEND_LEASE_SECS: u64 = 3_600;
+
 /// How often an idle processor looks for an operator's reset.
 ///
 /// The web side deletes the stored rows and then leaves a request for the
@@ -2215,6 +2220,27 @@ pub(super) fn event_processor(
                 soundscape: None,
                 algorithm: attribution.algorithm.map(str::to_owned),
             };
+            // Parked before it is sent, with a lease that keeps the drainer
+            // off it while this attempt runs, so a stop or a crash mid-post
+            // leaves it to be sent later rather than lost (review batch 2).
+            let parked_id = serde_json::to_string(&post).ok().and_then(|payload| {
+                let lease = crate::integrations::unix_now_secs() + BIRDWEATHER_SEND_LEASE_SECS;
+                match state.with_ingest_db(|conn| {
+                    birdnet_db::outbound_queue::enqueue_leased(
+                        conn,
+                        birdnet_integrations::birdweather::QUEUE_KIND,
+                        &payload,
+                        lease,
+                    )
+                }) {
+                    Some(Ok(id)) => Some(id),
+                    Some(Err(e)) => {
+                        tracing::warn!(error = %e, "could not park the BirdWeather upload before sending it");
+                        None
+                    }
+                    None => None,
+                }
+            });
             let client = bw.clone();
             let queue_state = state.clone();
             let log_state = state.clone();
@@ -2225,7 +2251,20 @@ pub(super) fn event_processor(
                     post.soundscape =
                         post_soundscape_for_row(&client, &row_state, inserted_rowid, upload).await;
                 }
+                let unpark = |queue_state: birdnet_web::state::AppState| async move {
+                    if let Some(id) = parked_id {
+                        let _ = tokio::task::spawn_blocking(move || {
+                            queue_state.with_ingest_db(|conn| {
+                                if let Err(e) = birdnet_db::outbound_queue::delete(conn, id) {
+                                    tracing::warn!(error = %e, "could not remove a sent BirdWeather upload from the queue");
+                                }
+                            });
+                        })
+                        .await;
+                    }
+                };
                 let Err(e) = client.post_detection(&post).await else {
+                    unpark(queue_state.clone()).await;
                     log_notification_outcome(
                         &log_state,
                         "birdweather",
@@ -2240,6 +2279,7 @@ pub(super) fn event_processor(
                 // Refused for its content: parking it would only replay the
                 // same refusal (INT13). Recorded as failed, with the reason.
                 if e.is_permanent() {
+                    unpark(queue_state.clone()).await;
                     tracing::warn!(
                         error = %e,
                         species = %post.common_name,
@@ -2286,15 +2326,27 @@ pub(super) fn event_processor(
                         return;
                     }
                 };
+                let error = e.to_string();
                 let _ = tokio::task::spawn_blocking(move || {
                     let now = crate::integrations::unix_now_secs();
                     queue_state.with_ingest_db(|conn| {
-                        if let Err(e) = birdnet_db::outbound_queue::enqueue(
-                            conn,
-                            birdnet_integrations::birdweather::QUEUE_KIND,
-                            &payload,
-                            now,
-                        ) {
+                        // The parked copy, handed to the drainer now with what
+                        // this attempt learned; or, when parking failed, a new
+                        // entry, as before.
+                        let queued = parked_id.map_or_else(
+                            || {
+                                birdnet_db::outbound_queue::enqueue(
+                                    conn,
+                                    birdnet_integrations::birdweather::QUEUE_KIND,
+                                    &payload,
+                                    now,
+                                )
+                            },
+                            |id| {
+                                birdnet_db::outbound_queue::release(conn, id, &payload, &error, now)
+                            },
+                        );
+                        if let Err(e) = queued {
                             tracing::warn!(error = %e, "failed to queue BirdWeather payload");
                         }
                     });
@@ -5362,6 +5414,65 @@ mod tests {
     }
 
     /// P-2: `BIRDWEATHER_THRESHOLD` keeps a detection that is good enough for
+    /// Review batch 2, the outbox: a BirdWeather upload is parked as soon as
+    /// its row is stored, not only after the post fails, so a station that
+    /// stops (or crashes) while the post is in flight still sends it. Here the
+    /// receiver accepts the connection and never answers: when the processor
+    /// has finished, the upload is already in the queue, held back from the
+    /// drainer by a lease while the live attempt runs.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_birdweather_upload_is_parked_before_it_is_sent() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            // Held open, never answered.
+            let _held: Vec<_> = listener.incoming().flatten().collect();
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        let client = birdnet_integrations::birdweather::Client::new("tok", 51.48, -0.13)
+            .unwrap()
+            .with_base_url(&format!("http://127.0.0.1:{port}"));
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        run_processor_integrated(
+            &state,
+            vec![make_event(
+                "Pica pica",
+                "Eurasian Magpie",
+                0.95,
+                tmp.path().join("a.wav"),
+                "c1",
+            )],
+            HashMap::new(),
+            0.25,
+            0,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+            birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+            ),
+            test_provenance(&state),
+            Some(client),
+            Extractor::new(ExtractionConfig::default()),
+        )
+        .await;
+        let (parked, next_attempt_at): (i64, i64) = state.with_db(|c| {
+            c.query_row(
+                "SELECT COUNT(*), COALESCE(MAX(next_attempt_at), 0) FROM outbound_queue",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        });
+        assert_eq!(
+            parked, 1,
+            "an upload in flight was not parked, and a stop now would lose it"
+        );
+        let now = i64::try_from(crate::integrations::unix_now_secs()).unwrap();
+        assert!(
+            next_attempt_at > now + 60,
+            "the parked upload is open to the drainer while the live attempt runs"
+        );
+    }
+
     /// the station's log off the public map, without touching the log.
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_birdweather_threshold_holds_back_the_upload_but_not_the_row() {
