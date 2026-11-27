@@ -25,3 +25,4 @@ pub mod sqlite;
 pub mod station;
 pub mod thresholds;
 pub mod weather;
+pub mod window_scores;
