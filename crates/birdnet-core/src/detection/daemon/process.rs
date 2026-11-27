@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::detection::ChunkFilters;
-use crate::detection::pipeline::{self, PipelineConfig, PreparedChunk};
+use crate::detection::pipeline::{self, OccurrenceWeek, PipelineConfig, PreparedChunk};
 use crate::detection::types::ChunkPrediction;
 use crate::inference::health::ErrorClass;
 use crate::inference::registry::ClassifierRegistry;
@@ -470,6 +470,130 @@ where
     }
 }
 
+/// What the occurrence filter and the operator's lists made of one detection.
+#[derive(Debug, Clone, Copy)]
+enum Verdict {
+    /// A sound or person class, not a species: not recorded (MMP-04).
+    Sound,
+    /// Held back by the operator's lists: counted only.
+    Lists,
+    /// Held back because the occurrence model does not score the species.
+    Unscored,
+    /// Kept: a detection (`None`), or an out-of-range record for the
+    /// quarantine with the occurrence model's score (ACC-01).
+    Keep(Option<f32>),
+}
+
+/// The species the filter admits for one week: the primary's, and those only
+/// another routed classifier knows.
+struct WeekSets {
+    /// The primary's admitted species.
+    primary: std::collections::HashSet<String>,
+    /// Admitted species no primary label names.
+    elsewhere: std::collections::HashSet<String>,
+    /// Why the occurrence model failed for the primary, if it did.
+    geo_failure: Option<crate::inference::model::InferenceError>,
+}
+
+impl WeekSets {
+    /// Whether a detection of `sci` is admitted this week.
+    fn allows(&self, primary_names: &std::collections::HashSet<&str>, sci: &str) -> bool {
+        if primary_names.contains(sci) {
+            self.primary.contains(sci)
+        } else {
+            self.elsewhere.contains(sci)
+        }
+    }
+}
+
+/// Build [`WeekSets`] for `week`.
+///
+/// A metadata model that fails *here*, at run time, falls back to the
+/// operator's lists — the same thing a model that fails to load does. This was
+/// a `?`, which failed every file for as long as the fault lasted: a station
+/// that recorded nothing, rather than one that recorded without an occurrence
+/// filter.
+///
+/// Species only another routed classifier knows are judged in that
+/// classifier's own vocabulary: the occurrence model by name where it scores
+/// the species, nothing where it does not (unless whitelisted), and the
+/// operator's lists (MMP-03). They used to get the lists alone, so a station
+/// with its range filter on recorded extralimital birds, frogs and insects
+/// from Perch unfiltered. A model failing here falls back to the lists, as it
+/// does for the primary.
+fn week_sets(
+    species_filter: &mut SpeciesFilter,
+    registry: &ClassifierRegistry,
+    route: &[usize],
+    location: Option<(f64, f64)>,
+    week: u32,
+    primary_labels: &crate::inference::labels::LabelSet,
+    primary_names: &std::collections::HashSet<&str>,
+) -> WeekSets {
+    let (primary, geo_failure) = match species_filter.filter_species(location, week, primary_labels)
+    {
+        Ok(set) => (set, None),
+        Err(e) => {
+            report_species_filter_failure(&e);
+            (species_filter.allowed_by_lists(primary_labels), Some(e))
+        }
+    };
+    let mut elsewhere = std::collections::HashSet::new();
+    for m in route
+        .iter()
+        .filter(|&&idx| idx != 0)
+        .filter_map(|&idx| registry.model(idx))
+    {
+        let set = species_filter
+            .filter_species_of(&m.id, location, week)
+            .unwrap_or_else(|e| {
+                report_species_filter_failure(&e);
+                species_filter.allowed_by_lists(m.model.labels())
+            });
+        elsewhere.extend(
+            set.into_iter()
+                .filter(|name| !primary_names.contains(name.as_str())),
+        );
+    }
+    WeekSets {
+        primary,
+        elsewhere,
+        geo_failure,
+    }
+}
+
+/// Each distinct value of `weeks`, in the order it first appears.
+fn distinct_in_order(weeks: &[u32]) -> Vec<u32> {
+    let mut out: Vec<u32> = Vec::new();
+    for &w in weeks {
+        if !out.contains(&w) {
+            out.push(w);
+        }
+    }
+    out
+}
+
+/// The occurrence week one window is scored against (review F13).
+///
+/// [`OccurrenceWeek::PerFile`], the default, is BirdNET-Pi's rule: the week of
+/// the date in the recording's filename, `file_week`, for every window. With
+/// [`OccurrenceWeek::PerWindow`] it is the week of the window's own capture
+/// date, the recording's start shifted by the window's start
+/// ([`crate::civil::birdnet_week_at`]), so a window past midnight on the last
+/// day of a week bin is scored in the next bin. A recording date or time that
+/// does not parse keeps `file_week`.
+fn window_week(chunk: &PreparedChunk, mode: OccurrenceWeek, file_week: u32) -> u32 {
+    match mode {
+        OccurrenceWeek::PerFile => file_week,
+        OccurrenceWeek::PerWindow => crate::civil::birdnet_week_at(
+            &chunk.recording.date,
+            &chunk.recording.time,
+            f64::from(chunk.start_secs),
+        )
+        .unwrap_or(file_week),
+    }
+}
+
 /// Process a single audio file with privacy and species occurrence filters.
 ///
 /// After running inference, applies the whole-chunk filters (suppressing
@@ -506,12 +630,18 @@ pub fn process_and_infer_filtered(
         "audio pipeline complete"
     );
 
-    // One week per file: every chunk carries the same `recording`, because the
-    // date comes from the filename rather than from the chunk's offset within
-    // it. Deriving it once says so, and leaves one place for it to be wrong.
-    let week = chunks
+    // One week per file by default, as BirdNET-Pi scores one: every chunk
+    // carries the same `recording`, and the date comes from the filename. With
+    // `OccurrenceWeek::PerWindow` each window's own capture date decides its
+    // week instead (review F13); see `window_week`.
+    let file_week = chunks
         .first()
         .map_or(1, |c| geomodel_week(&c.recording.date, path));
+    let mode = pipeline_config.occurrence_week;
+    let weeks: Vec<u32> = chunks
+        .iter()
+        .map(|c| window_week(c, mode, file_week))
+        .collect();
 
     // Run inference on all chunks first to collect raw predictions
     let mut all_predictions: Vec<ChunkPrediction> = Vec::with_capacity(chunks.len());
@@ -522,7 +652,7 @@ pub fn process_and_infer_filtered(
             .is_some_and(|m| m.model.has_human_labels())
     });
     let (predictions, failed_windows) = infer_windows(&chunks, can_hear_people, |chunk| {
-        infer_chunk(registry, route, chunk, week)
+        infer_chunk(registry, route, chunk, window_week(chunk, mode, file_week))
     })?;
     all_predictions.extend(predictions);
 
@@ -571,104 +701,105 @@ pub fn process_and_infer_filtered(
         }
     }
     let primary_labels = registry.primary().model.labels();
-    //
-    // A metadata model that fails *here*, at run time, falls back to the
-    // operator's lists — the same thing a model that fails to load does. This
-    // was a `?`, which failed every file for as long as the fault lasted: a
-    // station that recorded nothing, rather than one that recorded without an
-    // occurrence filter.
-    let (allowed_species, geo_failure) =
-        match species_filter.filter_species(lat.zip(lon), week, primary_labels) {
-            Ok(set) => (set, None),
-            Err(e) => {
-                report_species_filter_failure(&e);
-                (species_filter.allowed_by_lists(primary_labels), Some(e))
-            }
-        };
-    // Species only another routed classifier knows, judged in that
-    // classifier's own vocabulary: the occurrence model by name where it
-    // scores the species, nothing where it does not (unless whitelisted), and
-    // the operator's lists (MMP-03). They used to get the lists alone, so a
-    // station with its range filter on recorded extralimital birds, frogs and
-    // insects from Perch unfiltered. A model failing here falls back to the
-    // lists, as it does for the primary.
     let primary_names: std::collections::HashSet<&str> = primary_labels
         .iter()
         .map(|l| l.scientific_name.as_str())
         .collect();
-    let mut allowed_elsewhere: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for m in route
+
+    // What the filter decided for each detection, by chunk, filled one week at
+    // a time: `rejection` reads the scores of the week the filter last ran
+    // for, so each week's detections are judged right after its sets are
+    // built. One file has one week unless `OccurrenceWeek::PerWindow` is on,
+    // and then at most a handful (a midnight inside it); each distinct week is
+    // asked once per file, and the filter's own cache keeps the last.
+    let mut verdicts: Vec<Vec<Verdict>> = filtered_predictions
         .iter()
-        .filter(|&&idx| idx != 0)
-        .filter_map(|&idx| registry.model(idx))
-    {
-        let set = species_filter
-            .filter_species_of(&m.id, lat.zip(lon), week)
-            .unwrap_or_else(|e| {
-                report_species_filter_failure(&e);
-                species_filter.allowed_by_lists(m.model.labels())
-            });
-        allowed_elsewhere.extend(
-            set.into_iter()
-                .filter(|name| !primary_names.contains(name.as_str())),
+        .map(|d| vec![Verdict::Keep(None); d.len()])
+        .collect();
+    for week in distinct_in_order(&weeks) {
+        let sets = week_sets(
+            species_filter,
+            registry,
+            route,
+            lat.zip(lon),
+            week,
+            primary_labels,
+            &primary_names,
         );
-    }
-    let allowed = |sci: &str| {
-        if primary_names.contains(sci) {
-            allowed_species.contains(sci)
-        } else {
-            allowed_elsewhere.contains(sci)
+        // Only a filter that runs here reports, so a filter that start-up
+        // found off (no model, or no position: MDL-04) keeps the reason it was
+        // given. Reported for the file's own week, which is every week unless
+        // the per-window mode is on.
+        if week == weeks.first().copied().unwrap_or(file_week)
+            && let Some(observer) = model_state
+            && species_filter.has_model()
+            && lat.zip(lon).is_some()
+        {
+            observer.filter(&filter_state_after_file(
+                sets.geo_failure.as_ref(),
+                sets.primary.len() as u64,
+            ));
         }
-    };
-    // Only a filter that runs here reports, so a filter that start-up found
-    // off (no model, or no position: MDL-04) keeps the reason it was given.
-    if let Some(observer) = model_state
-        && species_filter.has_model()
-        && lat.zip(lon).is_some()
-    {
-        observer.filter(&filter_state_after_file(
-            geo_failure.as_ref(),
-            allowed_species.len() as u64,
-        ));
+        for (i, detections) in filtered_predictions.iter().enumerate() {
+            if weeks[i] != week {
+                continue;
+            }
+            for (j, detection) in detections.iter().enumerate() {
+                // A sound or a person, not a species (MMP-04): it has done its
+                // work in the chunk filters above and is not recorded.
+                if crate::detection::sound_class::is_sound_class(
+                    &detection.scientific_name,
+                    &detection.common_name,
+                ) {
+                    verdicts[i][j] = Verdict::Sound;
+                    continue;
+                }
+                // Held back here is counted, and an out-of-range bird the
+                // model scored goes to the "Unlikely here" quarantine with that
+                // score (ACC-01): a vagrant is the record most worth having,
+                // and it vanished without a trace at any confidence. The
+                // operator's lists are an instruction and are only counted; a
+                // species the model does not score is held back as the
+                // maintainer decided (MMP-03).
+                if !sets.allows(&primary_names, &detection.scientific_name) {
+                    verdicts[i][j] = match species_filter.rejection(&detection.scientific_name) {
+                        crate::inference::species_filter::Rejection::Lists => Verdict::Lists,
+                        crate::inference::species_filter::Rejection::Unscored => Verdict::Unscored,
+                        crate::inference::species_filter::Rejection::Score(p) => {
+                            Verdict::Keep(Some(p))
+                        }
+                    };
+                }
+            }
+        }
     }
 
-    // Collect events, applying species filter
+    // Collect events, in chunk order.
     let mut events = Vec::new();
     let total_ms = start.elapsed().as_millis() as u64;
 
-    for (chunk, detections) in chunks.iter().zip(filtered_predictions.iter()) {
-        for detection in detections {
-            // A sound or a person, not a species (MMP-04): it has done its work
-            // in the chunk filters above and is not recorded.
-            if crate::detection::sound_class::is_sound_class(
-                &detection.scientific_name,
-                &detection.common_name,
-            ) {
-                continue;
-            }
-            // Held back here is counted, and an out-of-range bird the model
-            // scored goes to the "Unlikely here" quarantine with that score
-            // (ACC-01): a vagrant is the record most worth having, and it
-            // vanished without a trace at any confidence. The operator's lists
-            // are an instruction and are only counted; a species the model
-            // does not score is held back as the maintainer decided (MMP-03).
-            let mut out_of_range = None;
-            if !allowed(&detection.scientific_name) {
-                match species_filter.rejection(&detection.scientific_name) {
-                    crate::inference::species_filter::Rejection::Lists => {
-                        tally.species_list_detections += 1;
-                        continue;
-                    }
-                    crate::inference::species_filter::Rejection::Unscored => {
-                        tally.occurrence_detections += 1;
-                        continue;
-                    }
-                    crate::inference::species_filter::Rejection::Score(p) => {
-                        tally.occurrence_detections += 1;
-                        out_of_range = Some(p);
-                    }
+    for ((chunk, detections), verdicts) in chunks
+        .iter()
+        .zip(filtered_predictions.iter())
+        .zip(&verdicts)
+    {
+        for (detection, verdict) in detections.iter().zip(verdicts) {
+            let out_of_range = match *verdict {
+                Verdict::Sound => continue,
+                Verdict::Lists => {
+                    tally.species_list_detections += 1;
+                    continue;
                 }
-            }
+                Verdict::Unscored => {
+                    tally.occurrence_detections += 1;
+                    continue;
+                }
+                Verdict::Keep(Some(p)) => {
+                    tally.occurrence_detections += 1;
+                    Some(p)
+                }
+                Verdict::Keep(None) => None,
+            };
 
             // Apply per-species confidence threshold (checked in event_processor instead)
             // The daemon produces raw events; threshold filtering is done downstream.
@@ -1803,6 +1934,185 @@ mod tests {
     }
 
     const BERLIN: Option<(f64, f64)> = Some((52.52, 13.405));
+
+    /// Review F13: one file through the pipeline, the tiny V2.4 model the only
+    /// classifier (its first class `Pica pica`), and a geomodel whose magpie
+    /// score depends on the week alone: `sigmoid(4 x week - 38)`, 0.12 in week
+    /// 9 (held back at 0.5), 0.88 in week 10, about 0 in week 1 and about 1 in
+    /// week 48 (`tiny_meta_week_test.onnx`, the same graph as
+    /// `tiny_meta_test.onnx` with one weight set). Returns each magpie window's
+    /// `(start, week, admitted)`.
+    fn magpie_weeks(name: &str, secs: usize, mode: OccurrenceWeek) -> Vec<(f32, u32, bool)> {
+        use crate::detection::corroboration::ConfirmationLevel;
+        use crate::detection::noise::NoiseFilter;
+        use crate::detection::privacy::PrivacyFilter;
+        use crate::inference::labels::LabelSet;
+        use crate::inference::model::{BirdNetModel, ModelConfig};
+        use crate::inference::species_filter::SpeciesFilterConfig;
+        const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
+        const WEEKLY_META: &[u8] = include_bytes!("../../testdata/tiny_meta_week_test.onnx");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("v24.onnx"), TINY_V24).unwrap();
+        std::fs::write(dir.join("meta.onnx"), WEEKLY_META).unwrap();
+        let labels = LabelSet::from_entries(
+            std::iter::once(("Pica pica".to_owned(), "Eurasian Magpie".to_owned()))
+                .chain((1..11).map(|i| (format!("Species{i} bird"), format!("Bird {i}"))))
+                .collect(),
+        );
+        let model = BirdNetModel::load(
+            &dir.join("v24.onnx"),
+            labels.clone(),
+            ModelConfig {
+                confidence_threshold: 0.0,
+                top_n: 100,
+                ..ModelConfig::default()
+            },
+        )
+        .unwrap();
+        let mut registry = ClassifierRegistry::single("birdnet", model);
+        let meta = LabelSet::from_entries(
+            [
+                ("Pica pica", "Eurasian Magpie"),
+                ("Parus major", "Great Tit"),
+                ("Corvus corax", "Common Raven"),
+                ("Turdus merula", "Eurasian Blackbird"),
+                ("Erithacus rubecula", "European Robin"),
+            ]
+            .iter()
+            .map(|(s, c)| ((*s).to_owned(), (*c).to_owned()))
+            .collect(),
+        );
+        let mut species_filter = SpeciesFilter::load_with_vocabulary(
+            &dir.join("meta.onnx"),
+            Some(meta),
+            &labels,
+            &std::collections::HashMap::new(),
+            SpeciesFilterConfig {
+                sf_thresh: 0.5,
+                ..SpeciesFilterConfig::default()
+            },
+        )
+        .expect("the weekly geomodel loads");
+        let wav = dir.join(name);
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+        let mut x: u32 = 1;
+        for _ in 0..48_000 * secs {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            w.write_sample(((x >> 16) as i16) / 8).unwrap();
+        }
+        w.finalize().unwrap();
+        let filters = ChunkFilters {
+            privacy: PrivacyFilter::new(0.0),
+            noise: NoiseFilter::new(0.0, Vec::new()),
+            confirmation: ConfirmationLevel::Off,
+        };
+        let pipeline_config = PipelineConfig {
+            raw_audio_input: true,
+            target_sample_rate: 48_000,
+            chunk_duration_secs: 3.0,
+            occurrence_week: mode,
+            ..PipelineConfig::default()
+        };
+        let file = process_and_infer_filtered(
+            &wav,
+            &pipeline_config,
+            &mut registry,
+            &[0],
+            &filters,
+            &mut species_filter,
+            None,
+            BERLIN.map(|l| l.0),
+            BERLIN.map(|l| l.1),
+            "",
+        )
+        .expect("the file is processed");
+        file.events
+            .iter()
+            .filter(|e| e.detection.scientific_name == "Pica pica")
+            .map(|e| {
+                (
+                    e.detection.start,
+                    e.detection.week,
+                    e.out_of_range.is_none(),
+                )
+            })
+            .collect()
+    }
+
+    /// Review F13: a 15 s recording starting 2026-03-07 23:59:55 crosses into
+    /// 03-08, and so from week bin 9 (days 1-7 of March) into bin 10. In the
+    /// per-window mode the windows at 6, 9 and 12 s are scored in bin 10, and
+    /// the occurrence filter, asked about bin 10 for them, admits the magpie
+    /// it holds back in bin 9.
+    ///
+    /// Counterpart: the default, BirdNET-Pi's one week per file, scores every
+    /// window in the file's bin 9 and holds the magpie back in all five.
+    #[test]
+    fn a_window_past_midnight_is_scored_in_its_own_week_only_when_asked() {
+        let name = "2026-03-07-birdnet-23:59:55.wav";
+        let per_window = magpie_weeks(name, 15, OccurrenceWeek::PerWindow);
+        assert_eq!(
+            per_window,
+            [
+                (0.0, 9, false),
+                (3.0, 9, false),
+                (6.0, 10, true),
+                (9.0, 10, true),
+                (12.0, 10, true)
+            ],
+            "per-window mode: each window's own capture date"
+        );
+        let per_file = magpie_weeks(name, 15, OccurrenceWeek::default());
+        assert_eq!(
+            per_file,
+            [
+                (0.0, 9, false),
+                (3.0, 9, false),
+                (6.0, 9, false),
+                (9.0, 9, false),
+                (12.0, 9, false)
+            ],
+            "the default is one week per file"
+        );
+    }
+
+    /// The same at the year's end: 2026-12-31 23:59:55 is bin 48, and the
+    /// windows after midnight are 2027-01-01, bin 1, where the weekly geomodel
+    /// holds the magpie back.
+    #[test]
+    fn a_window_past_new_year_is_scored_in_week_one_only_when_asked() {
+        let name = "2026-12-31-birdnet-23:59:55.wav";
+        let per_window: Vec<(u32, bool)> = magpie_weeks(name, 15, OccurrenceWeek::PerWindow)
+            .into_iter()
+            .map(|(_, w, a)| (w, a))
+            .collect();
+        assert_eq!(
+            per_window,
+            [(48, true), (48, true), (1, false), (1, false), (1, false)]
+        );
+        let per_file: Vec<(u32, bool)> = magpie_weeks(name, 15, OccurrenceWeek::PerFile)
+            .into_iter()
+            .map(|(_, w, a)| (w, a))
+            .collect();
+        assert_eq!(per_file, [(48, true); 5]);
+    }
+
+    /// Each distinct week of a file is asked about once, in the order it first
+    /// appears.
+    #[test]
+    fn each_distinct_week_is_asked_once_in_order() {
+        assert_eq!(distinct_in_order(&[9, 9, 10, 10, 10]), [9, 10]);
+        assert_eq!(distinct_in_order(&[48, 1, 1]), [48, 1]);
+        assert_eq!(distinct_in_order(&[20; 5]), [20]);
+        assert!(distinct_in_order(&[]).is_empty());
+    }
 
     fn no_lists() -> crate::inference::species_filter::SpeciesFilterConfig {
         crate::inference::species_filter::SpeciesFilterConfig::default()

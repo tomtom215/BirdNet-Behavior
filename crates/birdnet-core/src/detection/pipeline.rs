@@ -144,6 +144,30 @@ pub struct PipelineConfig {
     /// are in [`PreparedChunk::at_rates`]. Empty, the default, is the
     /// single-rate pipeline unchanged.
     pub extra_sample_rates: Vec<u32>,
+    /// Which date the occurrence filter's week is taken from (review F13).
+    /// [`OccurrenceWeek::PerFile`], the default, is BirdNET-Pi's rule.
+    pub occurrence_week: OccurrenceWeek,
+}
+
+/// Which date the species-occurrence filter's week is computed from
+/// (review F13).
+///
+/// The geomodel is asked about one of 48 week bins (days 1-7, 8-14, 15-21 and
+/// 22 to the end of each month: [`crate::civil::birdnet_week`]). A recording
+/// that crosses midnight at the end of a bin holds windows from two bins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OccurrenceWeek {
+    /// One week per file, from the date in the recording's filename, for every
+    /// window: what BirdNET-Pi does, and the default, so a station's
+    /// occurrence verdicts stay comparable with BirdNET-Pi's.
+    #[default]
+    PerFile,
+    /// Each window's week from its own capture date (the recording's start
+    /// shifted by the window's start), and the occurrence filter's verdict
+    /// for that window from that week. For research that needs each window
+    /// judged on the day it was heard; it departs from BirdNET-Pi only for
+    /// windows past a bin boundary inside one recording.
+    PerWindow,
 }
 
 impl Default for PipelineConfig {
@@ -157,6 +181,7 @@ impl Default for PipelineConfig {
             chunk_step_secs: None,
             raw_audio_input: false,
             extra_sample_rates: Vec::new(),
+            occurrence_week: OccurrenceWeek::PerFile,
         }
     }
 }
