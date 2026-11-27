@@ -987,6 +987,87 @@ pub fn species_heard_on(conn: &Connection, date: &str) -> Result<Vec<SpeciesHear
     Ok(rows)
 }
 
+/// The first and the last local date with a detection the analyses count, or `None` for a
+/// station with none.
+///
+/// Two reads that walk `idx_detections_date` from either end and stop at the first row the
+/// analytic view keeps, so the cost does not grow with the table (the History page asked
+/// [`detections_per_day`] for every day ever recorded to learn these two).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detection_date_bounds(conn: &Connection) -> Result<Option<(String, String)>, DbError> {
+    let first: Option<String> = conn
+        .query_row(
+            "SELECT Date FROM detections_analytic ORDER BY Date ASC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let last: Option<String> = conn
+        .query_row(
+            "SELECT Date FROM detections_analytic ORDER BY Date DESC LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(first.zip(last))
+}
+
+/// [`detections_per_day`] for the local dates `from..=to` only (`YYYY-MM-DD`, inclusive both
+/// ends), oldest day first.
+///
+/// The History calendar draws one month; this reads that month through the date index instead
+/// of grouping the whole table.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detections_per_day_between(
+    conn: &Connection,
+    from: &str,
+    to: &str,
+) -> Result<Vec<DayCount>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Date, COUNT(*) AS n, COUNT(DISTINCT Com_Name) AS sp \
+         FROM detections_analytic WHERE Date BETWEEN ?1 AND ?2 GROUP BY Date ORDER BY Date",
+    )?;
+    let rows = stmt
+        .query_map(params![from, to], |row| {
+            Ok(DayCount {
+                date: row.get(0)?,
+                count: row.get(1)?,
+                species: row.get(2)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+/// One page of [`detections_by_date`]: at most `limit` rows, newest first, after skipping
+/// `offset`. Ties on the time are broken by `rowid` so the pages neither repeat nor skip a row.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detections_by_date_page(
+    conn: &Connection,
+    date: &str,
+    limit: u32,
+    offset: u32,
+) -> Result<Vec<DetectionRow>, DbError> {
+    let sql = format!(
+        "SELECT {DETECTION_COLS} FROM detections WHERE Date = ?1 \
+         ORDER BY Time DESC, rowid DESC LIMIT ?2 OFFSET ?3"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![date, limit, offset], map_detection_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 /// Per-day detection counts with distinct-species totals, oldest day first.
 ///
 /// Powers the Reports History heat-calendar: one cell per day, coloured by

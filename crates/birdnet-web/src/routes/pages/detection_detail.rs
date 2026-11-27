@@ -213,6 +213,7 @@ fn render_detail_page(
 
     let audio_section = build_audio_section(det);
     let meta = build_meta_rows(det);
+    let scored_by = score_source_row(models);
     let correlation_section = build_correlation_section(det);
     let models_section = super::model_evidence::card(models, det.cutoff);
     let corroboration_section = build_corroboration_section(corroboration);
@@ -265,6 +266,7 @@ fn render_detail_page(
       <table>
         <tr><td class="bnb-meta">Date</td><td>{date}</td></tr>
         <tr><td class="bnb-meta">Time</td><td>{time}</td></tr>
+        {scored_by}
         {meta}
       </table>
     </div>
@@ -290,6 +292,30 @@ fn render_detail_page(
         "today",
         headers,
     )
+}
+
+/// The details table's "Score from" row: which classifier gave the confidence the card shows
+/// (UIR-30). On a station with more than one, a bare percentage is a number without its source.
+/// A row written before the station recorded the classifier says so, and a failed read says that,
+/// rather than naming one.
+fn score_source_row(models: Option<&super::model_evidence::ModelEvidence>) -> String {
+    let value = models.map_or_else(
+        || "could not be read".to_owned(),
+        |ev| {
+            ev.summary
+                .as_ref()
+                .and_then(|s| s.model_id.as_deref())
+                .filter(|id| !id.is_empty())
+                .map_or_else(
+                    || {
+                        "not recorded (stored before the station kept which classifier answered)"
+                            .to_owned()
+                    },
+                    |id| format!(r#"<span class="mono">{}</span>"#, escape_html(id)),
+                )
+        },
+    );
+    format!(r#"<tr><td class="bnb-meta">Score from</td><td>{value}</td></tr>"#)
 }
 
 fn build_audio_section(det: &birdnet_db::sqlite::DetectionRow) -> String {
@@ -543,7 +569,7 @@ mod tests {
         assert!(html.contains("85%"), "should show the confidence");
     }
 
-    fn row_with_id(id: Option<&str>) -> DetectionRow {
+    pub(super) fn row_with_id(id: Option<&str>) -> DetectionRow {
         DetectionRow {
             date: "2026-05-19".into(),
             time: "09:00:00".into(),
@@ -756,6 +782,66 @@ mod nearby_tests {
             let html = build_nearby_section(Some(&snapshot(vec![bird])), "Turdus merula", NOW);
             assert!(html.contains("It was reported"), "{how_many:?}: {html}");
             assert!(!html.contains("0 were"), "{how_many:?}: {html}");
+        }
+    }
+
+    /// The "This detection" card of a rendered page: from its heading to the end of its table.
+    fn details_card(page: &str) -> &str {
+        let from = page.find("This detection</h2>").expect("the details card");
+        let to = from + page[from..].find("</table>").expect("its table");
+        &page[from..to]
+    }
+
+    fn page_with(summary: Option<birdnet_db::sqlite::DetectionModelSummary>) -> String {
+        let ev = super::super::model_evidence::ModelEvidence {
+            scores: Vec::new(),
+            summary,
+        };
+        let axum::response::Html(page) = super::render_detail_page(
+            &super::tests::row_with_id(None),
+            None,
+            Some(&[]),
+            None,
+            &axum::http::HeaderMap::new(),
+            &birdnet_core::i18n::NameLocalizer::english(),
+            0.7,
+            Some(&ev),
+        );
+        page
+    }
+
+    /// UIR-30. The card's headline confidence ("95%") named no classifier: on a two-model
+    /// station a reader could not tell whose score it was, and the model appeared only in a
+    /// card that is drawn when two or more agreed. The details table now says which.
+    #[test]
+    fn the_confidence_names_the_classifier_that_gave_it() {
+        let page = page_with(Some(birdnet_db::sqlite::DetectionModelSummary {
+            model_id: Some("birdnet-v3".into()),
+            agreement: Some(1),
+        }));
+        let card = details_card(&page);
+        assert!(card.contains("95%"), "{card}");
+        assert!(
+            card.contains("birdnet-v3"),
+            "the confidence must name the classifier whose score it is: {card}"
+        );
+    }
+
+    /// The counterpart: a row written before the station kept the classifier says so, rather
+    /// than naming one it does not know or leaving the score unattributed in silence.
+    #[test]
+    fn a_confidence_from_before_the_classifier_was_kept_says_so() {
+        for summary in [
+            None,
+            Some(birdnet_db::sqlite::DetectionModelSummary {
+                model_id: None,
+                agreement: None,
+            }),
+        ] {
+            let page = page_with(summary);
+            let card = details_card(&page);
+            assert!(!card.contains("birdnet-v3"), "{card}");
+            assert!(card.contains("not recorded"), "{card}");
         }
     }
 }

@@ -100,6 +100,9 @@ tracing-subscriber.workspace = true
 # with `:authority` and no `Host` header, as a browser does. Already in the
 # lockfile (hyper's server needs it).
 h2 = "0.4"
+# SQLite's statement trace, for the gates that read what a page asked the database
+# (the History month calendar is bounded by its month, UIC-21).
+rusqlite = { workspace = true, features = ["trace"] }
 
 [lints]
 workspace = true

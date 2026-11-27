@@ -271,6 +271,63 @@ pub fn clock_from_hours(hours: f64) -> String {
     clock(&format!("{:02}:{:02}", total / 60, total % 60))
 }
 
+/// A calendar date `YYYY-MM-DD` as prose, `Sun 14 Jun 2026` (UIR-20).
+///
+/// The one shape a page writes a day in a sentence or a heading. ISO dates stay where a table
+/// is meant to be copied or exported. `None` for anything that is not a real date.
+#[must_use]
+pub fn date_text(iso: &str) -> Option<String> {
+    const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    // Sakamoto's weekday offsets, Sunday = 0.
+    const T: [i64; 12] = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4];
+    let b = iso.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-' {
+        return None;
+    }
+    let y: i64 = iso.get(0..4)?.parse().ok()?;
+    let m: usize = iso.get(5..7)?.parse().ok()?;
+    let d: i64 = iso.get(8..10)?.parse().ok()?;
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    if !(1..=12).contains(&m) || d < 1 || d > days[m - 1] {
+        return None;
+    }
+    let yy = if m < 3 { y - 1 } else { y };
+    let wd = (yy + yy.div_euclid(4) - yy.div_euclid(100) + yy.div_euclid(400) + T[m - 1] + d)
+        .rem_euclid(7);
+    Some(format!(
+        "{} {d} {} {y}",
+        WEEKDAYS[usize::try_from(wd).ok()?],
+        MONTHS[m - 1]
+    ))
+}
+
+/// [`date_text`] as the HTML to put in a page: a `<time>` that carries the ISO date for a
+/// machine. Anything that is not a date is returned escaped.
+#[must_use]
+pub fn date(iso: &str) -> String {
+    date_text(iso).map_or_else(
+        || crate::routes::pages::escape_html(iso),
+        |text| format!(r#"<time datetime="{iso}">{text}</time>"#),
+    )
+}
+
 /// A stored timestamp, `YYYY-MM-DD HH:MM[:SS]` (a `T` also separates them), as
 /// the HTML to put in a page: the date as written and the time through
 /// [`clock`]. Anything else is returned escaped and unmarked.
@@ -465,5 +522,37 @@ mod tests {
             StationDisplay::default().temperature,
             TemperatureUnit::Celsius
         );
+    }
+
+    /// UIR-20: one prose date. Weekdays across a leap day, a century and a year boundary, and
+    /// no date made of something that is not one.
+    #[test]
+    fn a_prose_date_is_the_day_it_names() {
+        for (iso, text) in [
+            ("2026-06-14", "Sun 14 Jun 2026"),
+            ("2024-02-29", "Thu 29 Feb 2024"),
+            ("2000-03-01", "Wed 1 Mar 2000"),
+            ("2025-12-31", "Wed 31 Dec 2025"),
+            ("2026-01-01", "Thu 1 Jan 2026"),
+        ] {
+            assert_eq!(date_text(iso).as_deref(), Some(text), "{iso}");
+        }
+        for bad in [
+            "2026-02-29",
+            "1900-02-29",
+            "2026-13-01",
+            "2026-00-10",
+            "2026-06-31",
+            "2026/06/14",
+            "x",
+            "",
+        ] {
+            assert_eq!(date_text(bad), None, "{bad}");
+        }
+        assert_eq!(
+            date("2026-06-14"),
+            r#"<time datetime="2026-06-14">Sun 14 Jun 2026</time>"#
+        );
+        assert_eq!(date("<b>"), "&lt;b&gt;");
     }
 }
