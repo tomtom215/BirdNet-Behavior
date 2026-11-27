@@ -511,6 +511,7 @@ mod tests {
             blocks_a: 10,
             blocks_b: 8,
             overlap: 5.0 / 13.0,
+            ..SpeciesPair::default()
         }];
         let html = render_pairs_table(&pairs, 30, &birdnet_core::i18n::NameLocalizer::english());
         assert!(html.contains("Robin"));
@@ -528,6 +529,7 @@ mod tests {
             blocks_a: 1,
             blocks_b: 1,
             overlap: 1.0,
+            ..SpeciesPair::default()
         }];
         let html = render_pairs_table(&pairs, 30, &birdnet_core::i18n::NameLocalizer::english());
         assert!(!html.contains("<script>"));
@@ -542,6 +544,7 @@ mod tests {
             blocks_a: 40,
             blocks_b: 40,
             overlap,
+            ..SpeciesPair::default()
         }
     }
 

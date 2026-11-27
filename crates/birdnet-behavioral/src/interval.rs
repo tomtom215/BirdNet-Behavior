@@ -46,7 +46,18 @@ pub fn wilson(k: u32, n: u32) -> Option<(f64, f64)> {
     if n == 0 || k > n {
         return None;
     }
-    let (k, n) = (f64::from(k), f64::from(n));
+    wilson_real(f64::from(k), f64::from(n))
+}
+
+/// [`wilson`] at real-valued counts: `k` successes of an *effective* `n`
+/// trials, as a design effect gives them
+/// ([`crate::null_model::dependent_share`]). `None` unless `0 <= k <= n` and
+/// `n > 0`, all finite.
+#[must_use]
+pub fn wilson_real(k: f64, n: f64) -> Option<(f64, f64)> {
+    if !(k.is_finite() && n.is_finite() && n > 0.0 && (0.0..=n).contains(&k)) {
+        return None;
+    }
     let p = k / n;
     let z2 = Z95 * Z95;
     let denom = 1.0 + z2 / n;

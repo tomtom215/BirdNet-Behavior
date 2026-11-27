@@ -527,6 +527,7 @@ mod tests {
                     period,
                     listened_days,
                     heard_days,
+                    interval: None,
                 })
                 .collect(),
             heard_days: periods.iter().map(|p| p.2).sum::<u32>().max(1),
@@ -535,6 +536,7 @@ mod tests {
             last_listened: Some("2025-12-31".to_owned()),
             years: 1,
             typical_seconds: Some(86_400.0),
+            persistence: None,
         }
     }
 

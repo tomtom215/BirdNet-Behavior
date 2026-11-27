@@ -26,6 +26,10 @@ sha2.workspace = true
 # Password hashing for the accounts surface (O-14 / O-15 wire flip).
 argon2.workspace = true
 password-hash.workspace = true
+# The null models and dependence-aware intervals the analytic queries attach to
+# what they count (`birdnet_behavioral::null_model`), without the `DuckDB`
+# feature: one definition of each, shared with the analytics copy.
+birdnet-behavioral.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

@@ -45,7 +45,10 @@ pub use clip_evidence::{
     ClipDigest, ClipRecord, ClipState, clip_record, detection_uuid_of, digest_clip, digest_file,
     for_each_clip_record, record_clip_digest, record_quarantine_clip_digest, verify as verify_clip,
 };
-pub use correlation::{companion_species, top_cooccurrence_pairs};
+pub use correlation::{
+    COOCCURRENCE_METHOD, CooccurrenceAnalysis, CooccurrenceQuery, companion_species,
+    cooccurrence_analysis, top_cooccurrence_pairs,
+};
 pub use detection_reviews::{
     Detached, DetectionReview, ReviewEvent, ReviewStatus, Reviewer, UnreviewedDetection,
     clear_detection_review, clear_detection_review_by, detached_review_count, detection_clips,

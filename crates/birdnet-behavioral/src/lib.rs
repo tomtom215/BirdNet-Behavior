@@ -42,6 +42,7 @@ pub mod connection;
 pub mod gating;
 pub mod interval;
 pub mod memory;
+pub mod null_model;
 pub mod phenology;
 pub mod queries;
 pub mod reporting;

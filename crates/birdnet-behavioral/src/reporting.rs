@@ -38,9 +38,18 @@
 //!
 //! Independent trials. The listened days of a period are neighbours in the
 //! calendar, and a bird present on one is likely present on the next, so an
-//! interval that treats `listened_days` as `n` separate trials (the Wilson
-//! interval the page draws) is the narrowest the uncertainty can be. Pooling
-//! years adds days that are a year apart and is where it is nearest the truth.
+//! interval that treats `listened_days` as `n` separate trials (a plain Wilson
+//! interval) is too narrow: on a simulated series as persistent as a resident's
+//! it held the true share in about seven periods of ten, not nineteen of
+//! twenty (`tests/a_share_of_neighbouring_days_is_not_a_share_of_trials.rs`).
+//!
+//! Each period therefore carries [`ReportingPeriod::interval`], whose method
+//! is [`crate::null_model::SHARE_METHOD`]: a first-order Markov chain is
+//! fitted to the species' whole series of listened days
+//! ([`ReportingFrequency::persistence`]), and the period's days count as the
+//! effective number of independent days its runs are worth under that chain
+//! (a design effect), before a Wilson interval is taken. Pooling years adds
+//! runs that are a year apart, which count as separate.
 
 /// Periods in a year: four to a month.
 pub const PERIODS_PER_YEAR: usize = 48;
@@ -130,6 +139,89 @@ pub fn reporting_frequency_sql(floor_share: f64) -> String {
     )
 }
 
+/// SQL for the listened days themselves, in date order, and whether the
+/// species was heard on each: what the interval of a period is computed from.
+///
+/// Rows: `day` (`YYYY-MM-DD`), `heard` (boolean).
+///
+/// Takes one parameter, the species' stored common name.
+#[must_use]
+pub fn reporting_days_sql(floor_share: f64) -> String {
+    format!(
+        "{ctes}
+        SELECT CAST(li.day AS VARCHAR) AS day, h.day IS NOT NULL AS heard
+        FROM listened li LEFT JOIN heard h ON h.day = li.day
+        ORDER BY li.day",
+        ctes = ctes(floor_share),
+    )
+}
+
+/// Days since 1970-01-01 of a `YYYY-MM-DD` date; `None` for anything else.
+fn day_number(date: &str) -> Option<i64> {
+    let mut it = date.splitn(3, '-');
+    let y: i64 = it.next()?.parse().ok()?;
+    let m: i64 = it.next()?.parse().ok()?;
+    let d: i64 = it.next()?.parse().ok()?;
+    if !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    // Howard Hinnant's days_from_civil.
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+/// The intervals of every period, from the listened `days` (date, heard) in
+/// date order, and the persistence they were computed with.
+///
+/// Runs are consecutive calendar days: an unlistened day, the end of a period
+/// or a new year ends one. The persistence is fitted over runs of consecutive
+/// calendar days that ignore period boundaries, so a period's own seven to ten
+/// days are not all it is estimated from.
+#[must_use]
+pub fn period_intervals(
+    days: &[(String, bool)],
+) -> (Vec<Option<crate::null_model::DependentShare>>, Option<f64>) {
+    let parsed: Vec<(i64, usize, bool)> = days
+        .iter()
+        .filter_map(|(d, h)| {
+            let n = day_number(d)?;
+            let m: u32 = d.get(5..7)?.parse().ok()?;
+            let dd: u32 = d.get(8..10)?.parse().ok()?;
+            Some((n, period_of(m, dd), *h))
+        })
+        .collect();
+    let mut whole: Vec<Vec<bool>> = Vec::new();
+    let mut by_period: Vec<Vec<Vec<bool>>> = vec![Vec::new(); PERIODS_PER_YEAR];
+    let mut prev: Option<(i64, usize)> = None;
+    for &(n, p, h) in &parsed {
+        let consecutive = prev.is_some_and(|(prev_n, _)| n == prev_n + 1);
+        if consecutive {
+            if let Some(r) = whole.last_mut() {
+                r.push(h);
+            }
+        } else {
+            whole.push(vec![h]);
+        }
+        let same_run = consecutive && prev.is_some_and(|(_, pp)| pp == p);
+        match by_period[p].last_mut() {
+            Some(r) if same_run => r.push(h),
+            _ => by_period[p].push(vec![h]),
+        }
+        prev = Some((n, p));
+    }
+    let rho = crate::null_model::markov_rho(&whole);
+    let intervals = by_period
+        .iter()
+        .map(|runs| crate::null_model::dependent_share(runs, rho))
+        .collect();
+    (intervals, rho)
+}
+
 /// SQL for what the figure says beside its periods.
 ///
 /// One row: the species' days heard in all, those the ledger does not count
@@ -153,7 +245,7 @@ pub fn reporting_summary_sql(floor_share: f64) -> String {
 }
 
 /// One period's counts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub struct ReportingPeriod {
     /// The period, `0..48` ([`period_label`] says it).
     pub period: usize,
@@ -161,6 +253,10 @@ pub struct ReportingPeriod {
     pub listened_days: u32,
     /// Of those, the days the species was heard.
     pub heard_days: u32,
+    /// The share with an interval that allows for neighbouring days being
+    /// alike ([`crate::null_model::SHARE_METHOD`]); `None` when it could not be
+    /// formed (no listened day).
+    pub interval: Option<crate::null_model::DependentShare>,
 }
 
 /// A species' reporting frequency through the year, and what it rests on.
@@ -186,6 +282,11 @@ pub struct ReportingFrequency {
     pub years: u32,
     /// The typical day, in seconds of audio summed over sources.
     pub typical_seconds: Option<f64>,
+    /// The day-to-day persistence the intervals were computed with
+    /// ([`crate::null_model::markov_rho`] over every listened day); `None` when
+    /// it could not be estimated (heard on every listened day, or on none), in
+    /// which case the days count as independent.
+    pub persistence: Option<f64>,
 }
 
 impl ReportingFrequency {
@@ -254,6 +355,7 @@ impl crate::connection::AnalyticsDb {
                 last_listened: None,
                 years: 0,
                 typical_seconds: None,
+                persistence: None,
             });
         }
         let mut stmt = self.conn().prepare(&reporting_frequency_sql(floor_share))?;
@@ -276,9 +378,21 @@ impl crate::connection::AnalyticsDb {
                     period,
                     listened_days: count(listened),
                     heard_days: count(heard),
+                    interval: None,
                 })
             })
             .collect::<Result<Vec<_>, AnalyticsError>>()?;
+        let mut stmt = self.conn().prepare(&reporting_days_sql(floor_share))?;
+        let days = stmt
+            .query_map([species], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let (intervals, persistence) = period_intervals(&days);
+        let mut periods = periods;
+        for p in &mut periods {
+            p.interval = intervals.get(p.period).copied().flatten();
+        }
         let summary =
             self.conn()
                 .query_row(&reporting_summary_sql(floor_share), [species], |r| {
@@ -301,6 +415,7 @@ impl crate::connection::AnalyticsDb {
             last_listened: last,
             years: count(years),
             typical_seconds: typical,
+            persistence,
         })
     }
 }
