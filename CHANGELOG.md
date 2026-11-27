@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Live audio needs a sign-in on a new station (OOB-13).** Recordings → Live and the HLS stream routes answer
+  401 to a stranger, and the page offers a sign-in instead of the Listen button. A station that already holds
+  detections when it starts this version keeps the old behaviour (anyone who can reach it); the choice is on
+  the audio page (`POST /admin/audio/live-access`) and is audited. On a station set to anyone, the HLS status
+  route still returns playlist URLs that carry their token.
+- **The installer no longer writes through BirdNET-Pi's configuration (OOB-03).** On a host where the config is
+  a link or BirdNET-Pi's recording or analysis service is enabled, it stops before downloading or writing
+  anything and says how to proceed.
+
 - **A model mirror's password and query token are no longer logged (MDL-22).** `BIRDNET_MODEL_MIRROR` with
   `user:pass@` or a `?token=` was printed whole in the download's log lines and in the error a failed install
   returns; every origin is now printed with the password and secret query values replaced. The request still uses
@@ -30,6 +39,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Every detection has a permanent identifier and its clip a checksum (RES-25, RES-23; migration 69).**
+  `detection_uuid`, set when the row is written, kept by a relabel, a `VACUUM`, the exports (`Detection_Id`)
+  and the CSV import; and each clip's SHA-256 and length as written (`Clip_SHA256`, `Clip_Bytes`; empty means
+  unknown). `GET /api/v2/recordings/verify/{detection_uuid}` checks a clip against its record.
+- **A station identity, stated deployments, each source's devices and the clock's state (RES-22, MSC-13,
+  RES-12, OOB-17; migration 70).** `GET /api/v2/station/record`, `POST /api/v2/deployments`; the clock's state
+  (synced, unsynced, unknown, unset) is recorded while the station records, warned about, on
+  `/api/v2/health`, and on each exported detection (`Clock_State`); effort is also kept by UTC hour.
+- **A run records the configuration that decided what it recorded (RES-11; migration 71)**, canonical and
+  hashed; with it, seeded validation samples reviewed blind (`/admin/validation`, RES-07) and each weather hour's
+  provider and product (RES-21).
+- **A study export (RES-08):** `GET /api/v2/detections/export/study`, a deterministic ZIP with the detections,
+  each classifier's answers, reviews, runs, effort per source and per site, events with their policy version,
+  weather, and a manifest of schema, generator, parameters and member checksums. And
+  `GET /api/v2/detections/export/search` exports what the detection log found (UIC-10).
+- **Analyses that count events over listening (MSC-02, N26-06, RES-16, RES-17):** `/api/v2/analytics/rates`
+  (events per hour of a site's listening, with intervals; "no effort" is not zero), `/rates/compare`,
+  `/sunrise-relative` (each day's own sunrise) and `/cooccurrence` (per site, against a seeded permutation null,
+  with a verdict). Exploratory and associational; none measured on station data.
+- **`SOURCE_SITES`** says which sources share a site; BirdWeather is then sent one post per event at a site
+  instead of one per microphone (MSC-07).
+- **Backups carry the configuration and a checksum manifest of the clips (N26-01, RES-29)**, a restore puts the
+  configuration back and refuses an archive whose clips fail their checksums, and `?audio=kept|none` limits the
+  audio. Offsite copies are still the database only.
+- **`install.sh reset-password`** writes a new admin password and prints it (OOB-07, N25-14).
+- **Measurement instruments, with no measurement made (ACC-03, ACC-12, RES-31, MMP-13, ACC-06):** scoring against
+  annotated selection tables with intervals, golden-output and bit-for-bit reproducibility checks, a timing
+  bench (`examples/model_check.rs`), and a description of the capture filtering; protocols in
+  *Measuring the Station*.
 - **`--ingest-recordings` analyses long recordings** (review F11, RES-05): an SD card's, an AudioMoth's or a Song
   Meter's. Each recording is read a packet at a time and written into the watch directory as segments of a
   source you name, a few at a time, for the running station to analyse; its detections are stored as imported
@@ -257,6 +295,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Two classifiers' names for one species are one detection (MMP-09).** On a station running two classifiers, a
+  bird one names under its old name and the other under its new is stored once, with both agreeing, not as two
+  rows. One-classifier stations are unchanged; stored rows are not rewritten.
+- **The event layer names a member by its permanent identifier (`events-2`)**, so a relabel no longer changes an
+  event's id.
+- **History reads only the month it draws, and a day page shows one page of detections (UIC-21).** On a
+  3.3-million-row table in a 4-core container (not a Pi), a month click went from 1,287 ms to 24 ms.
+- **The co-occurrence figure's data says whether a pair stands out from chance, and the reporting-frequency
+  interval allows for neighbouring days being alike (RES-16, N25-02)**, so it is wider where presence persists.
+- **The threshold suggester needs 20 verdicts and 5 of each kind (ACC-08), and scores are no longer worded as
+  certainty (ACC-09).**
+- **Patterns' range is in the address and works without a script (UIC-08); a feed row draws no waveform it did
+  not measure (UIR-05).**
 - **A recording longer than eleven minutes is not analysed where it is dropped** (review F11). The station reads
   its header, refuses it before decoding, and moves it to `ingest/refused/` beside the database, where the
   stream directory's purge cannot delete it, with a journal line naming the command that takes it. It used to be
@@ -407,6 +458,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **OGG clips are counted and removed by the disk manager (N26-02); the stream and recordings disk managers no
+  longer overwrite each other's purge verdict (N25-10); a clip name that cannot be read fails the maintenance
+  pass instead of vanishing from it (N25-07).**
+- **The doctor judges values saved on the settings page (N26-03)**, and checks the stream directory's room for
+  its sources (MSC-15).
+- **"Also heard by" uses the instant and the event tolerance, not 30 s of local time (MSC-20).**
+- **The Docker quick-start addresses the microphone by card id (OOB-10)**, and takes its files and image from
+  one release (OOB-22).
+- **The station repairs model files kept under the old V3.0 names (MDL-25).**
+- **The journal holds no colour codes, and each start logs one start line (MDL-28).**
 - **A live detection the database refuses is kept for the next start** (review F02, batch 2), as one replayed
   from a stop already was; it used to be logged and lost. It waits in memory until the processor has had no
   new detection for a second, or 32 are waiting, and is then written to the queue, so a power cut in that

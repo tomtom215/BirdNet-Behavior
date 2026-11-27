@@ -138,8 +138,8 @@
    "work_package": "WP-06",
    "phase": 1,
    "source": "01-multi-source-capture.md:37",
-   "status": "open",
-   "evidence": "Decided 2026-11-25 (decisions-2026-11-25.md sections 1 and 2): events are computed at read time, never stored on the row; tolerance a setting defaulting to the model's window plus one second; each source its own site until told otherwise. Not started. Was marked in_progress with nothing built."
+   "status": "in_progress",
+   "evidence": "Decided 2026-11-25 (decisions-2026-11-25.md sections 1 and 2): events are computed at read time, never stored on the row; tolerance a setting defaulting to the model's window plus one second; each source its own site until told otherwise. Not started. Was marked in_progress with nothing built.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): /api/v2/analytics/rates counts events over a site's listening bounds (14d8853); legacy row-count routes now say they count rows."
   },
   {
    "id": "MSC-03",
@@ -162,8 +162,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:58",
-   "status": "in_progress",
-   "evidence": "7bef7b7: migration 61 keys quarantine by (date, time, sci_name, COALESCE(file_name,'')) and adds source; all four QuarantineRecord sites write it; approve_quarantine copies it to detections.Source. Gate two_sources_quarantined_in_one_second_are_two_rows_and_keep_their_source (src/daemon/processor.rs) red on the unfixed code (1 row, not 2). Remaining: an approved detection still has no clip, because quarantine stores the tmpfs segment path the stream drain deletes after 600 s; keeping one needs a retention rule for rejected, deleted and pruned rows. Rows quarantined before migration 61 approve with Source NULL (never recorded)."
+   "status": "done",
+   "evidence": "7bef7b7: migration 61 keys quarantine by (date, time, sci_name, COALESCE(file_name,'')) and adds source; all four QuarantineRecord sites write it; approve_quarantine copies it to detections.Source. Gate two_sources_quarantined_in_one_second_are_two_rows_and_keep_their_source (src/daemon/processor.rs) red on the unfixed code (1 row, not 2). Remaining: an approved detection still has no clip, because quarantine stores the tmpfs segment path the stream drain deletes after 600 s; keeping one needs a retention rule for rejected, deleted and pruned rows. Rows quarantined before migration 61 approve with Source NULL (never recorded).\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): already fixed by 7bef7b7 (quarantine keyed by recording, source kept through approval) with playable quarantine clips from 4f0a504/3439d6a; approval now also carries the clip checksum (17e2218)."
   },
   {
    "id": "MSC-05",
@@ -198,8 +198,8 @@
    "work_package": "WP-06",
    "phase": 1,
    "source": "01-multi-source-capture.md:88",
-   "status": "open",
-   "evidence": "Decided 2026-11-25 (decisions-2026-11-25.md sections 1 and 2): events are computed at read time, never stored on the row; tolerance a setting defaulting to the model's window plus one second; each source its own site until told otherwise. Not started. Was marked in_progress with nothing built."
+   "status": "done",
+   "evidence": "Decided 2026-11-25 (decisions-2026-11-25.md sections 1 and 2): events are computed at read time, never stored on the row; tolerance a setting defaulting to the model's window plus one second; each source its own site until told otherwise. Not started. Was marked in_progress with nothing built.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): SOURCE_SITES says which sources share a site; BirdWeather gets one post per event at a site (3fdf6e0). Unset, every source is posted as before."
   },
   {
    "id": "MSC-08",
@@ -223,7 +223,7 @@
    "phase": 1,
    "source": "01-multi-source-capture.md:110",
    "status": "in_progress",
-   "evidence": "22ed559: --doctor gains an 'Overlapping windows' warning when OVERLAP is above 0 and DUPLICATE_INTERVAL_SECS is off, with the remedy; a warning, so the configuration stays usable. Gates overlap_without_a_duplicate_interval_is_reported and no_overlap_or_a_duplicate_interval_is_not_reported red before. Remaining, for the maintainer: collapsing rows across overlapping windows or changing the default interval (it changes counts). See N24-06. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decisions 1 and 2 (the event layer): what is left is collapsing rows, which changes counts. || `ce3de58` (review F06): the duplicate gate now compares with every remembered time, so no two admitted rows are closer than the interval in any arrival order; order-free counting still waits on decision 1."
+   "evidence": "22ed559: --doctor gains an 'Overlapping windows' warning when OVERLAP is above 0 and DUPLICATE_INTERVAL_SECS is off, with the remedy; a warning, so the configuration stays usable. Gates overlap_without_a_duplicate_interval_is_reported and no_overlap_or_a_duplicate_interval_is_not_reported red before. Remaining, for the maintainer: collapsing rows across overlapping windows or changing the default interval (it changes counts). See N24-06. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decisions 1 and 2 (the event layer): what is left is collapsing rows, which changes counts. || `ce3de58` (review F06): the duplicate gate now compares with every remembered time, so no two admitted rows are closer than the interval in any arrival order; order-free counting still waits on decision 1.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as ACC-19 (6dbdb9b)."
   },
   {
    "id": "MSC-10",
@@ -270,8 +270,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:149",
-   "status": "in_progress",
-   "evidence": "5be0ece: re-adding a device that matches a removed row reinstates that row under its own id (AudioSourceStore::reinstate). Gate re_adding_a_removed_device_restores_its_source red with reinstatement off (new id). Remaining: editing an existing source's device_id still continues one id across two places; the proposed confirmation and audio_source_history table are not built. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S-M): write an audio_source_history row on every device change; editing a device stays allowed."
+   "status": "done",
+   "evidence": "5be0ece: re-adding a device that matches a removed row reinstates that row under its own id (AudioSourceStore::reinstate). Gate re_adding_a_removed_device_restores_its_source red with reinstatement off (new id). Remaining: editing an existing source's device_id still continues one id across two places; the proposed confirmation and audio_source_history table are not built. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S-M): write an audio_source_history row on every device change; editing a device stays allowed.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): audio_source_devices keeps a device number per source that survives re-adding the same device and changes on a URL edit; every existing source id unchanged (1309946, b829f62)."
   },
   {
    "id": "MSC-14",
@@ -282,8 +282,8 @@
    "work_package": "WP-07",
    "phase": 1,
    "source": "01-multi-source-capture.md:158",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): probe: ffmpeg's segment muxer fed 60 s faster than real time wrote one 15 s file, overwriting the rest; needs sample-clock or index naming. RTSP latency unmeasured."
   },
   {
    "id": "MSC-15",
@@ -294,8 +294,8 @@
    "work_package": "WP-07",
    "phase": 1,
    "source": "01-multi-source-capture.md:167",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): stream budget arithmetic and a doctor check (cd241dc); the disk-manager cap and the shed threshold are not wired."
   },
   {
    "id": "MSC-16",
@@ -331,7 +331,7 @@
    "phase": 1,
    "source": "01-multi-source-capture.md:194",
    "status": "in_progress",
-   "evidence": "Not started: per-source location and species lists depend on maintainer decision 2 (whether co-located sources are one station or several sites); a per-source threshold offset alone could be done before it. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 2 (a site per source), which is where a per-site location and species list hang. || `85191b0` (review F14): detection history scopable to one source (&source=). Status unchanged."
+   "evidence": "Not started: per-source location and species lists depend on maintainer decision 2 (whether co-located sources are one station or several sites); a per-source threshold offset alone could be done before it. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 2 (a site per source), which is where a per-site location and species list hang. || `85191b0` (review F14): detection history scopable to one source (&source=). Status unchanged.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): per-query filters only (14d8853); stored per-source thresholds or lists not done."
   },
   {
    "id": "MSC-19",
@@ -354,8 +354,8 @@
    "work_package": "WP-04",
    "phase": 1,
    "source": "01-multi-source-capture.md:212",
-   "status": "in_progress",
-   "evidence": "5be0ece: a failed corroboration read renders an inline fault note in place of the card. Gate a_failed_read_of_the_other_sources_is_reported_as_a_failure (crates/birdnet-web/tests/also_heard_by_says_when_it_could_not_check.rs) red with unwrap_or_default restored. Remaining: the window is still a fixed 30 s; deriving it needs MSC-14's measured inter-source skew. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 1: the card takes the event tolerance and detected_at_utc in place of a fixed 30 s on local time."
+   "status": "done",
+   "evidence": "5be0ece: a failed corroboration read renders an inline fault note in place of the card. Gate a_failed_read_of_the_other_sources_is_reported_as_a_failure (crates/birdnet-web/tests/also_heard_by_says_when_it_could_not_check.rs) red with unwrap_or_default restored. Remaining: the window is still a fixed 30 s; deriving it needs MSC-14's measured inter-source skew. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 1: the card takes the event tolerance and detected_at_utc in place of a fixed 30 s on local time.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): \"Also heard by\" compares detected_at_utc within the event tolerance and names it (161e8f1); the failed-read half was 5be0ece."
   },
   {
    "id": "MSC-21",
@@ -474,8 +474,8 @@
    "work_package": "WP-08",
    "phase": 1,
    "source": "02-multi-model-pipeline.md:198",
-   "status": "in_progress",
-   "evidence": "Not started: needs the maintainer's decision on which scientific name a stored detection carries when V3.0 and Perch name one species differently (HANDOFF item 40); not answered in README."
+   "status": "done",
+   "evidence": "Not started: needs the maintainer's decision on which scientific name a stored detection carries when V3.0 and Perch name one species differently (HANDOFF item 40); not answered in README.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): two names of one species (101 renames from the taxonomy table with two or more sources) merge as one row with agreement 2; one-classifier stations unchanged (0b73c9e). The 20 single-source renames are not applied."
   },
   {
    "id": "MMP-10",
@@ -522,8 +522,8 @@
    "work_package": "WP-10",
    "phase": 2,
    "source": "02-multi-model-pipeline.md:240",
-   "status": "open",
-   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): needs hardware: Pi timings first; a thread setting must also survive the unit's SystemCallFilter."
+   "status": "in_progress",
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): needs hardware: Pi timings first; a thread setting must also survive the unit's SystemCallFilter.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): model_check bench reports per-window timing with spread (d51e165); no Pi measurement."
   },
   {
    "id": "MMP-14",
@@ -547,7 +547,7 @@
    "phase": 1,
    "source": "02-multi-model-pipeline.md:257",
    "status": "in_progress",
-   "evidence": "Not started: validating the Perch bar needs annotated recordings from a real station, which this environment does not have (HANDOFF item 41)."
+   "evidence": "Not started: validating the Perch bar needs annotated recordings from a real station, which this environment does not have (HANDOFF item 41).\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): instruments and protocol only (d51e165)."
   },
   {
    "id": "MMP-16",
@@ -619,7 +619,7 @@
    "phase": 1,
    "source": "02-multi-model-pipeline.md:300",
    "status": "in_progress",
-   "evidence": "WP-01 part done (af8bb36, 7167866): a second classifier at another rate leaving the primary running is gated, as are doctor and route cases. Remaining: the MMP-03 to MMP-08 gates (WP-02 onward); any two-real-model run in CI. A corrupt extra model still stops the daemon by decision, so \"an extra classifier's failure leaves the primary running\" holds for the rate case only. || Review session 2026-11-26 added two of the untested invariants: `1a972f7` a window a human-capable classifier failed is masked under the privacy filter; `ef07e0d` a failed window costs that window, not the file."
+   "evidence": "WP-01 part done (af8bb36, 7167866): a second classifier at another rate leaving the primary running is gated, as are doctor and route cases. Remaining: the MMP-03 to MMP-08 gates (WP-02 onward); any two-real-model run in CI. A corrupt extra model still stops the daemon by decision, so \"an extra classifier's failure leaves the primary running\" holds for the rate case only. || Review session 2026-11-26 added two of the untested invariants: `1a972f7` a window a human-capable classifier failed is masked under the privacy filter; `ef07e0d` a failed window costs that window, not the file.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): invariants I1-I12 indexed and tested, each seen red against its mutant (a6f4e64); no run with two real models."
   },
   {
    "id": "MMP-22",
@@ -666,8 +666,8 @@
    "work_package": "WP-10",
    "phase": 2,
    "source": "03-precision-accuracy.md:74",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): instruments only: selection-table scoring with Wilson and recording-cluster bootstrap intervals, examples/model_check.rs (d51e165). No ground truth measured."
   },
   {
    "id": "ACC-04",
@@ -703,7 +703,7 @@
    "phase": 1,
    "source": "03-precision-accuracy.md:138",
    "status": "in_progress",
-   "evidence": "Measured (0defce7, docs/book/guides/parity.md): with the default 5 Hz + 120 Hz capture filters, V2.4 top-10 logits on the magpie clip differ from BirdNET-Pi by median 1.21, max 3.63 (control without filters: max 0.077). Open question for the maintainer: default the capture filters off for parity, or keep them and the documented cost? The gate (the v24_matches comparison after EqChain::from_pipeline_flags(true, true)) fails today and is not committed; see status/WP-08.md."
+   "evidence": "Measured (0defce7, docs/book/guides/parity.md): with the default 5 Hz + 120 Hz capture filters, V2.4 top-10 logits on the magpie clip differ from BirdNET-Pi by median 1.21, max 3.63 (control without filters: max 0.077). Open question for the maintainer: default the capture filters off for parity, or keep them and the documented cost? The gate (the v24_matches comparison after EqChain::from_pipeline_flags(true, true)) fails today and is not committed; see status/WP-08.md.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): conditioning::describe() names the capture filtering and a test measures it on a fixture (-3.80 dB residual through the tee's filters) (cd34079); not yet recorded with the run. The tee uses one-pole filters where EqChain uses two-pole."
   },
   {
    "id": "ACC-07",
@@ -726,8 +726,8 @@
    "work_package": "WP-09",
    "phase": 2,
    "source": "03-precision-accuracy.md:173",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the threshold suggester needs 20 verdicts and 5 of each class, and says reviews are not random (17d6839)."
   },
   {
    "id": "ACC-09",
@@ -738,8 +738,8 @@
    "work_package": "WP-09",
    "phase": 2,
    "source": "03-precision-accuracy.md:193",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the named phrases no longer call a score certainty; gate a_score_is_never_called_certainty (5478669)."
   },
   {
    "id": "ACC-10",
@@ -774,8 +774,8 @@
    "work_package": "WP-10",
    "phase": 2,
    "source": "03-precision-accuracy.md:231",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): golden-output record and compare, and a described aarch64 job (d51e165); no workflow added, no aarch64 run."
   },
   {
    "id": "ACC-13",
@@ -858,8 +858,8 @@
    "work_package": "WP-07",
    "phase": 1,
    "source": "03-precision-accuracy.md:302",
-   "status": "open",
-   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 1: an events view; rows stay as BirdNET-Pi parity has them. || `ce3de58` (review F06): see MSC-09; status unchanged."
+   "status": "in_progress",
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 1: an events view; rows stay as BirdNET-Pi parity has them. || `ce3de58` (review F06): see MSC-09; status unchanged.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): read-side window_slots (policy slots-1) counts distinct zero-overlap slots (6dbdb9b); not yet wired into the event API."
   },
   {
    "id": "ACC-20",
@@ -870,8 +870,8 @@
    "work_package": "WP-10",
    "phase": 2,
    "source": "03-precision-accuracy.md:310",
-   "status": "open",
-   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for ACC-03's ground-truth study, which the finding itself folds it into."
+   "status": "in_progress",
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for ACC-03's ground-truth study, which the finding itself folds it into.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): instruments and protocol only (d51e165, guides/evaluation.md)."
   },
   {
    "id": "OOB-01",
@@ -906,8 +906,8 @@
    "work_package": "WP-15",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:169",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the installer refuses a BirdNET-Pi host (link or enabled services) before writing anything; installer/test/birdnet-pi-host.sh (4da5ede). Only a real host can prove the fixture matches BirdNET-Pi."
   },
   {
    "id": "OOB-04",
@@ -955,7 +955,7 @@
    "phase": 3,
    "source": "04-zero-setup-defaults.md:271",
    "status": "in_progress",
-   "evidence": "Not started. Needs the maintainer: the proposal moves the first password from the installer to the browser behind a setup code, which changes the security model. Question: should a fresh install set no password and let the first browser with a printed setup code claim the station? The --reset-admin-password command could be done alone. Decided 2026-11-25: see decisions-2026-11-25.md section 6."
+   "evidence": "Not started. Needs the maintainer: the proposal moves the first password from the installer to the browser behind a setup code, which changes the security model. Question: should a fresh install set no password and let the first browser with a printed setup code claim the station? The --reset-admin-password command could be done alone. Decided 2026-11-25: see decisions-2026-11-25.md section 6.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): install.sh reset-password (4da5ede); the setup token (decision 6) is not built."
   },
   {
    "id": "OOB-08",
@@ -990,8 +990,8 @@
    "work_package": "WP-15",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:326",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): quickstart.sh carries the installer's card-id detector, held equal by alsa-device-detect.sh (74c867d)."
   },
   {
    "id": "OOB-11",
@@ -1026,8 +1026,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:381",
-   "status": "in_progress",
-   "evidence": "Not started. The audit marks it a maintainer decision. Question: require sign-in for /stream and the spectrogram socket by default, changing what existing stations' listeners can hear? Decided 2026-11-25: see decisions-2026-11-25.md section 5. || `ce3de58` (review F03): the stop queue keeps only the audio a clip is cut from, so no unfiltered neighbour or segment audio reaches the data disk on a stop. The live feed itself is unchanged."
+   "status": "done",
+   "evidence": "Not started. The audit marks it a maintainer decision. Question: require sign-in for /stream and the spectrogram socket by default, changing what existing stations' listeners can hear? Decided 2026-11-25: see decisions-2026-11-25.md section 5. || `ce3de58` (review F03): the stop queue keeps only the audio a clip is cut from, so no unfiltered neighbour or segment audio reaches the data disk on a stop. The live feed itself is unchanged.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): live audio needs a sign-in on a new station; a station that already holds detections keeps anyone, and the control is on the audio page (fdaf180). HLS status still returns playlist URLs with tokens to anyone on an anyone station."
   },
   {
    "id": "OOB-14",
@@ -1074,8 +1074,8 @@
    "work_package": "WP-14",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:453",
-   "status": "in_progress",
-   "evidence": "Today banner done in 5a26271 (gate an_unsynchronised_clock_is_said_on_today). Left: marking detections recorded under an unsynchronised clock (a column or an analysis_runs flag), and the RTC advice in the hardware guide."
+   "status": "done",
+   "evidence": "Today banner done in 5a26271 (gate an_unsynchronised_clock_is_said_on_today). Left: marking detections recorded under an unsynchronised clock (a column or an analysis_runs flag), and the RTC advice in the hardware guide.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as RES-12: an unsynchronised clock is recorded and warned about while recording (fb48963); RTC guidance in the hardware guide."
   },
   {
    "id": "OOB-18",
@@ -1087,7 +1087,7 @@
    "phase": 3,
    "source": "04-zero-setup-defaults.md:474",
    "status": "in_progress",
-   "evidence": "e5d3b76: docs/book/admin/card-failure.md, and three untrue sentences in backups.md corrected (the full backup 'includes your config'; the passphrase 'is not stored anywhere'; --decrypt-backup 'will ask'). Found while reading: the configuration file is in no backup on a standard install (N26-01). Remains: that gap; restoring an offsite copy from the browser; a 'no offsite backup' health condition. The page's commands were not run end to end."
+   "evidence": "e5d3b76: docs/book/admin/card-failure.md, and three untrue sentences in backups.md corrected (the full backup 'includes your config'; the passphrase 'is not stored anywhere'; --decrypt-backup 'will ask'). Found while reading: the configuration file is in no backup on a standard install (N26-01). Remains: that gap; restoring an offsite copy from the browser; a 'no offsite backup' health condition. The page's commands were not run end to end.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): card-failure and remote-access pages describe recovery with reset-password; configuration in backups (0d11af4); no first-boot recovery path."
   },
   {
    "id": "OOB-19",
@@ -1134,8 +1134,8 @@
    "work_package": "WP-15",
    "phase": 3,
    "source": "04-zero-setup-defaults.md:522",
-   "status": "open",
-   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): publish quickstart.sh and the compose files as release assets and pin them. Will not be done: changing docker group membership for the user, which is root-equivalent."
+   "status": "in_progress",
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): publish quickstart.sh and the compose files as release assets and pin them. Will not be done: changing docker group membership for the user, which is root-equivalent.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): quickstart takes compose files and image from one release, falling back with a warning (355b703); quickstart.sh itself is still fetched from main."
   },
   {
    "id": "UIR-01",
@@ -1194,8 +1194,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:197",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the invented waveform glyph is removed; a real envelope would need stored RMS values (6863e83)."
   },
   {
    "id": "UIR-06",
@@ -1242,8 +1242,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:249",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the history calendar marks off days and no longer draws a day to come like one (a515ba6)."
   },
   {
    "id": "UIR-10",
@@ -1327,7 +1327,7 @@
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:333",
    "status": "in_progress",
-   "evidence": "Not started: the same question as UIC-06 (rename the sixth nav item back to 'Station', or a Health summary on Today's 'Your station' card)."
+   "evidence": "Not started: the same question as UIC-06 (rename the sixth nav item back to 'Station', or a Health summary on Today's 'Your station' card).\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as UIC-06 (83d2005)."
   },
   {
    "id": "UIR-17",
@@ -1350,8 +1350,8 @@
    "work_package": "WP-13",
    "phase": 2,
    "source": "05-ui-rendered-walkthrough.md:360",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as RES-17 (14d8853)."
   },
   {
    "id": "UIR-19",
@@ -1363,7 +1363,7 @@
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:374",
    "status": "in_progress",
-   "evidence": "aa3b9f3, 4b50293: the ticks of the dawn rings, day strips, bursts and running order use the kit clock and are re-printed in the reader's 12/24-hour choice. display-format.mjs check 6 red on the old build (5 FAILED). Remains: terrain.js still prints '12a'; Today's hour axis and the sun-rail captions are not marked times; display-format.mjs is not a step in a11y.yml; 12-hour layout at 360 and 320 px not looked at."
+   "evidence": "aa3b9f3, 4b50293: the ticks of the dawn rings, day strips, bursts and running order use the kit clock and are re-printed in the reader's 12/24-hour choice. display-format.mjs check 6 red on the old build (5 FAILED). Remains: terrain.js still prints '12a'; Today's hour axis and the sun-rail captions are not marked times; display-format.mjs is not a step in a11y.yml; 12-hour layout at 360 and 320 px not looked at.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): terrain's hour axis follows the 12/24-hour choice (9862315); Today's axis not changed."
   },
   {
    "id": "UIR-20",
@@ -1374,8 +1374,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:383",
-   "status": "open",
-   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): one display::date for prose; ISO stays in export tables. Not a defect: the browser's own format in date inputs."
+   "status": "in_progress",
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): one display::date for prose; ISO stays in export tables. Not a defect: the browser's own format in date inputs.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): one date format on History (251e437); feeds, species pages and the life list not converted."
   },
   {
    "id": "UIR-21",
@@ -1398,8 +1398,8 @@
    "work_package": "WP-13",
    "phase": 2,
    "source": "05-ui-rendered-walkthrough.md:404",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): data for chance-aware co-occurrence (e388b82); the figure is not redrawn here."
   },
   {
    "id": "UIR-23",
@@ -1494,8 +1494,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:486",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a \"Score from\" row, a counted-rows note on lists, and the terrain card's range line fixed (251e437, 6107bb9); n and listened hours on each figure remain."
   },
   {
    "id": "UIR-31",
@@ -1542,8 +1542,8 @@
    "work_package": "WP-13",
    "phase": 2,
    "source": "05-ui-rendered-walkthrough.md:528",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): /api/v2/analytics/rates/compare gives a direction only when the interval excludes 1 (14d8853); no red test, page not changed."
   },
   {
    "id": "UIR-35",
@@ -1555,7 +1555,7 @@
    "phase": 3,
    "source": "05-ui-rendered-walkthrough.md:538",
    "status": "in_progress",
-   "evidence": "972c6da: the quarantine introduction says what Reject and Delete do (neither deletes a recording, so the proposed 'Delete recording' label would be untrue). Question for the maintainer: an inbox badge in the header and one review page with two tabs (with UIC-07 and UIC-30)? Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): the maintainer's: where the review queues live in the navigation."
+   "evidence": "972c6da: the quarantine introduction says what Reject and Delete do (neither deletes a recording, so the proposed 'Delete recording' label would be untrue). Question for the maintainer: an inbox badge in the header and one review page with two tabs (with UIC-07 and UIC-30)? Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): the maintainer's: where the review queues live in the navigation.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as UIC-07 (83d2005)."
   },
   {
    "id": "UIR-36",
@@ -1567,7 +1567,7 @@
    "phase": 4,
    "source": "05-ui-rendered-walkthrough.md:547",
    "status": "in_progress",
-   "evidence": "b59908b: Migration's three pills are a caption sentence and the lede names no season by colour. Remains: Dawn chorus's pills (dawn_chorus.rs:69, and docs/book/guide/dawn-chorus.md); 'spring'/'fall' on each peak marker needs the kit."
+   "evidence": "b59908b: Migration's three pills are a caption sentence and the lede names no season by colour. Remains: Dawn chorus's pills (dawn_chorus.rs:69, and docs/book/guide/dawn-chorus.md); 'spring'/'fall' on each peak marker needs the kit.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Dawn's scope is a sentence, not pills (83d2005); season colours not changed."
   },
   {
    "id": "UIR-37",
@@ -1602,8 +1602,8 @@
    "work_package": "WP-05",
    "phase": 1,
    "source": "06-ui-code-charts-ia.md:189",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the effort-corrected rates API exists with intervals (14d8853); no chart draws it yet."
   },
   {
    "id": "UIC-03",
@@ -1639,7 +1639,7 @@
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:242",
    "status": "in_progress",
-   "evidence": "972c6da: TD-6 lists the six orphans (today-relabel, confidence-chart, activity-heatmap, life-accumulation, ts-heatmap, /player/{filename}). Deleting or linking them is the decision TD-6 records as the maintainer's ('what the interface promises'); the orphan-scan test was not written."
+   "evidence": "972c6da: TD-6 lists the six orphans (today-relabel, confidence-chart, activity-heatmap, life-accumulation, ts-heatmap, /player/{filename}). Deleting or linking them is the decision TD-6 records as the maintainer's ('what the interface promises'); the orphan-scan test was not written.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): an orphan-route gate naming the 16 routes in TD-6 (83d2005)."
   },
   {
    "id": "UIC-06",
@@ -1651,7 +1651,7 @@
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:259",
    "status": "in_progress",
-   "evidence": "Not started: needs the maintainer. nav.rs records renaming 'Station' to 'Settings' as deliberate ('people looking to configure it went hunting for Settings'); the finding asks to reverse it or to move a Health summary to Today. Which?"
+   "evidence": "Not started: needs the maintainer. nav.rs records renaming 'Station' to 'Settings' as deliberate ('people looking to configure it went hunting for Settings'); the finding asks to reverse it or to move a Health summary to Today. Which?\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Settings keeps its label (the maintainer's) and its accessible name says station health (83d2005)."
   },
   {
    "id": "UIC-07",
@@ -1663,7 +1663,7 @@
    "phase": 3,
    "source": "06-ui-code-charts-ia.md:271",
    "status": "in_progress",
-   "evidence": "8ea9f8a: Trends' duplicate 'Activity sessions' card and /pages/ts-sessions removed; gate only_visits_has_an_activity_sessions_card red before. Remaining, an IA decision for the maintainer with UIC-30 and UIR-35: one Review page for quarantine and detection reviews, and the header search's label."
+   "evidence": "8ea9f8a: Trends' duplicate 'Activity sessions' card and /pages/ts-sessions removed; gate only_visits_has_an_activity_sessions_card red before. Remaining, an IA decision for the maintainer with UIC-30 and UIR-35: one Review page for quarantine and detection reviews, and the header search's label.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): one Review strip shared by /quarantine and /detection-reviews (83d2005)."
   },
   {
    "id": "UIC-08",
@@ -1674,8 +1674,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:288",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): /patterns?days= sets the range in the address and the control is a GET form (8044794); source/model/confidence are not in the address yet."
   },
   {
    "id": "UIC-09",
@@ -1698,8 +1698,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "06-ui-code-charts-ia.md:313",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): GET /api/v2/detections/export/search exports what the log found, with the same columns as the detections export (36b599b, 105c8ae)."
   },
   {
    "id": "UIC-11",
@@ -1711,7 +1711,7 @@
    "phase": 1,
    "source": "06-ui-code-charts-ia.md:328",
    "status": "in_progress",
-   "evidence": "Not started: a filter bar (range, source, model, confidence) honoured by every Patterns partial is large (audit: L). The analytics side of a source filter now exists (MSC-06)."
+   "evidence": "Not started: a filter bar (range, source, model, confidence) honoured by every Patterns partial is large (audit: L). The analytics side of a source filter now exists (MSC-06).\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): source, confidence and species filters on the analytic API (14d8853); not on the pages."
   },
   {
    "id": "UIC-12",
@@ -1830,8 +1830,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:439",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): History reads only the month it draws and a day page lists one page; 1287 ms to 24 ms per month click on a 3.3M-row table in this container, not a Pi (251e437)."
   },
   {
    "id": "UIC-22",
@@ -1854,8 +1854,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "06-ui-code-charts-ia.md:458",
-   "status": "in_progress",
-   "evidence": "7694b5a: a fragment carrying AS_OF_LINE is stamped 'As of HH:MM' when the cache stores it. Stamped: Patterns' streamgraph, grid and hours, and the four correlation figures. Red: 'no stamp in /pages/hourly-totals?days=7'. Remains: timeseries_dash, migration (stats, ridgeline, cards) and the terrain table."
+   "status": "done",
+   "evidence": "7694b5a: a fragment carrying AS_OF_LINE is stamped 'As of HH:MM' when the cache stores it. Stamped: Patterns' streamgraph, grid and hours, and the four correlation figures. Red: 'no stamp in /pages/hourly-totals?days=7'. Remains: timeseries_dash, migration (stats, ridgeline, cards) and the terrain table.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the remaining cached figures say how old they are (52f2a99)."
   },
   {
    "id": "UIC-24",
@@ -2034,8 +2034,8 @@
    "work_package": "WP-10",
    "phase": 2,
    "source": "07-research-grade.md:217",
-   "status": "open",
-   "evidence": "Decided 2026-11-25: see decisions-2026-11-25.md section 4."
+   "status": "in_progress",
+   "evidence": "Decided 2026-11-25: see decisions-2026-11-25.md section 4.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): an opt-in per-window score store with a floor and retention, measured at about 134 MB for 30 days of one source (ba19f84); not wired into inference."
   },
   {
    "id": "RES-05",
@@ -2046,8 +2046,8 @@
    "work_package": "WP-12",
    "phase": 2,
    "source": "07-research-grade.md:236",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): bounded streaming ingestion: --ingest-recordings, the admission check, segments staged a few at a time, imported history not announced, refused recordings set aside (dfd2c76, 2f0731a, a7a46d9, ba1e1e6, 90aec89, 1f4a5d5). Re-analysis of stored audio is not built."
   },
   {
    "id": "RES-06",
@@ -2070,8 +2070,8 @@
    "work_package": "WP-09",
    "phase": 2,
    "source": "07-research-grade.md:274",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): seeded stratified validation samples, blind review, verdict export under /admin/validation (5509f5b); JSON only, detections only (no recall)."
   },
   {
    "id": "RES-08",
@@ -2083,7 +2083,7 @@
    "phase": 2,
    "source": "07-research-grade.md:295",
    "status": "in_progress",
-   "evidence": "435137c: the CSV appends Source, Review_Verdict, Chunk_Offset_Secs, Clip_Pruned_At, Import_Batch_Id and BirdWeather_Soundscape_Id after the existing 19 columns, and the JSON carries the same. Coverage gate every_detection_column_reaches_an_export (a sentinel in every detections column, searched for in the CSV, JSON, BirdDB and Raven exports; is_locked exempt by name) red before (\"these detections columns reach no export: [chunk_offset_secs, Clip_Pruned_At, import_batch_id, birdweather_soundscape_id]\"). Remaining: dataset.zip and datapackage.json, a schema version, a licence, and exports of reviews, comments, effort, levels and weather."
+   "evidence": "435137c: the CSV appends Source, Review_Verdict, Chunk_Offset_Secs, Clip_Pruned_At, Import_Batch_Id and BirdWeather_Soundscape_Id after the existing 19 columns, and the JSON carries the same. Coverage gate every_detection_column_reaches_an_export (a sentinel in every detections column, searched for in the CSV, JSON, BirdDB and Raven exports; is_locked exempt by name) red before (\"these detections columns reach no export: [chunk_offset_secs, Clip_Pruned_At, import_batch_id, birdweather_soundscape_id]\"). Remaining: dataset.zip and datapackage.json, a schema version, a licence, and exports of reviews, comments, effort, levels and weather.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): GET /api/v2/detections/export/study: a deterministic ZIP with every provenance table and a manifest of schema, generator, parameters and member hashes (1a10850)."
   },
   {
    "id": "RES-09",
@@ -2118,8 +2118,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:339",
-   "status": "open",
-   "evidence": " || `ce3de58` (F01) a replayed detection keeps the run that analysed it; `ebf6743` (F19) each classifier of a run is recorded with its file. Status unchanged: the run still records less than the full configuration."
+   "status": "in_progress",
+   "evidence": " || `ce3de58` (F01) a replayed detection keeps the run that analysed it; `ebf6743` (F19) each classifier of a run is recorded with its file. Status unchanged: the run still records less than the full configuration.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a run records its deciding configuration canonically with its SHA-256 (5c387c7), and the daemon records the resolved settings (aede030); capture conditioning and the profile name are not in it."
   },
   {
    "id": "RES-12",
@@ -2130,8 +2130,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:363",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): clock_observations records the clock's state at capture (synced, unsynced, unknown, unset; a step of 2 s or more); on /api/v2/health and a Clock_State export column (1309946, fb48963, b829f62)."
   },
   {
    "id": "RES-13",
@@ -2142,8 +2142,8 @@
    "work_package": "WP-07",
    "phase": 1,
    "source": "07-research-grade.md:379",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): effort keyed on UTC hours with uptime split by clock state, exported at /api/v2/effort/export/utc (1309946, fb48963); the levels tables are not done."
   },
   {
    "id": "RES-14",
@@ -2178,8 +2178,8 @@
    "work_package": "WP-13",
    "phase": 2,
    "source": "07-research-grade.md:425",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): co-occurrence has a seeded permutation null with Benjamini-Hochberg and verdicts stands_out / within_chance / too_little_data (e388b82); answers, next-species and retention have none."
   },
   {
    "id": "RES-17",
@@ -2190,8 +2190,8 @@
    "work_package": "WP-13",
    "phase": 2,
    "source": "07-research-grade.md:446",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): /api/v2/analytics/sunrise-relative uses each day's own sunrise (14d8853); charts not moved."
   },
   {
    "id": "RES-18",
@@ -2202,8 +2202,8 @@
    "work_package": "WP-06",
    "phase": 1,
    "source": "07-research-grade.md:463",
-   "status": "open",
-   "evidence": "Decided 2026-11-25 (decisions-2026-11-25.md sections 1 and 2): events are computed at read time, never stored on the row; tolerance a setting defaulting to the model's window plus one second; each source its own site until told otherwise. Not started. Was marked in_progress with nothing built. || `85191b0` (review F14): the detection history no longer makes a surveyed positive of one source's detection and another's effort. Status unchanged."
+   "status": "in_progress",
+   "evidence": "Decided 2026-11-25 (decisions-2026-11-25.md sections 1 and 2): events are computed at read time, never stored on the row; tolerance a setting defaulting to the model's window plus one second; each source its own site until told otherwise. Not started. Was marked in_progress with nothing built. || `85191b0` (review F14): the detection history no longer makes a surveyed positive of one source's detection and another's effort. Status unchanged.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as MSC-02 (14d8853)."
   },
   {
    "id": "RES-19",
@@ -2238,8 +2238,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:507",
-   "status": "open",
-   "evidence": ""
+   "status": "in_progress",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): each weather hour records its provider and product (f8f5391); no archive endpoint, no licence."
   },
   {
    "id": "RES-22",
@@ -2250,8 +2250,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:522",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): station_identity (one UUID), operator-stated deployments (append-only by trigger), GET /api/v2/station/record and POST /api/v2/deployments; exports name station and deployment (1309946, b829f62)."
   },
   {
    "id": "RES-23",
@@ -2262,8 +2262,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:534",
-   "status": "open",
-   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): a SHA-256 per clip, verified on export. Will not be done: coordinates embedded in clips by default, which leaks the home location through a shared clip."
+   "status": "done",
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): a SHA-256 per clip, verified on export. Will not be done: coordinates embedded in clips by default, which leaks the home location through a shared clip.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): each clip's SHA-256 and length recorded at write time, permanent, NULL meaning unknown; GET /api/v2/recordings/verify/{detection_uuid} checks on demand (17e2218, 105c8ae)."
   },
   {
    "id": "RES-24",
@@ -2274,8 +2274,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:544",
-   "status": "open",
-   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): the researcher chapter and a methods endpoint, saying what is not validated. The maintainer's: the licence of exported data."
+   "status": "done",
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): the researcher chapter and a methods endpoint, saying what is not validated. The maintainer's: the licence of exported data.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Research Use chapter with a fill-in methods paragraph (dcaa06b)."
   },
   {
    "id": "RES-25",
@@ -2286,8 +2286,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:556",
-   "status": "open",
-   "evidence": " || `ce3de58` (review F02): a replayed detection is matched to an existing row by date, time, species, source, window offset and correlation id before writing. Not a stable detection identifier; status unchanged."
+   "status": "done",
+   "evidence": " || `ce3de58` (review F02): a replayed detection is matched to an existing row by date, time, species, source, window offset and correlation id before writing. Not a stable detection identifier; status unchanged.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): every detection has a permanent detection_uuid (migration 69: trigger-stamped, backfilled, unique, unchangeable), carried by the exports and kept by the CSV import (17e2218); the read-time event layer names members by it, policy events-2 (98d316b)."
   },
   {
    "id": "RES-26",
@@ -2334,8 +2334,8 @@
    "work_package": "WP-11",
    "phase": 2,
    "source": "07-research-grade.md:593",
-   "status": "open",
-   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): reviewed and locked clips offsite with a SHA-256 manifest. Will not be done: raw audio offsite."
+   "status": "in_progress",
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (M): reviewed and locked clips offsite with a SHA-256 manifest. Will not be done: raw audio offsite.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): full backups carry a clip manifest, sha256sum-checkable checksums and a backup manifest, and a restore verifies them; ?audio=kept|none (0d11af4). Offsite copies are still the database only."
   },
   {
    "id": "RES-30",
@@ -2347,7 +2347,7 @@
    "phase": 2,
    "source": "07-research-grade.md:603",
    "status": "in_progress",
-   "evidence": "019bee7: interim. The settings hint and tuning.md say the score is the model's, not a validated probability, and no longer call V3.0 'calibrated'. Remains: the word in parity.md:27, faq.md:5 and six code comments (model.rs:974, 1014, 1460, 2452, classifier.rs:55, config.rs:83); no calibration figure."
+   "evidence": "019bee7: interim. The settings hint and tuning.md say the score is the model's, not a validated probability, and no longer call V3.0 'calibrated'. Remains: the word in parity.md:27, faq.md:5 and six code comments (model.rs:974, 1014, 1460, 2452, classifier.rs:55, config.rs:83); no calibration figure.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as ACC-09 (5478669); \"87 % sure\" in sky-song JS, the email hint and six core comments remain."
   },
   {
    "id": "RES-31",
@@ -2358,8 +2358,8 @@
    "work_package": "WP-10",
    "phase": 2,
    "source": "07-research-grade.md:607",
-   "status": "open",
-   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): same file twice gives the same rows, as a gate; versions in analytics JSON. Needs hardware: aarch64 against x86."
+   "status": "in_progress",
+   "evidence": "Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): to do (S): same file twice gives the same rows, as a gate; versions in analytics JSON. Needs hardware: aarch64 against x86.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): tests/model_output_is_reproducible.rs checks two runs bit for bit and against a golden record (d51e165)."
   },
   {
    "id": "RES-32",
@@ -2371,7 +2371,7 @@
    "phase": 2,
    "source": "07-research-grade.md:620",
    "status": "in_progress",
-   "evidence": "0706eec: a table from label-file sha256 to taxonomy edition, printed by --install-model list. One row is recorded (Perch: iNaturalist 2024, from crates/birdnet-core/data/labels/README.md); the V2.4 model card and the BirdNET-Analyzer README name no edition, so V2.4 and V3.0 print 'not recorded'. Remains: the edition is not stamped on each run or export."
+   "evidence": "0706eec: a table from label-file sha256 to taxonomy edition, printed by --install-model list. One row is recorded (Perch: iNaturalist 2024, from crates/birdnet-core/data/labels/README.md); the V2.4 model card and the BirdNET-Analyzer README name no edition, so V2.4 and V3.0 print 'not recorded'. Remains: the edition is not stamped on each run or export.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the taxonomy edition is stamped per run in the study bundle (1a10850); not stored in the database."
   },
   {
    "id": "MMP-23",
@@ -2502,8 +2502,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/WP-06.md",
-   "status": "open",
-   "evidence": "Found while implementing WP-06; not re-checked beyond the finder's reading. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 2: pooling is right for one site and wrong across sites. || `85191b0` (review F14): the occupancy-style history now treats each source as its own site; co-occurrence, phenology and retention still pool. Status unchanged."
+   "status": "in_progress",
+   "evidence": "Found while implementing WP-06; not re-checked beyond the finder's reading. Triage 2026-11-25 (read against main at 89a64fb, see decisions-2026-11-25.md section 9): waits for decision 2: pooling is right for one site and wrong across sites. || `85191b0` (review F14): the occupancy-style history now treats each source as its own site; co-occurrence, phenology and retention still pool. Status unchanged.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): co-occurrence and companions are per site (e388b82); retention, phenology and abundance take ?source= and say they pool by default (14d8853)."
   },
   {
    "id": "N05-01",
@@ -2730,8 +2730,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "09-chart-review.md:175",
-   "status": "open",
-   "evidence": ""
+   "status": "done",
+   "evidence": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Trends draws each day's usual range (10th-90th percentile of the 30 listened days before; too few days said, not drawn) (713d7c4)."
   },
   {
    "id": "CHT-07",
@@ -2850,8 +2850,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "09-chart-review.md:434",
-   "status": "in_progress",
-   "evidence": "d337d76: birdnet_behavioral::interval::wilson, viz::uncertainty (whisker, dot, 'too few' ring below 3 trials), honesty rule 10. Tests red with Z95 at 1.96 and with the floor at 2. Used by retention, the reporting-frequency figure and the reviewer-verdict panel only. Remains: the other figures that print a share; a source scan for 'every % has an n'; a band mark."
+   "status": "done",
+   "evidence": "d337d76: birdnet_behavioral::interval::wilson, viz::uncertainty (whisker, dot, 'too few' ring below 3 trials), honesty rule 10. Tests red with Z95 at 1.96 and with the floor at 2. Used by retention, the reporting-frequency figure and the reviewer-verdict panel only. Remains: the other figures that print a share; a source scan for 'every % has an n'; a band mark.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the kit has a band mark (viz::uncertainty::band) and a \"too few to say\" rule (713d7c4)."
   },
   {
    "id": "CHT-24",
@@ -2862,8 +2862,8 @@
    "work_package": "WP-17",
    "phase": 4,
    "source": "09-chart-review.md:448",
-   "status": "open",
-   "evidence": "Probe, not committed (2026-11-25): six independent species on /pages/correlation-pairs and /pages/acoustic-network. All 15 pairs are drawn; the strongest reads '37% of their time' on the darkest step, which is exactly chance (0.30 / 0.80). With a planted identical pair the chance pairs drop to steps 2 and 3, so how dark a chance pair looks depends on whether a real pair exists. Remains: an independence fixture as a gate, and a chance level in the figure."
+   "status": "in_progress",
+   "evidence": "Probe, not committed (2026-11-25): six independent species on /pages/correlation-pairs and /pages/acoustic-network. All 15 pairs are drawn; the strongest reads '37% of their time' on the darkest step, which is exactly chance (0.30 / 0.80). With a planted identical pair the chance pairs drop to steps 2 and 3, so how dark a chance pair looks depends on whether a real pair exists. Remains: an independence fixture as a gate, and a chance level in the figure.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a data-level gate: a pair at chance is drawn as chance (e388b82)."
   },
   {
    "id": "CHT-16",
@@ -2958,8 +2958,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
-   "status": "open",
-   "evidence": "Read, 2026-11-25. The Wilson interval over the listened days of a quarter-month assumes separate trials; a bird here today is likely here tomorrow, so the bar is narrower than the truth. The Method panel, reporting.rs and charts.md rule 10 now say so. Not written: an interval that allows for it (clustered by year, or an effective n)."
+   "status": "done",
+   "evidence": "Read, 2026-11-25. The Wilson interval over the listened days of a quarter-month assumes separate trials; a bird here today is likely here tomorrow, so the bar is narrower than the truth. The Method panel, reporting.rs and charts.md rule 10 now say so. Not written: an interval that allows for it (clustered by year, or an effective n).\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the reporting-frequency interval is a Wilson interval at the effective number of days a design effect leaves (two-state Markov chain); coverage 0.687 plain vs 0.961 on a simulated autocorrelated series, seeded (e388b82). Not checked on station data."
   },
   {
    "id": "N25-03",
@@ -3018,8 +3018,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
-   "status": "open",
-   "evidence": "Reported by the evidence lane from reading src/maintenance.rs, 2026-11-25; predates this batch. A row that fails to read is a clip neither kept nor deleted on purpose."
+   "status": "done",
+   "evidence": "Reported by the evidence lane from reading src/maintenance.rs, 2026-11-25; predates this batch. A row that fails to read is a clip neither kept nor deleted on purpose.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): swept every .filter_map(Result::ok) / .flatten() over a query or directory outside tests; the clip reconciliation, retention and species-cap passes fail on a read error and a failed reconciliation no longer publishes orphaned_clips = 0 (5323ab0)."
   },
   {
    "id": "N25-08",
@@ -3066,8 +3066,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-25.md",
-   "status": "open",
-   "evidence": "Read, 2026-11-25 (src/helpers/system.rs, both DiskManager configs take purge_ineffective_flag()): with the stream directory on another filesystem below the threshold, the stream manager writes false every cycle while a latched recordings manager writes true, so the purge condition and gauge depend on which thread wrote last. Not probed."
+   "status": "done",
+   "evidence": "Read, 2026-11-25 (src/helpers/system.rs, both DiskManager configs take purge_ineffective_flag()): with the stream directory on another filesystem below the threshold, the stream manager writes false every cycle while a latched recordings manager writes true, so the purge condition and gauge depend on which thread wrote last. Not probed.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the stream manager has its own purge-ineffective flag; purge_ineffective() is the OR of the two (79e52cc)."
   },
   {
    "id": "N25-11",
@@ -3114,8 +3114,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/decisions-2026-11-25.md",
-   "status": "open",
-   "evidence": "Read by the access analysis, 2026-11-25: templates/login.html:134-141 tells the reader to grep CADDY_PWD; once the password is changed on the Accounts page the station ignores that value (src/helpers/auth.rs:122-135, 236-245). Fixed with decision 6."
+   "status": "done",
+   "evidence": "Read by the access analysis, 2026-11-25: templates/login.html:134-141 tells the reader to grep CADDY_PWD; once the password is changed on the Accounts page the station ignores that value (src/helpers/auth.rs:122-135, 236-245). Fixed with decision 6.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the sign-in hint says a refusal means the password was changed in the browser and gives install.sh reset-password and the Docker way (34136c4)."
   },
   {
    "id": "N25-15",
@@ -3138,8 +3138,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-26.md",
-   "status": "open",
-   "evidence": "Read by the documentation lane, 2026-11-25: the full backup takes a birdnet.conf only when it sits beside the database, and both installs keep it elsewhere. The manual now says so (backups.md, card-failure.md); backup_recovery.rs:425 on the Data page still says the full backup bundles 'config'. Not probed end to end."
+   "status": "done",
+   "evidence": "Read by the documentation lane, 2026-11-25: the full backup takes a birdnet.conf only when it sits beside the database, and both installs keep it elsewhere. The manual now says so (backups.md, card-failure.md); backup_recovery.rs:425 on the Data page still says the full backup bundles 'config'. Not probed end to end.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a full backup carries the configuration file the station was started with, and a restore puts it back, keeping the replaced file as .before-restore (0d11af4)."
   },
   {
    "id": "N26-02",
@@ -3150,8 +3150,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-26.md",
-   "status": "open",
-   "evidence": "Read, 2026-11-25: process.rs:90-98 recognises only wav, flac and mp3, so neither the purge nor the per-species cap removes an .ogg clip. Not probed."
+   "status": "done",
+   "evidence": "Read, 2026-11-25: process.rs:90-98 recognises only wav, flac and mp3, so neither the purge nor the per-species cap removes an .ogg clip. Not probed.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the disk modules count OGG clips through is_kept_audio_file (b6a77f3)."
   },
   {
    "id": "N26-03",
@@ -3162,8 +3162,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-26.md",
-   "status": "open",
-   "evidence": "Reported by the doctor lane, 2026-11-25: --doctor reads the config file and flags, so OVERLAP, SEGMENT_DURATION or CONFIRMATION_LEVEL saved on /admin/settings are not checked. Whether /admin/doctor gets the merged configuration was not checked. The settings page's own minimum-overlap hint (render/detection.rs) probably still assumes a 3 s window; not read."
+   "status": "done",
+   "evidence": "Reported by the doctor lane, 2026-11-25: --doctor reads the config file and flags, so OVERLAP, SEGMENT_DURATION or CONFIRMATION_LEVEL saved on /admin/settings are not checked. Whether /admin/doctor gets the merged configuration was not checked. The settings page's own minimum-overlap hint (render/detection.rs) probably still assumes a 3 s window; not read.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the doctor lays the settings table over the configuration file before checking (cd241dc)."
   },
   {
    "id": "N26-04",
@@ -3186,8 +3186,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-26.md",
-   "status": "open",
-   "evidence": "phenology/timing.rs:180-185, read 2026-11-25. Its doc says it is meant to see an outage, not a short day; bringing it under the shared rule needs a floor on the public PhenologyParams."
+   "status": "done",
+   "evidence": "phenology/timing.rs:180-185, read 2026-11-25. Its doc says it is meant to see an outage, not a short day; bringing it under the shared rule needs a floor on the public PhenologyParams.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): phenology's effort gap and the heat calendar use the one listened-day rule (2dd1a5e)."
   },
   {
    "id": "N26-06",
@@ -3198,8 +3198,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-26.md",
-   "status": "open",
-   "evidence": "Seen on the fixture, 2026-11-25: with one source credited no listening and another only its last 120 days, Migration drew three residents as passage birds. The fixture is fixed; on a real station adding a quieter source has the same shape. It is the pooled-effort question of decision 2."
+   "status": "in_progress",
+   "evidence": "Seen on the fixture, 2026-11-25: with one source credited no listening and another only its last 120 days, Migration drew three residents as passage birds. The fixture is fixed; on a real station adding a quieter source has the same shape. It is the pooled-effort question of decision 2.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): rates divide by site listening bounds, never summed sensor time (14d8853); pages not yet on it."
   },
   {
    "id": "N26-07",
@@ -3210,8 +3210,8 @@
    "work_package": "unassigned",
    "phase": null,
    "source": "docs/audit-2026-11/status/BATCH-2026-11-26.md",
-   "status": "open",
-   "evidence": "viz/ridge.rs, reported by the denominators lane 2026-11-25: a per-week unknown mask, 'spring'/'fall' in the peak label, and the week label in the table are kit changes."
+   "status": "done",
+   "evidence": "viz/ridge.rs, reported by the denominators lane 2026-11-25: a per-week unknown mask, 'spring'/'fall' in the peak label, and the week label in the table are kit changes.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Migration's ridges are drawn per listened time and weeks with too little listening hatched as unknown (20cf387)."
   },
   {
    "id": "N26-08",
@@ -3534,8 +3534,8 @@
    "work_package": "models",
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
-   "status": "open",
-   "evidence": "Lane R report, 2026-11-26: the repair thread matches the name --install-model gives; an install adopts legacy names, a running station does not fetch under them. Not reproduced by the session."
+   "status": "done",
+   "evidence": "Lane R report, 2026-11-26: the repair thread matches the name --install-model gives; an install adopts legacy names, a running station does not fetch under them. Not reproduced by the session.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): repair recognises the old V3.0 file names and links a fetched file back to the configured name (4da12e9). A real V3.0 fetch was not run."
   },
   {
    "id": "MDL-26",
@@ -3558,8 +3558,8 @@
    "work_package": "models",
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
-   "status": "open",
-   "evidence": "Decision for the maintainer. Since d53199b a configured catalogue file that is missing is fetched, one round an hour; --offline (mirror only) is the opt-out. The installer cannot opt a station out."
+   "status": "in_progress",
+   "evidence": "Decision for the maintainer. Since d53199b a configured catalogue file that is missing is fetched, one round an hour; --offline (mirror only) is the opt-out. The installer cannot opt a station out.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the skip-model texts say the station fetches its models and BIRDNET_OFFLINE=1 stops it (4da5ede); whether to opt out is the maintainer's call."
   },
   {
    "id": "MDL-28",
@@ -3570,8 +3570,8 @@
    "work_package": "models",
    "phase": null,
    "source": "docs/audit-2026-11/10-model-delivery.md",
-   "status": "open",
-   "evidence": "Lane R report from the model-e2e run, 2026-11-26: the unit's preflight doctor logs the same start-up line as the service. Not reproduced by the session."
+   "status": "done",
+   "evidence": "Lane R report from the model-e2e run, 2026-11-26: the unit's preflight doctor logs the same start-up line as the service. Not reproduced by the session.\nReview batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): NO_COLOR=1 in the unit (d410b62); colour only on a terminal, and the start line only from the station, not its pre-start doctor (1b9d060)."
   },
   {
    "id": "REV-F01",
@@ -3583,7 +3583,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
    "status": "done",
-   "evidence": "`ce3de58`: Batch lines carry the run and the effective bars; v1 lines replay with run/settings NULL. Other gates (occurrence, clock, daylight, duplicate) apply under the settings in force at replay, as declared in the commit."
+   "evidence": "`ce3de58`: Batch lines carry the run and the effective bars; v1 lines replay with run/settings NULL. Other gates (occurrence, clock, daylight, duplicate) apply under the settings in force at replay, as declared in the commit.\nReview batch 2 (2026-11-27): Bars computed once per detection at processing time and recorded with it; deciding at inference time not done. Other gates apply under the settings in force at replay (declared). (ce3de58, 4f0a504)"
   },
   {
    "id": "REV-F02",
@@ -3594,8 +3594,8 @@
    "work_package": "review-2026-11-26",
    "phase": null,
    "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
-   "status": "in_progress",
-   "evidence": "`ce3de58`: Explicit settle journal, retry, hold after 3 failed starts, replay idempotency on (date, time, species, source, window, correlation id). Remains: held detections are reported in the journal only (no metric or page), no transactional outbox for external posts; a crash after commit and before notifications loses those notifications."
+   "status": "done",
+   "evidence": "`ce3de58`: Explicit settle journal, retry, hold after 3 failed starts, replay idempotency on (date, time, species, source, window, correlation id). Remains: held detections are reported in the journal only (no metric or page), no transactional outbox for external posts; a crash after commit and before notifications loses those notifications.\nReview batch 2 (2026-11-27): Live refusals kept through the same queue (after up to a second in memory); acknowledgement only once durable; BirdWeather parked before sending (at least once; duplicate window, no idempotency key). Other channels not outboxed; no page for held detections. (ce3de58, 4f0a504, 95d6d34)"
   },
   {
    "id": "REV-F03",
@@ -3607,7 +3607,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
    "status": "done",
-   "evidence": "`ce3de58`: Spool keeps only the clip's sample range per recording, zero elsewhere; no neighbours on a privacy-filtered station. Clip identity across replay proven sample for sample. Not covered: support bundle, backups, live audio (OOB-13)."
+   "evidence": "`ce3de58`: Spool keeps only the clip's sample range per recording, zero elsewhere; no neighbours on a privacy-filtered station. Clip identity across replay proven sample for sample. Not covered: support bundle, backups, live audio (OOB-13).\nReview batch 2 (2026-11-27): Quarantine rows have clips of their own in the recordings directory, removed with the row; neighbour samples kept only where a clip reaches (fc52a6e). (ce3de58, 4f0a504, 3439d6a)"
   },
   {
    "id": "REV-F04",
@@ -3619,7 +3619,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
    "status": "done",
-   "evidence": "`ce3de58`: atomic_file::commit for every batch file, queue dir synced, 0700. Not power-cut tested (V04 needs hardware)."
+   "evidence": "`ce3de58`: atomic_file::commit for every batch file, queue dir synced, 0700. Not power-cut tested (V04 needs hardware).\nReview batch 2 (2026-11-27): Acknowledged only once the commit is durable (checkpoint or synchronous=FULL). Not power-cut tested (V04). (ce3de58, 4f0a504)"
   },
   {
    "id": "REV-F05",
@@ -3678,8 +3678,8 @@
    "work_package": "review-2026-11-26",
    "phase": null,
    "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
-   "status": "open",
-   "evidence": "PARTIALLY CONFIRMED by reading: per-model answer windows are already stored (process.rs:387-388); missing are a padding mask (answer window_end can pass the file end) and per-scale human/noise scores. Not implemented."
+   "status": "done",
+   "evidence": "PARTIALLY CONFIRMED by reading: per-model answer windows are already stored (process.rs:387-388); missing are a padding mask (answer window_end can pass the file end) and per-scale human/noise scores. Not implemented.\nReview batch 2 (2026-11-27): Padding recorded (migration 68), per-classifier privacy and noise on each classifier's own scale. The merge still picks its winner by raw confidence across scales (named, left alone). (2003fdd, 8aa6040, f1d2533, ec1fecb)"
   },
   {
    "id": "REV-F10",
@@ -3702,8 +3702,8 @@
    "work_package": "review-2026-11-26",
    "phase": null,
    "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
-   "status": "open",
-   "evidence": "CONFIRMED by reading (pipeline.rs:373 uncapped; any parseable file in the watch dir). Not implemented: refusing long files changes what an operator dropping recordings gets today; needs the batch-ingest decision (RES-05)."
+   "status": "done",
+   "evidence": "CONFIRMED by reading (pipeline.rs:373 uncapped; any parseable file in the watch dir). Not implemented: refusing long files changes what an operator dropping recordings gets today; needs the batch-ingest decision (RES-05).\nReview batch 2 (2026-11-27): Bounded streaming ingestion (--ingest-recordings), admission before decode, refused recordings set aside, imported history not announced. (dfd2c76, 2f0731a, a7a46d9, ba1e1e6, 90aec89, 1f4a5d5)"
   },
   {
    "id": "REV-F12",
@@ -3714,8 +3714,8 @@
    "work_package": "review-2026-11-26",
    "phase": null,
    "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
-   "status": "open",
-   "evidence": "PARTIALLY CONFIRMED: a per-source Left/Right channel pick exists at capture (admin/audio.rs:1466, capture/process.rs:512); the averaging remains for 'both' and dropped files. Not implemented."
+   "status": "in_progress",
+   "evidence": "PARTIALLY CONFIRMED: a per-source Left/Right channel pick exists at capture (admin/audio.rs:1466, capture/process.rs:512); the averaging remains for 'both' and dropped files. Not implemented.\nReview batch 2 (2026-11-27): Cancellation warned, one channel selectable (ANALYSIS_CHANNELS); each-channel analysis built and refused in configuration (rows keyed by file, time and species); provenance logged, not stored. (e2ffccf, c5fe96b, ec1fecb)"
   },
   {
    "id": "REV-F13",
@@ -3726,8 +3726,8 @@
    "work_package": "review-2026-11-26",
    "phase": null,
    "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
-   "status": "open",
-   "evidence": "CONFIRMED by reading (one week per file, process.rs:433-438). BirdNET-Pi parity is also per file (inferred); changing it needs a setting or an accepted parity departure. Not implemented."
+   "status": "done",
+   "evidence": "CONFIRMED by reading (one week per file, process.rs:433-438). BirdNET-Pi parity is also per file (inferred); changing it needs a setting or an accepted parity departure. Not implemented.\nReview batch 2 (2026-11-27): OCCURRENCE_WEEK=window, the research profile's default; per-file week stays the default. (d5dabf3, ec1fecb)"
   },
   {
    "id": "REV-F14",
@@ -3751,7 +3751,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
    "status": "done",
-   "evidence": "`ce3de58`: Row and answers in one transaction (answers in a savepoint). No red test: the crash window cannot be hit deterministically without a fault-injecting VFS."
+   "evidence": "`ce3de58`: Row and answers in one transaction (answers in a savepoint). No red test: the crash window cannot be hit deterministically without a fault-injecting VFS.\nReview batch 2 (2026-11-27): Batch 1 was wrong: the answers insert failure was swallowed. Now propagated and rolled back; red by an injected trigger. (ce3de58, 4f0a504)"
   },
   {
    "id": "REV-F16",
@@ -3775,7 +3775,7 @@
    "phase": null,
    "source": "docs/audit-2026-11/status/REVIEW-2026-11-26.md",
    "status": "done",
-   "evidence": "`b00076e`: Opt-in DB_SYNCHRONOUS=full, default unchanged, loss window documented. Power-loss behaviour not measured (V04)."
+   "evidence": "`b00076e`: Opt-in DB_SYNCHRONOUS=full, default unchanged, loss window documented. Power-loss behaviour not measured (V04).\nReview batch 2 (2026-11-27): FULL by default under STATION_PROFILE=research. Power-loss behaviour not measured (V04). (b00076e, 2ba51db)"
   },
   {
    "id": "REV-F18",
