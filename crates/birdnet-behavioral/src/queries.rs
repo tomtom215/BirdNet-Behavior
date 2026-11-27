@@ -873,6 +873,59 @@ fn adjacent_species_sql(
     )
 }
 
+/// The chance level of "who is heard just before and just after" (CHT-12).
+///
+/// For every species'
+/// first detection in every session, the species heard at the next (or previous) instant, by the
+/// clock hour of that first detection.
+///
+/// Rows are `(hour, anchor, neighbour, count)`. The sessions are [`next_species_sql`]'s (the same
+/// gap, the same scope). A neighbour is the species at the nearest strictly later (`Next`) or
+/// strictly earlier (`Previous`) instant of the session; where several share that instant the
+/// first by name is taken, which is close to, and not guaranteed to be, the extension's pick.
+/// A plain window query: the extension is not needed.
+pub fn neighbours_by_hour_sql(after: bool, window_minutes: u32, scope: &SourceScope) -> String {
+    let (src, over) = if scope.partition_by_source {
+        ("Source", "PARTITION BY Source ")
+    } else {
+        ("CAST(NULL AS VARCHAR)", "")
+    };
+    let sources = source_filter(scope);
+    let step = if after { "LEAD" } else { "LAG" };
+    format!(
+        "WITH sessioned AS (
+            SELECT DISTINCT detection_instant, Com_Name, {src} AS src,
+                   CAST(EXTRACT(HOUR FROM detection_timestamp) AS INTEGER) AS hr,
+                   sessionize(detection_instant, INTERVAL '{window_minutes} MINUTE')
+                       OVER ({over}ORDER BY detection_instant) AS sid
+            FROM detections_ts
+            WHERE {ORDERABLE}
+            {sources}
+        ),
+        inst AS (
+            SELECT src, sid, detection_instant, MIN(Com_Name) AS who
+            FROM sessioned GROUP BY src, sid, detection_instant
+        ),
+        stepped AS (
+            SELECT src, sid, detection_instant,
+                   {step}(who) OVER (PARTITION BY src, sid ORDER BY detection_instant) AS neighbour
+            FROM inst
+        ),
+        firsts AS (
+            SELECT src, sid, Com_Name AS anchor, MIN(detection_instant) AS t0,
+                   arg_min(hr, detection_instant) AS hr
+            FROM sessioned GROUP BY src, sid, Com_Name
+        )
+        SELECT f.hr, f.anchor, s.neighbour, COUNT(*) AS n
+        FROM firsts f
+        JOIN stepped s ON s.src IS NOT DISTINCT FROM f.src AND s.sid = f.sid
+                      AND s.detection_instant = f.t0
+        WHERE s.neighbour IS NOT NULL
+        GROUP BY f.hr, f.anchor, s.neighbour
+        ORDER BY f.hr, f.anchor, s.neighbour",
+    )
+}
+
 /// Render an ordered list of `Com_Name = '…'` boolean conditions, escaping
 /// embedded quotes, joined for use as variadic arguments.
 fn species_conditions(species: &[String]) -> String {
@@ -980,6 +1033,99 @@ pub fn answers_sql(
          )",
         sources = source_filter(scope),
         by = by_source(scope),
+    )
+}
+
+/// [`answers_sql`] with the answering bird's clock moved by `shift_secs`: the chance level of
+/// "who answers whom" (CHT-14, [`crate::null::answer_shifts`]).
+///
+/// Every row is read twice: as itself (copy 0) and with its instant moved by `shift_secs`
+/// (copy 1). The first bird of a pair is matched on copy 0 and the answering bird on copy 1, so
+/// each pair is counted exactly as [`answers_sql`] counts it, against the second bird's times
+/// moved. A row keeps the day it was heard on, so a moved reply still never spans two days'
+/// groups. At `shift_secs = 0` the counts are [`answers_sql`]'s (a live test holds that).
+///
+/// The move wraps round within the span that bird was heard over that day (from its first to
+/// its last detection): a time moved past the end comes back in at the start. A plain shift
+/// carried part of a bird's morning out of the hours the other birds sing in, so every shift
+/// counted fewer replies than any real morning could, and two independent birds "answered"
+/// each other at p = 0.0003 on the live test's fixture; within its own span a bird keeps its
+/// amount of song and where in the day it sings, and only the timing between birds is broken.
+pub fn answers_shifted_sql(
+    species: &[String],
+    from: &str,
+    within_minutes: u32,
+    scope: &SourceScope,
+    shift_secs: i64,
+) -> String {
+    let pattern = ordered_pattern(2, Some(within_minutes));
+    let quote = |s: &str| s.replace('\'', "''");
+    let mut pairs = Vec::new();
+    for (i, a) in species.iter().enumerate() {
+        for (j, b) in species.iter().enumerate() {
+            if i != j {
+                pairs.push((
+                    i,
+                    j,
+                    format!("(copy = 0 AND Com_Name = '{}')", quote(a)),
+                    format!("(copy = 1 AND Com_Name = '{}')", quote(b)),
+                ));
+            }
+        }
+    }
+    let per_day = pairs
+        .iter()
+        .map(|(i, j, a, b)| format!("sequence_count('{pattern}', t, {a}, {b}) AS p_{i}_{j}"))
+        .collect::<Vec<_>>()
+        .join(",\n               ");
+    let sums = pairs
+        .iter()
+        .map(|(i, j, _, _)| format!("COALESCE(SUM(p_{i}_{j}), 0)"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let list = species
+        .iter()
+        .map(|s| format!("'{}'", quote(s)))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sources = source_filter(scope);
+    let by = by_source(scope);
+    let src = if scope.partition_by_source {
+        ", Source"
+    } else {
+        ""
+    };
+    format!(
+        "SELECT {sums}
+         FROM (
+            SELECT day,
+               {per_day}
+            FROM (
+               SELECT CAST(detection_timestamp AS DATE) AS day{src}, Com_Name,
+                      detection_instant AS t, 0 AS copy
+               FROM detections_ts
+               WHERE {ORDERABLE}
+                 AND CAST(detection_timestamp AS DATE) >= DATE '{from}'
+                 AND Com_Name IN ({list})
+                 {sources}
+               UNION ALL
+               SELECT day{src}, Com_Name,
+                      t0 + to_seconds(fmod(fmod(epoch(detection_instant) - epoch(t0) + {shift_secs}, span) + span, span)) AS t,
+                      1 AS copy
+               FROM (
+                  SELECT CAST(detection_timestamp AS DATE) AS day{src}, Com_Name, detection_instant,
+                         MIN(detection_instant) OVER w AS t0,
+                         epoch(MAX(detection_instant) OVER w) - epoch(MIN(detection_instant) OVER w) + 1 AS span
+                  FROM detections_ts
+                  WHERE {ORDERABLE}
+                    AND CAST(detection_timestamp AS DATE) >= DATE '{from}'
+                    AND Com_Name IN ({list})
+                    {sources}
+                  WINDOW w AS (PARTITION BY CAST(detection_timestamp AS DATE){src}, Com_Name)
+               )
+            )
+            GROUP BY day{by}
+         )",
     )
 }
 

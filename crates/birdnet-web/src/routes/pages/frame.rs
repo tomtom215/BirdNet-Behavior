@@ -90,6 +90,24 @@ pub fn page_head(h: &Head<'_>) -> String {
     )
 }
 
+/// The sentence under a table or figure that counts detections: what one is (UIR-30).
+///
+/// The vocabulary is the event layer's (`birdnet_db::sqlite::events`): a detection is a row,
+/// a call heard by several sources is several rows, and an event groups them. None of them is a
+/// bird. `extra` is a further sentence the surface needs (its range, its listening), authored
+/// markup, or empty.
+#[must_use]
+pub fn counted(extra: &str) -> String {
+    let extra = if extra.is_empty() {
+        String::new()
+    } else {
+        format!(" {extra}")
+    };
+    format!(
+        r#"<p class="bnb-meta" data-counts>Counts are detections: rows in the station's log, one per species for each stretch of audio a source heard it in, so two microphones hearing one call are two rows and a bird singing for a minute is several. They count calls heard, not birds. A confidence is the score of the classifier that wrote its row.{extra} <a href="/help/reference/api#events-one-call-heard-by-several-sources">Calls grouped across sources (events)</a>.</p>"#
+    )
+}
+
 /// A chart card.
 pub struct Figure<'a> {
     /// The topic: small-caps, after the figure number. Text.

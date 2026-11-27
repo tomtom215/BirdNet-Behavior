@@ -26,6 +26,15 @@ What matters more than the mic:
 - **Placement** — outside, off a hard wall (which echoes), with a simple foam windscreen. Wind is the number-one source of false positives.
 - **Levels** — aim for the loudest calls to peak between −12 and −6 dB ([Input level](../field/input-level.md) says where that range comes from). The setup wizard's microphone **Test** button listens for two seconds and reports the level. Too hot clips the loudest calls; too quiet buries the faint ones.
 
+## The clock
+
+Every detection is stamped with the station's clock, so a wrong clock files a whole season under the wrong hours. A Raspberry Pi 4 or 400 has no battery-backed clock: after a power cut it starts from the last time it saved and only corrects itself when it reaches a network time server. A station with no network, or a field station whose uplink is down, can record for days with a clock hours behind.
+
+- **On a Pi 5**, fit a battery to the board's real-time-clock battery connector; the clock then keeps time through a power cut.
+- **On a Pi 4 or 400**, a small I²C real-time-clock module does the same, or make sure the station reaches network time after every boot.
+
+The station writes down what the system says of its clock while it records (synchronised, not synchronised, or unknown), and when the clock is set or steps. Today shows a banner while it is not synchronised, `/api/v2/health` has a `clock` field, and each row of the detections export carries a `Clock_State`, so a study can set aside rows stamped by an unsynchronised clock. None of this can say *how* wrong such a clock was; nothing on the station can.
+
 ## RTSP cameras (no microphone hardware)
 
 Many bird-box and feeder cameras expose an RTSP stream that carries audio. Point BirdNet-Behavior at the URL and it treats the camera as a microphone — no sound card required. You can run **several streams at once**.

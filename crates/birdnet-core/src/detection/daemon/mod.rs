@@ -28,7 +28,9 @@ use crate::inference::model::{InferenceError, ModelConfig};
 mod process;
 mod run;
 
-pub use process::{process_and_infer_filtered, process_file_pipeline_only};
+pub use process::{
+    process_and_infer_channels, process_and_infer_filtered, process_file_pipeline_only,
+};
 pub use run::{fit_pipeline_to_classifiers, run_daemon};
 
 /// Errors from the detection daemon.
@@ -816,6 +818,10 @@ pub struct DaemonConfig {
     /// a segment is claimed here while the pipeline reads it. `None` claims
     /// nothing.
     pub in_flight: Option<InFlight>,
+    /// Where a recording too long for a live segment is moved once the
+    /// detection path refuses it (review F11), out of the stream directory's
+    /// purge, for `--ingest-recordings` to take. `None` leaves it in place.
+    pub refused_dir: Option<PathBuf>,
     /// When to analyse one segment in two rather than fall further behind
     /// (PR-2); `None` never sheds.
     pub shed: Option<ShedPolicy>,
@@ -834,6 +840,14 @@ pub struct DaemonConfig {
     pub noise_threshold: f32,
     /// Non-bird label names the noise filter watches.
     pub noise_classes: Vec<String>,
+    /// Privacy rules for single classifiers, by id, each judged on its own
+    /// scores (review F09): `PrivacyFilter::with_classifier_rule`. Empty, the
+    /// default, judges every classifier by the station's rule.
+    pub classifier_privacy: Vec<(String, crate::detection::privacy::ClassifierPrivacyRule)>,
+    /// Noise thresholds for single classifiers, by id (review F09):
+    /// `NoiseFilter::with_classifier_threshold`. Empty judges every classifier
+    /// by [`Self::noise_threshold`].
+    pub classifier_noise: Vec<(String, f32)>,
     /// How long a noise-suppressed chunk's species stay suppressed, in seconds
     /// (`G-17`). `0.0` — the default — is no window at all.
     pub noise_remember_secs: f32,
@@ -1059,6 +1073,14 @@ pub struct FilteredFile {
     /// The sample rate the recording was decoded at, before any resampling:
     /// the band its source carried (ACC-14).
     pub source_rate_hz: u32,
+    /// The channel these events were heard on, counted from `0`, when the
+    /// pipeline analysed channels separately (review F12); `None` for the mean
+    /// of every channel, as always. A channel is provenance within one
+    /// station, never a station.
+    pub channel: Option<u16>,
+    /// What the decoder found and did with the recording's channels, when it
+    /// went through [`process_and_infer_channels`] (every daemon call does).
+    pub channels: Option<crate::audio::decode::ChannelProvenance>,
 }
 
 /// Handle for controlling a running daemon.
@@ -1174,6 +1196,7 @@ mod tests {
             on_model_state: None,
             on_file_analysed: None,
             in_flight: None,
+            refused_dir: None,
             shed: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,
@@ -1182,6 +1205,8 @@ mod tests {
             privacy_clip_reach: crate::detection::privacy::ClipReach::default(),
             noise_threshold: 0.0,
             noise_classes: Vec::new(),
+            classifier_privacy: Vec::new(),
+            classifier_noise: Vec::new(),
             noise_remember_secs: 0.0,
             confirmation: ConfirmationLevel::Off,
             latitude: None,

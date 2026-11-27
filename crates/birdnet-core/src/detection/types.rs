@@ -36,11 +36,14 @@ pub struct Detection {
     /// of its detections came from which.
     #[serde(default)]
     pub model_id: Option<String>,
-    /// How many classifiers independently reported this species in this chunk.
+    /// How many distinct classifiers reported this species in this chunk.
     ///
-    /// `1` when only one ran or only one agreed; `2` or more means independent
-    /// corroboration, which is a different and much stronger claim than one
-    /// model being confident. `None` on a row written before this existed —
+    /// `1` when only one ran or only one agreed; `2` or more means that many
+    /// classifiers reported it over overlapping windows of the same audio. That
+    /// is an association between models that heard the same seconds through
+    /// the same microphone, not independent corroboration (review F09; see
+    /// [`crate::detection::merge`]), and it is never folded into
+    /// [`Self::confidence`]. `None` on a row written before this existed —
     /// distinct from `Some(1)`, which says one model was asked and one
     /// answered.
     #[serde(default)]
@@ -94,7 +97,20 @@ pub struct ModelAnswer {
     pub window_start_secs: f32,
     /// Where it ended. Classifiers' windows differ in length, so "the same
     /// chunk" is not "the same instants".
+    ///
+    /// The end of the audio that exists (review F09): on the zero-padded last
+    /// chunk of a recording the classifier's window runs past the recording's
+    /// end, and this is clamped to that end, as the detection row's own `stop`
+    /// is. What the window held beyond it is [`Self::padded_secs`].
     pub window_end_secs: f32,
+    /// How much of the classifier's window was zero padding rather than
+    /// recorded audio, seconds: `0.0` for every window but one that the
+    /// recording ends inside. The window the classifier was handed is
+    /// `window_end_secs - window_start_secs + padded_secs` long. A score from a
+    /// window that was mostly padding was given mostly silence, and a reader
+    /// comparing classifiers can now tell.
+    #[serde(default)]
+    pub padded_secs: f32,
 }
 
 /// What one inference pass says about one chunk of audio.
@@ -125,6 +141,11 @@ pub struct ChunkPrediction {
     /// output), taken, like [`Self::human_score`], before the detection
     /// threshold and the top-N cut. A non-finite human score ranks `0`.
     pub human_rank: Option<usize>,
+    /// A routed classifier whose labels name a human class failed this
+    /// chunk, so [`Self::human_score`] and [`Self::human_rank`] are what the
+    /// others said and nobody judged it for speech (review F08). A privacy
+    /// filter that is on masks such a chunk rather than keep its audio.
+    pub privacy_unassessed: bool,
     /// The highest-scoring watched noise class (see
     /// [`crate::inference::model::BirdNetModel::watch_noise_classes`]) in this
     /// chunk, read like [`Self::human_score`] from the model output *before*
@@ -134,6 +155,38 @@ pub struct ChunkPrediction {
     /// The noise filter used to read only [`Self::detections`], so a
     /// `NOISE_THRESHOLD` below the detection threshold could never fire: the
     /// bark it was set to catch had already been cut from the list.
+    pub loudest_noise: Option<Detection>,
+    /// What each routed classifier that answered this chunk said about people
+    /// and watched noise, on its own scale, in route order (review F09).
+    ///
+    /// [`Self::human_score`], [`Self::human_rank`] and [`Self::loudest_noise`]
+    /// are summaries across classifiers (the highest score, the best rank, the
+    /// loudest noise), and classifiers' scores and ranks are not on one scale:
+    /// Perch ranks a class among some 15 000, BirdNET among 6 000, and neither
+    /// is calibrated like the other. So when this is filled the privacy and
+    /// noise filters judge each classifier against its own rule
+    /// ([`crate::detection::privacy::PrivacyFilter::with_classifier_rule`],
+    /// [`crate::detection::noise::NoiseFilter::with_classifier_threshold`]) and
+    /// flag the chunk when **any** classifier's own rule fires; the summaries
+    /// are read only when it is empty, as for a prediction from one model
+    /// call. With no per-classifier rule set the two readings agree exactly,
+    /// because "the highest score reaches the bar" is "some score reaches it".
+    pub by_classifier: Vec<ClassifierEvidence>,
+}
+
+/// One classifier's own evidence about people and noise in one chunk (F09).
+#[derive(Debug, Clone, Default)]
+pub struct ClassifierEvidence {
+    /// The classifier's id, as configured.
+    pub model_id: String,
+    /// Its highest human-class score, on its own scale; as
+    /// [`ChunkPrediction::human_score`] for that classifier alone.
+    pub human_score: f32,
+    /// Its best human class's rank among its own classes; as
+    /// [`ChunkPrediction::human_rank`] for that classifier alone.
+    pub human_rank: Option<usize>,
+    /// Its loudest watched noise class, with `model_id` set to this
+    /// classifier; as [`ChunkPrediction::loudest_noise`] for it alone.
     pub loudest_noise: Option<Detection>,
 }
 

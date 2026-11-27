@@ -1,6 +1,6 @@
 # Taxonomy Overlap Between Classifiers
 
-The station merges what two classifiers heard **by scientific name**, as a string. Two classifiers that name one bird differently are, to the station, two species: a detection each, with `model_agreement` 1, and no row saying that they agreed. This page says how often the three classifiers' names meet, name by name, and what it costs. The numbers were recomputed from the label files; the table of 644 names is `docs/data/taxonomy/v3-names-not-in-perch.tsv`, and a test (`crates/birdnet-core/tests/the_v3_names_perch_lacks.rs`) holds it to the Perch labels.
+The station merges what two classifiers heard **by scientific name**, as a string, except for the 101 pairs of names below that one table says are one species. Two classifiers that name one bird differently in any other way are, to the station, two species: a detection each, with `model_agreement` 1, and no row saying that they agreed. This page says how often the three classifiers' names meet, name by name, and what it costs. The numbers were recomputed from the label files; the table of 644 names is `docs/data/taxonomy/v3-names-not-in-perch.tsv`, and a test (`crates/birdnet-core/tests/the_v3_names_perch_lacks.rs`) holds it to the Perch labels.
 
 ## How many names meet
 
@@ -31,13 +31,15 @@ Of the 644, 351 are birds, 107 mammals, 95 amphibians, 75 insects and the rest f
 
 ## What it costs the station
 
-- **A bird the two classifiers name differently is two detections.** The merge is a union by scientific name, and agreement counts classifiers that gave the *same* name. For the 121 renamed species, V3.0 and Perch hearing one bird give two rows, neither with `model_agreement` 2, and the Who heard it card on each shows the other classifier as having no class for that species.
+- **A bird the two classifiers name differently is two detections, unless the pair is in the bundled table.** The merge is a union by scientific name, and agreement counts classifiers that gave the *same* name or the two names of one bundled pair. The 101 renames that rest on two or more sources are bundled (`crates/birdnet-core/data/taxonomy/same-species.tsv`); for them V3.0 and Perch hearing one bird give one row with `model_agreement` 2. The other 20 renames, resting on one source each, still give two rows, neither with `model_agreement` 2, and the Who heard it card on each shows the other classifier as having no class for that species.
 - **A lumped species is reported by Perch and not by V3.0, or the other way round**, because the two classes are different species to the station.
 - **369 V3.0 species cannot be reported by Perch at all**, and V3.0 can say nothing about the 3 679 species Perch has and it does not.
 
-## Why there is no alias table yet
+## The bundled pairs, and which name a detection carries
 
-The aliases are known and the 101 well-supported ones could be applied. They are not, because a name is the key of more than the merge: the species list, the history, the exports, the watchlists and the daily summaries all group by it. Mapping two names to one in the merge but not in those would put a species under a name the rest of the station never shows. It needs a decision about which name a stored detection carries and what happens to the detections already stored under the other, and that is a change of its own. The table is the input for it.
+The 101 well-supported renames are applied in the merge (MMP-09). A name is the key of more than the merge — the species list, the history, the exports, the watchlists and the daily summaries all group by it — so a merged detection is stored under **one** name, chosen the same way every time: the primary classifier's spelling when the primary has either name of the pair, otherwise the pair's Perch name. The station already names its species' common names after the primary (MMP-10); this does the same for these scientific names. A label set that carries both names of a pair treats them as two species, and the pair is then not applied on that station. A station that runs one classifier is unchanged.
+
+What this does not do: detections stored before the change, or by a station whose classifiers then won chunks under the other name, keep the name they were stored with; nothing is rewritten. The 20 single-source renames, the lumps and the splits are not applied, and an operator table for the merge is not read yet (`SPECIES_ALIASES_PATH` aligns the occurrence filter only).
 
 ## Common names
 

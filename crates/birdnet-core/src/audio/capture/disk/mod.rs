@@ -16,8 +16,26 @@ use crate::process::run_with_timeout;
 /// How long `df` may take before it is killed.
 const DF_TIMEOUT: Duration = Duration::from_secs(15);
 
-use super::process::is_audio_file;
 use super::types::CaptureError;
+
+/// Whether `path` is audio the disk manager accounts for and may remove: a
+/// capture segment or a clip in any format the station writes clips in
+/// (`AUDIO_FORMATS`: WAV, MP3, FLAC, OGG).
+///
+/// Wider than the capture side's `is_audio_file`, which names what a capture
+/// writes and the live spectrogram reads. The disk manager used that, and so
+/// never saw an `.ogg` clip: the disk-full purge could not reclaim one, the
+/// stream drain left one in a watch directory that is the recordings
+/// directory, and the counts left them out (N26-02).
+pub(crate) fn is_kept_audio_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            crate::config::validate::AUDIO_FORMATS
+                .iter()
+                .any(|f| ext.eq_ignore_ascii_case(f))
+        })
+}
 
 // Re-export public API from sub-modules.
 pub use manager::{
@@ -187,7 +205,7 @@ pub fn recording_stats(dir: &Path) -> Result<(u32, u64), CaptureError> {
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.is_file() && is_audio_file(&path) {
+        if path.is_file() && is_kept_audio_file(&path) {
             count += 1;
             total_size += entry.metadata().map_or(0, |m| m.len());
         }
@@ -212,7 +230,7 @@ pub fn cleanup_old_recordings(dir: &Path, max_age_days: u32) -> Result<u32, Capt
 
     for entry in entries.flatten() {
         let path = entry.path();
-        if !path.is_file() || !is_audio_file(&path) {
+        if !path.is_file() || !is_kept_audio_file(&path) {
             continue;
         }
 

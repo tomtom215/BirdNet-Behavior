@@ -1016,3 +1016,33 @@ fn the_geomodel_is_in_the_catalogue_with_the_installers_pins() {
         Some("BirdNET+_V3.0-preview3_Global_11K_Labels.csv")
     );
 }
+
+/// Review F21: a model or labels file is put in place whole and durably, by
+/// `birdnet_core::atomic_file::commit` (sync the file, rename, sync the
+/// directory), never by a bare rename. A rename whose directory entry was never
+/// synced can be lost to a power cut after the install said "installed",
+/// leaving the station to fetch 541 MB again. Read from the source, so a new
+/// placement path written with `fs::rename` fails here.
+#[test]
+fn every_installed_file_is_placed_by_the_atomic_commit() {
+    for (name, source) in [
+        ("stage.rs", include_str!("stage.rs")),
+        ("download.rs", include_str!("download.rs")),
+    ] {
+        let code = source.split("#[cfg(test)]").next().unwrap_or(source);
+        let renames: Vec<usize> = code
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| l.contains("fs::rename(") && !l.trim_start().starts_with("//"))
+            .map(|(i, _)| i + 1)
+            .collect();
+        assert!(
+            renames.is_empty(),
+            "{name} puts a file in place with a bare rename at lines {renames:?}"
+        );
+        assert!(
+            code.contains("atomic_file::commit("),
+            "{name} no longer uses the atomic commit at all"
+        );
+    }
+}

@@ -57,6 +57,54 @@ pub fn insert_detection(conn: &Connection, record: &DetectionRecord<'_>) -> Resu
     Ok(conn.last_insert_rowid())
 }
 
+/// What names one detection of one analysis, whatever clip it was written with.
+///
+/// A start that replays a detection an earlier stop kept asks for this before
+/// writing it, because a start killed between writing the row and recording
+/// that it had leaves the detection to be replayed (review F02).
+///
+/// The clip's name cannot be part of it: a replay cuts its clip again and
+/// gets a name of its own. The analysis's correlation id and the window's
+/// offset are what tell this detection from a second one of the same species
+/// in the same second on the same source.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RecordedDetection<'a> {
+    /// Detection date (`YYYY-MM-DD`).
+    pub date: &'a str,
+    /// Detection time (`HH:MM:SS`).
+    pub time: &'a str,
+    /// Scientific name.
+    pub sci_name: &'a str,
+    /// The source that heard it (`Source`).
+    pub source: &'a str,
+    /// The window's offset in its recording (`chunk_offset_secs`).
+    pub chunk_offset_secs: f64,
+    /// The analysis's correlation id.
+    pub correlation_id: &'a str,
+}
+
+/// Whether the detection `key` names is already a row.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn detection_recorded(conn: &Connection, key: &RecordedDetection<'_>) -> Result<bool, DbError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM detections \
+          WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3 AND COALESCE(Source, '') = ?4 \
+            AND chunk_offset_secs = ?5 AND correlation_id = ?6)",
+        params![
+            key.date,
+            key.time,
+            key.sci_name,
+            key.source,
+            key.chunk_offset_secs,
+            key.correlation_id
+        ],
+        |r| r.get(0),
+    )?)
+}
+
 /// Record the `BirdWeather` soundscape id a detection was posted with
 /// (migration 45). Returns `false` if no row has that rowid.
 ///
@@ -220,6 +268,73 @@ mod tests {
     use crate::sqlite::queries::detections::{
         detection_count, detections_by_species, recent_detections,
     };
+
+    /// Review F02: a replayed detection is known to be stored when, and only
+    /// when, a row of the same analysis says so: date, time, species, source,
+    /// window and correlation id (mutation survivors `Ok(true)` and
+    /// `Ok(false)` in `detection_recorded`, PR #313).
+    #[test]
+    fn a_detection_is_recorded_only_when_its_own_row_is_there() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let conn = open_or_create(tmp.path()).unwrap();
+        insert_detection(
+            &conn,
+            &DetectionRecord {
+                model_id: None,
+                model_agreement: None,
+                date: "2026-03-11",
+                time: "08:30:00",
+                sci_name: "Turdus merula",
+                com_name: "Eurasian Blackbird",
+                confidence: 0.87,
+                lat: None,
+                lon: None,
+                cutoff: None,
+                week: None,
+                sensitivity: None,
+                overlap: None,
+                file_name: "a.wav",
+                chunk_offset_secs: Some(6.0),
+                correlation_id: Some("c1"),
+                source: Some("north"),
+                duration_secs: None,
+                detected_at_utc: None,
+                run_id: None,
+                clip_offset_secs: None,
+                detection_secs: None,
+            },
+        )
+        .unwrap();
+        let key = RecordedDetection {
+            date: "2026-03-11",
+            time: "08:30:00",
+            sci_name: "Turdus merula",
+            source: "north",
+            chunk_offset_secs: 6.0,
+            correlation_id: "c1",
+        };
+        assert!(detection_recorded(&conn, &key).unwrap());
+        for other in [
+            RecordedDetection {
+                correlation_id: "c2",
+                ..key
+            },
+            RecordedDetection {
+                source: "south",
+                ..key
+            },
+            RecordedDetection {
+                chunk_offset_secs: 9.0,
+                ..key
+            },
+            RecordedDetection {
+                sci_name: "Pica pica",
+                ..key
+            },
+        ] {
+            assert!(!detection_recorded(&conn, &other).unwrap(), "{other:?}");
+        }
+    }
 
     /// DD-32: the id lands on the row the rowid names, and only there.
     #[test]

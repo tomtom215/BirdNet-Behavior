@@ -240,6 +240,105 @@ pub(super) fn build_pipeline_config(watch_dir: PathBuf, chunk_overlap_secs: f32)
     }
 }
 
+/// `OCCURRENCE_WEEK`: which geomodel week judges a window (review F13).
+///
+/// `file` is BirdNET-Pi's (one week per recording, from its filename) and the
+/// default; `window` takes each window's week from its own capture date. The
+/// research profile's default is `window`; a value the operator wrote is
+/// theirs under either profile. Anything else warns and keeps the default.
+#[must_use]
+pub(super) fn resolve_occurrence_week(
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_core::detection::pipeline::OccurrenceWeek {
+    use birdnet_core::config::profile::StationProfile;
+    use birdnet_core::detection::pipeline::OccurrenceWeek;
+    let default = if StationProfile::of(config) == StationProfile::Research {
+        OccurrenceWeek::PerWindow
+    } else {
+        OccurrenceWeek::PerFile
+    };
+    let Some(raw) = config.and_then(|c| c.get("OCCURRENCE_WEEK")) else {
+        return default;
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" => default,
+        "file" => OccurrenceWeek::PerFile,
+        "window" => OccurrenceWeek::PerWindow,
+        other => {
+            tracing::warn!(
+                value = other,
+                "OCCURRENCE_WEEK is neither file nor window; using this profile's default"
+            );
+            default
+        }
+    }
+}
+
+/// `ANALYSIS_CHANNELS`: which channel of a multichannel recording is analysed
+/// (review F12).
+///
+/// `mean` (the default, what the pipeline has always done), `left`, `right`
+/// or a channel number counted from 0. A one-channel recording is analysed as
+/// it is whatever this says. `each`, every channel on its own, is refused:
+/// the pipeline can do it, but detections are stored by recording, time and
+/// species, so two channels hearing one bird in one window would be one row,
+/// and the second channel's answer would be lost. Anything else warns and
+/// keeps the mean.
+#[must_use]
+pub(super) fn resolve_channel_analysis(
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_core::detection::pipeline::ChannelAnalysis {
+    use birdnet_core::detection::pipeline::ChannelAnalysis;
+    let Some(raw) = config.and_then(|c| c.get("ANALYSIS_CHANNELS")) else {
+        return ChannelAnalysis::Mean;
+    };
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "mean" => ChannelAnalysis::Mean,
+        "left" => ChannelAnalysis::Only(0),
+        "right" => ChannelAnalysis::Only(1),
+        "each" => {
+            tracing::warn!(
+                "ANALYSIS_CHANNELS=each is not available yet: detections are stored by \
+                 recording, time and species, so two channels would collide; analysing the \
+                 mean of the channels"
+            );
+            ChannelAnalysis::Mean
+        }
+        other => other.parse::<u16>().map_or_else(
+            |_| {
+                tracing::warn!(
+                    value = other,
+                    "ANALYSIS_CHANNELS is not mean, left, right or a channel number; \
+                     analysing the mean of the channels"
+                );
+                ChannelAnalysis::Mean
+            },
+            ChannelAnalysis::Only,
+        ),
+    }
+}
+
+/// `SOURCE_SITES`: which sources share a site (MSC-07), as `source:site`
+/// pairs, comma-separated: the form `/api/v2/events?sites=` takes. Unset,
+/// every source is its own site and nothing is grouped. A value that does not
+/// parse warns and groups nothing.
+#[must_use]
+pub(super) fn resolve_source_sites(
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_db::sqlite::queries::events::SiteMap {
+    use birdnet_db::sqlite::queries::events::SiteMap;
+    let Some(raw) = config.and_then(|c| c.get("SOURCE_SITES")) else {
+        return SiteMap::identity();
+    };
+    SiteMap::parse(raw).unwrap_or_else(|e| {
+        tracing::warn!(
+            error = %e,
+            "SOURCE_SITES does not parse; every source is its own site"
+        );
+        SiteMap::identity()
+    })
+}
+
 /// Build the [`ModelConfig`] used by ML inference.
 ///
 /// Pins `sensitivity` and `confidence_threshold` from CLI/config; every
@@ -1071,6 +1170,48 @@ mod tests {
         // derived step from a configured one.
         assert_eq!(cfg.chunk_step_secs, None);
         assert_eq!(cfg.chunk_step_secs, default.chunk_step_secs);
+    }
+
+    /// Review F13: the per-window week is opt-in, and the research profile's
+    /// default; what the operator wrote wins under either profile.
+    #[test]
+    fn the_occurrence_week_is_per_file_unless_asked_or_researching() {
+        use birdnet_core::detection::pipeline::OccurrenceWeek;
+        let week = |text: &str| {
+            resolve_occurrence_week(Some(&birdnet_core::config::Config::parse(text).unwrap()))
+        };
+        assert_eq!(resolve_occurrence_week(None), OccurrenceWeek::PerFile);
+        assert_eq!(week("OCCURRENCE_WEEK=window\n"), OccurrenceWeek::PerWindow);
+        assert_eq!(week("OCCURRENCE_WEEK=sometimes\n"), OccurrenceWeek::PerFile);
+        assert_eq!(
+            week("STATION_PROFILE=research\n"),
+            OccurrenceWeek::PerWindow
+        );
+        assert_eq!(
+            week("STATION_PROFILE=research\nOCCURRENCE_WEEK=file\n"),
+            OccurrenceWeek::PerFile
+        );
+    }
+
+    /// Review F12: one channel can be chosen; `each` and nonsense keep the mean.
+    #[test]
+    fn the_analysed_channel_is_the_mean_unless_one_is_chosen() {
+        use birdnet_core::detection::pipeline::ChannelAnalysis;
+        let channels = |text: &str| {
+            resolve_channel_analysis(Some(&birdnet_core::config::Config::parse(text).unwrap()))
+        };
+        assert_eq!(resolve_channel_analysis(None), ChannelAnalysis::Mean);
+        assert_eq!(
+            channels("ANALYSIS_CHANNELS=left\n"),
+            ChannelAnalysis::Only(0)
+        );
+        assert_eq!(
+            channels("ANALYSIS_CHANNELS=Right\n"),
+            ChannelAnalysis::Only(1)
+        );
+        assert_eq!(channels("ANALYSIS_CHANNELS=3\n"), ChannelAnalysis::Only(3));
+        assert_eq!(channels("ANALYSIS_CHANNELS=each\n"), ChannelAnalysis::Mean);
+        assert_eq!(channels("ANALYSIS_CHANNELS=both\n"), ChannelAnalysis::Mean);
     }
 
     #[test]

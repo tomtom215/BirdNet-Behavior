@@ -62,10 +62,9 @@ pub(super) enum DuplicateVerdict {
 pub(super) struct DuplicateGate {
     /// Zero disables the gate.
     interval_secs: i64,
-    /// (source, scientific name) → timestamp of the last admitted detection,
-    /// in seconds. The two parts are joined by a unit separator, which neither
-    /// a stream id nor a species name contains.
-    last_admitted: HashMap<String, i64>,
+    /// (source, scientific name) → the times, in seconds and in order, of the
+    /// detections stored for it ([`key`]).
+    last_admitted: HashMap<String, Vec<i64>>,
 }
 
 impl DuplicateGate {
@@ -121,7 +120,28 @@ impl DuplicateGate {
     }
 
     /// As `admit`, for a species that may have an interval of
-    /// its own, heard on `source` (a stream id, or `local`).
+    /// its own, heard on `source` (a stream id, or `local`): [`Self::check`],
+    /// then [`Self::record`] when admitted. The processor does the two apart,
+    /// with the row's write between them.
+    #[cfg(test)]
+    pub(super) fn admit_from(
+        &mut self,
+        source: &str,
+        sci_name: &str,
+        at_secs: i64,
+        species_interval_secs: Option<i64>,
+    ) -> DuplicateVerdict {
+        let verdict = self.check(source, sci_name, at_secs, species_interval_secs);
+        if verdict == DuplicateVerdict::Admit {
+            self.record(source, sci_name, at_secs);
+        }
+        verdict
+    }
+
+    /// Whether a detection of `sci_name` on `source` at `at_secs` repeats one
+    /// already recorded. Remembers nothing: what is remembered is what
+    /// [`Self::record`] is told was stored, so a detection the database then
+    /// refuses cannot shadow the next one (review F07).
     ///
     /// `species_interval_secs` is the operator's per-species minimum
     /// (`species_intervals`, migration 56). A positive value **replaces** the
@@ -131,8 +151,15 @@ impl DuplicateGate {
     /// use the global default"). `None`, zero or a negative number falls back
     /// to the station's interval, so a bad stored value can never switch the
     /// gate on for a species by accident.
-    pub(super) fn admit_from(
-        &mut self,
+    ///
+    /// Compared with every remembered time, not only the latest: a backlog
+    /// arrives in directory order, and 100, 80, 82 compared with the latest
+    /// alone stored 80 and 82, two seconds apart (review F06). Which of two
+    /// close detections is kept still depends on which arrives first; a count
+    /// that does not is the read-time event layer's (decision 1), not this
+    /// gate's.
+    pub(super) fn check(
+        &self,
         source: &str,
         sci_name: &str,
         at_secs: i64,
@@ -145,23 +172,41 @@ impl DuplicateGate {
         if interval_secs <= 0 {
             return DuplicateVerdict::Admit;
         }
-        let key = format!("{source}\u{1f}{sci_name}");
-        if let Some(&last) = self.last_admitted.get(&key) {
-            let gap = at_secs.saturating_sub(last).abs();
-            if gap < interval_secs {
-                return DuplicateVerdict::Suppress {
-                    since_last_secs: gap,
-                };
-            }
+        let nearest = self
+            .last_admitted
+            .get(&key(source, sci_name))
+            .and_then(|times| times.iter().map(|&t| at_secs.saturating_sub(t).abs()).min());
+        match nearest {
+            Some(gap) if gap < interval_secs => DuplicateVerdict::Suppress {
+                since_last_secs: gap,
+            },
+            _ => DuplicateVerdict::Admit,
         }
-        // Never moved backwards: a restart backlog is walked in directory order,
-        // so a recording from before the last admitted one arrives after it, and
-        // storing its earlier time would make the next in-order detection of the
-        // same song look far enough from the "last" one to be admitted again.
-        let slot = self.last_admitted.entry(key).or_insert(at_secs);
-        *slot = (*slot).max(at_secs);
-        DuplicateVerdict::Admit
     }
+
+    /// Remember that a detection of `sci_name` on `source` at `at_secs` was
+    /// stored.
+    ///
+    /// At most [`REMEMBERED`] times per species and source, the latest kept: a
+    /// backlog out of order reaches back minutes, not days.
+    pub(super) fn record(&mut self, source: &str, sci_name: &str, at_secs: i64) {
+        let times = self.last_admitted.entry(key(source, sci_name)).or_default();
+        if let Err(at) = times.binary_search(&at_secs) {
+            times.insert(at, at_secs);
+        }
+        if times.len() > REMEMBERED {
+            times.remove(0);
+        }
+    }
+}
+
+/// How many stored times the gate remembers per species and source.
+const REMEMBERED: usize = 64;
+
+/// The gate's key: the two parts joined by a unit separator, which neither a
+/// stream id nor a species name contains.
+fn key(source: &str, sci_name: &str) -> String {
+    format!("{source}\u{1f}{sci_name}")
 }
 
 /// The operator's per-species minimum intervals, re-read from the database on
@@ -262,6 +307,27 @@ mod tests {
     /// Whether the gate admitted this.
     fn admitted(g: &mut DuplicateGate, sci: &str, hms: &str) -> bool {
         g.admit(sci, t(hms)) == DuplicateVerdict::Admit
+    }
+
+    /// The gate remembers exactly the latest `REMEMBERED` times per species
+    /// and source: not one fewer, so a backlog that far out of order is still
+    /// judged, and not without bound (mutation survivors `>` to `>=` and `==`
+    /// in `record`, PR #313).
+    #[test]
+    fn the_gate_remembers_the_latest_times_and_no_more() {
+        let mut g = DuplicateGate::new(30);
+        let n = i64::try_from(super::REMEMBERED).unwrap();
+        for i in 0..n + 10 {
+            g.record("north", "Pica pica", 1_000 + i);
+        }
+        let times = &g.last_admitted[&super::key("north", "Pica pica")];
+        assert_eq!(times.len(), super::REMEMBERED);
+        assert_eq!(
+            times.first(),
+            Some(&(1_010)),
+            "the oldest are the ones let go"
+        );
+        assert_eq!(times.last(), Some(&(1_000 + n + 9)));
     }
 
     // ── the interval ────────────────────────────────────────────────────
@@ -540,5 +606,56 @@ mod tests {
             !admitted(&mut g, "Turdus merula", "05:10:20"),
             "the late arrival moved the remembered time backwards"
         );
+    }
+
+    /// F06: no two detections a gate admits for one species on one source
+    /// are closer than the interval, in any order of arrival. Remembering only
+    /// the latest admitted time let 100, 80, 82 through as three rows, the last
+    /// two two seconds apart, where 80, 82, 100 keeps two.
+    ///
+    /// This is the invariant an online gate can hold. Which of two close
+    /// detections is kept still depends on arrival (85, 80, 92 keeps one row;
+    /// 80, 85, 92 keeps two); a count that does not depend on order is the
+    /// read-time event layer's job (decision 1, RES-18), not this gate's.
+    #[test]
+    fn no_two_admitted_detections_are_closer_than_the_interval_in_any_order() {
+        let times = [100_i64, 80, 82, 95, 111, 70];
+        let mut order: Vec<usize> = (0..times.len()).collect();
+        // Every permutation of six, by Heap's algorithm.
+        let mut c = vec![0_usize; order.len()];
+        let check = |order: &[usize]| {
+            let mut g = DuplicateGate::new(10);
+            let kept: Vec<i64> = order
+                .iter()
+                .map(|&i| times[i])
+                .filter(|&t| g.admit("Turdus merula", t) == DuplicateVerdict::Admit)
+                .collect();
+            for (i, a) in kept.iter().enumerate() {
+                for b in &kept[i + 1..] {
+                    assert!(
+                        (a - b).abs() >= 10,
+                        "arrival {:?} kept {kept:?}: {a} and {b} are under 10 s apart",
+                        order.iter().map(|&i| times[i]).collect::<Vec<_>>()
+                    );
+                }
+            }
+        };
+        check(&order);
+        let mut i = 0;
+        while i < order.len() {
+            if c[i] < i {
+                if i % 2 == 0 {
+                    order.swap(0, i);
+                } else {
+                    order.swap(c[i], i);
+                }
+                check(&order);
+                c[i] += 1;
+                i = 0;
+            } else {
+                c[i] = 0;
+                i += 1;
+            }
+        }
     }
 }

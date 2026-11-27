@@ -213,7 +213,7 @@ type Family = fn(&Cli, Option<&Config>) -> Vec<Check>;
 /// away, turns a test red instead of silently dropping out of the report.
 /// The adapters exist only to give the families one signature; none of them
 /// decides anything.
-const CHECK_FAMILIES: [(&str, Family); 30] = [
+const CHECK_FAMILIES: [(&str, Family); 31] = [
     ("environment::check_runtime_environment", |_, _| {
         environment::check_runtime_environment()
     }),
@@ -282,6 +282,7 @@ const CHECK_FAMILIES: [(&str, Family); 30] = [
         environment::check_optional_tools,
     ),
     ("disk::check_disk_space", disk::check_disk_space),
+    ("disk::check_stream_room", disk::check_stream_room),
     ("disk::check_data_volume", |_, cfg| {
         vec![disk::check_data_volume(cfg)]
     }),
@@ -296,6 +297,10 @@ const CHECK_FAMILIES: [(&str, Family); 30] = [
 /// checks the operator sees rather than a second, drifting list.
 fn collect(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
     let mut checks: Vec<Check> = Vec::new();
+    // N26-03: judge the configuration the station runs with, which is the
+    // file with the settings page's values laid over it.
+    let merged = with_saved_settings(config);
+    let config = merged.as_ref().or(config);
 
     // Repairs run before the checks so the subsequent diagnostics observe the
     // healed state (e.g. a recreated recordings directory now reads as Pass).
@@ -309,6 +314,31 @@ fn collect(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
         checks.extend(family(cli, config));
     }
     checks
+}
+
+/// The file configuration with the values saved on the settings page laid
+/// over it, as `helpers::overlay_db_settings` lays them at startup (N26-03).
+///
+/// Without this a value saved only on `/admin/settings` (an overlap, a
+/// segment length, a confirmation level) was never seen by `--doctor`, which
+/// then graded a configuration the station was not running. Read-only: a
+/// database that does not exist yet, cannot be opened, or has no settings
+/// table gives `None`, and the file alone is judged, as a first start would
+/// run with it.
+fn with_saved_settings(config: Option<&Config>) -> Option<Config> {
+    let db = crate::helpers::db_path_from_config(config);
+    if !db.exists() {
+        return None;
+    }
+    let conn = birdnet_db::sqlite::open_readonly(&db).ok()?;
+    let rows = birdnet_db::settings::list(&conn, None).ok()?;
+    if rows.is_empty() {
+        return None;
+    }
+    crate::helpers::apply_setting_overrides(
+        config.cloned(),
+        rows.iter().map(|s| (s.key.as_str(), s.value.as_str())),
+    )
 }
 
 // ── Shared helpers ───────────────────────────────────────────────────────────
@@ -478,6 +508,40 @@ mod tests {
             overlap_finding(&cli, Some(&config)).is_some(),
             "OVERLAP from the config file"
         );
+    }
+
+    /// N26-03: a value saved only on the settings page is the one the station
+    /// runs with (`overlay_db_settings` lays the table over the file), so the
+    /// doctor must judge it too. OVERLAP saved there and not in the file is
+    /// still overlap.
+    #[test]
+    fn a_value_saved_only_on_the_settings_page_is_checked() {
+        use crate::cli::Cli;
+        use clap::Parser as _;
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("birds.db");
+        {
+            let conn = rusqlite::Connection::open(&db).unwrap();
+            birdnet_db::migration::migrate(&conn).unwrap();
+            birdnet_db::settings::ensure_settings_table(&conn).unwrap();
+            birdnet_db::settings::set(
+                &conn,
+                "overlap",
+                "1.5",
+                birdnet_db::settings::SettingsCategory::Detection,
+            )
+            .unwrap();
+        }
+        let cli = Cli::parse_from(["birdnet-behavior"]);
+        let config =
+            birdnet_core::config::Config::parse(&format!("DB_PATH={}\n", db.display())).unwrap();
+        assert!(
+            overlap_finding(&cli, Some(&config)).is_some(),
+            "OVERLAP saved on the settings page was not seen by the doctor"
+        );
+        // Counterpart: the same database without the saved value says nothing.
+        birdnet_db::settings::delete(&rusqlite::Connection::open(&db).unwrap(), "overlap").unwrap();
+        assert!(overlap_finding(&cli, Some(&config)).is_none());
     }
 
     /// The counterparts: no overlap, or a duplicate interval set (by flag or by

@@ -680,11 +680,13 @@ async function correlationRangeHolds(page) {
   await page.click('#range-controls [data-days="90"]');
   await page.waitForTimeout(600);
   const opened = seen.length;
-  await page.click('summary:has-text("co-occurrence matrix")');
+  // The ladder is the figure now (CHT-08), so the table of every pair is what opens late.
+  await page.click('summary:has-text("every pair against chance")');
   await page.waitForTimeout(800);
-  const afterOpen = seen.slice(opened).filter((x) => x.path.endsWith('cooccurrence-matrix'));
+  const afterOpen = seen.slice(opened).filter((x) => x.path.endsWith('correlation-pairs'));
   check(
-    'range: opening the matrix keeps the chosen 90 days',
+    'range: opening the table keeps the chosen 90 days',
+    afterOpen.length > 0 &&
     afterOpen.every((x) => x.days === '90'),
     `requests on opening: ${JSON.stringify(afterOpen)}`,
   );

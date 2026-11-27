@@ -97,14 +97,18 @@ pub fn router() -> Router<AppState> {
 
 /// The "When active" tab: its own head and range control, then the soundscape terrain as the
 /// lead figure, then the three charts that zoom in. One range sets all four.
-fn when_content() -> String {
-    crate::routes::pages::heatmap::content(&crate::routes::pages::terrain::content())
+fn when_content(days: u32) -> String {
+    crate::routes::pages::heatmap::content(&crate::routes::pages::terrain::content(days), days)
 }
 
-/// `?tab=` selector for the Patterns home.
+/// `?tab=` selector for the Patterns home, and the When tab's `?days=` (UIC-08).
+///
+/// `days` is text, not a number, so `?days=abc` opens the default range instead of answering
+/// 400 for a page that has a sensible reading of it.
 #[derive(Deserialize)]
 struct TabParam {
     tab: Option<String>,
+    days: Option<String>,
 }
 
 async fn patterns_page(Query(q): Query<TabParam>, headers: HeaderMap) -> Html<String> {
@@ -117,7 +121,9 @@ async fn patterns_page(Query(q): Query<TabParam>, headers: HeaderMap) -> Html<St
         "behavior" => crate::routes::pages::behavioral::content(),
         "sequences" => crate::routes::pages::behavioral::sequences_content(),
         // "when" and the unknown-key clamp.
-        _ => when_content(),
+        _ => when_content(crate::routes::pages::heatmap::range_from_query(
+            q.days.as_deref(),
+        )),
     };
     // The provenance note sits above the tabs, not inside one: every Patterns
     // tab is a location- or hour-dependent reading, so a merged history changes
@@ -200,7 +206,7 @@ mod tests {
     /// three charts that zoom in.
     #[test]
     fn the_terrain_leads_the_when_tab_once() {
-        let html = when_content();
+        let html = when_content(30);
         assert_eq!(html.matches(r#"id="terrain""#).count(), 1);
         let head = html
             .find("When the yard is <em>alive</em>")
@@ -220,7 +226,7 @@ mod tests {
     /// One range control, not two: the terrain follows the page's, and has none of its own.
     #[test]
     fn the_when_tab_has_one_range_control() {
-        let html = when_content();
+        let html = when_content(30);
         assert_eq!(
             html.matches(r#"role="group" aria-label="Time range"#)
                 .count(),
@@ -233,5 +239,86 @@ mod tests {
         for days in [7, 14, 30, 90, 365] {
             assert!(html.contains(&format!(r#"data-days="{days}""#)), "{days}");
         }
+    }
+
+    async fn get_page(uri: &str) -> String {
+        use tower::ServiceExt as _;
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        let response = router()
+            .with_state(state)
+            .oneshot(
+                axum::http::Request::get(uri)
+                    .body(axum::body::Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), axum::http::StatusCode::OK, "{uri}");
+        let body = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .expect("body");
+        String::from_utf8(body.to_vec()).expect("utf-8")
+    }
+
+    /// UIC-08. The range lived only in a script: `/patterns?days=365` drew the month, a reload
+    /// lost the choice and a link could not carry it. The address now sets every figure on the
+    /// tab, and the control is a form that works without the script.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_address_sets_the_range_of_every_when_figure() {
+        let html = get_page("/patterns?tab=when&days=365").await;
+        for slot in ["activity-streamgraph", "hourly-totals", "heatmap-grid"] {
+            assert!(
+                html.contains(&format!(r#"hx-get="/pages/{slot}?days=365""#)),
+                "{slot} must be drawn at the range in the address"
+            );
+        }
+        assert!(
+            html.contains(r#"data-tr-days="365""#),
+            "the terrain opens at the range in the address"
+        );
+        assert!(
+            html.contains(r#"name="days" value="365""#) && html.contains(r#"method="get""#),
+            "the range control is a form a reader without scripts can submit"
+        );
+        let from = html
+            .find(r#"id="range-controls""#)
+            .expect("the range control");
+        let control = &html[from..from + html[from..].find("</form>").expect("its end")];
+        assert_eq!(
+            control.matches(r#"aria-pressed="true""#).count(),
+            1,
+            "one range is marked as chosen: {control}"
+        );
+        assert!(
+            control.contains(r#"value="365" aria-pressed="true""#),
+            "and it is the one in the address: {control}"
+        );
+    }
+
+    /// The counterpart: no range, or one the page does not offer, opens the default month rather
+    /// than a range nobody chose, and never widens past a year.
+    #[tokio::test(flavor = "current_thread")]
+    async fn an_absent_or_unoffered_range_opens_the_month() {
+        for uri in [
+            "/patterns",
+            "/patterns?days=9999",
+            "/patterns?days=abc",
+            "/patterns?days=3",
+        ] {
+            let html = get_page(uri).await;
+            assert!(
+                html.contains(r#"hx-get="/pages/hourly-totals?days=30""#),
+                "{uri} opens on the month"
+            );
+            assert!(html.contains(r#"data-tr-days="30""#), "{uri}");
+        }
+        let html = get_page("/patterns?days=7").await;
+        assert!(html.contains(r#"hx-get="/pages/heatmap-grid?days=7""#));
+        assert!(
+            html.contains(r#"data-tr-days="30""#),
+            "the terrain draws a month at least"
+        );
     }
 }

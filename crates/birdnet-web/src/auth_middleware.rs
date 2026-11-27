@@ -163,6 +163,26 @@ type AuthFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Response> +
 
 async fn private_gate_middleware(request: Request<Body>, next: Next, state: &AppState) -> Response {
     if !state.private_mode() {
+        // OOB-13: the live microphone is behind its own policy on an open
+        // station (`crate::live_audio`). On a private one the code below
+        // decides, carve-out included.
+        if crate::live_audio::is_live_audio_path(request.uri().path()) {
+            let path = request.uri().path().to_owned();
+            let cookie = request
+                .headers()
+                .get(header::COOKIE)
+                .and_then(|v| v.to_str().ok())
+                .map(str::to_owned);
+            let authority = crate::open_admin_host::request_authority(&request);
+            let allowed = state
+                .run_blocking(move |state| {
+                    crate::live_audio::may_listen(state, cookie.as_deref(), authority.as_deref())
+                })
+                .await;
+            if !allowed {
+                return crate::live_audio::refusal(&path);
+            }
+        }
         return next.run(request).await;
     }
     let path = request.uri().path();
@@ -451,7 +471,7 @@ const TOUCH_AFTER_IDLE_SECS: u32 = 60;
 /// Shared by the admin gate and the private-mode gate so the two cannot
 /// accept different cookies. Blocks on the database: call it from
 /// [`AppState::run_blocking`].
-fn session_user(
+pub(crate) fn session_user(
     validated: Option<session::ValidatedToken>,
     state: &AppState,
 ) -> Option<RequestUser> {

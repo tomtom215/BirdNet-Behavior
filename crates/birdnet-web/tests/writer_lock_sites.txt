@@ -73,3 +73,8 @@ state.rs :: clear_detections  1  POST /admin/system/clear-detections
 state.rs :: set_detection_review_by  1  POST /pages/search-bulk
 state.rs :: clear_detection_review_by  1  POST /pages/detection-review-clear
 state.rs :: with_ingest_db  1  the capture daemon's detection insert path (src/daemon/processor.rs)
+live_audio.rs :: seed_at_start  1  writes the live-audio policy once, at the first start after OOB-13
+routes/admin/audio.rs :: live_access  1  POST /admin/audio/live-access writes the live-audio policy
+routes/admin/validation.rs :: add_verdict  1  POST /admin/validation/samples/{id}/verdicts appends a verdict
+routes/admin/validation.rs :: create_sample  1  POST /admin/validation/samples draws and stores a sample
+routes/station_record.rs :: open_deployment  1  POST /api/v2/deployments records an operator-stated deployment

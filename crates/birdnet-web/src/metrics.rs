@@ -230,6 +230,9 @@ pub struct MetricsRegistry {
     /// and `recording_effort_hourly` on its five-minute tick, so a write is
     /// not made for every segment.
     effort_pending: std::sync::Mutex<HashMap<EffortKey, f64>>,
+    /// The same audio, by the start of the UTC hour it began in and its
+    /// source (RES-13), drained into `recording_effort_utc` on the same tick.
+    effort_pending_utc: std::sync::Mutex<HashMap<(i64, String), f64>>,
     /// Segments the watcher announced that were gone before the pipeline
     /// read them, per source (PR-1 / S-3): recorded audio never analysed.
     segments_dropped: RwLock<HashMap<String, AtomicU64>>,
@@ -287,8 +290,15 @@ pub struct MetricsRegistry {
     analytics_mirror_last_error: RwLock<Option<String>>,
     /// Set by a disk manager whose last purge removed recordings and lowered
     /// usage by nothing (PR-7): the card is full of something the purge
-    /// cannot reach, and it has stopped deleting. Shared with the manager.
+    /// cannot reach, and it has stopped deleting. Shared with the recordings
+    /// manager.
     purge_ineffective: Arc<AtomicBool>,
+    /// The same verdict from the stream (watch) directory's manager. Its own
+    /// flag (N25-10): the two shared one, so with the stream directory on
+    /// another filesystem below the threshold the stream manager wrote `false`
+    /// every cycle over a latched recordings manager's `true`, and the
+    /// condition and gauge said whichever thread had written last.
+    stream_purge_ineffective: Arc<AtomicBool>,
     /// Set by the recordings disk manager while the disk is over the purge
     /// threshold and its last pass found nothing it was allowed to delete
     /// (N25-01): every clip left is protected, or there are none. Not a latch;
@@ -335,6 +345,7 @@ impl MetricsRegistry {
             files_analysed: RwLock::new(HashMap::new()),
             audio_analysed_ms: RwLock::new(HashMap::new()),
             effort_pending: std::sync::Mutex::new(HashMap::new()),
+            effort_pending_utc: std::sync::Mutex::new(HashMap::new()),
             segments_dropped: RwLock::new(HashMap::new()),
             segments_shed: RwLock::new(HashMap::new()),
             analysis_queue_depth: AtomicU64::new(u64::MAX),
@@ -350,6 +361,7 @@ impl MetricsRegistry {
             analytics_mirror_last_failure: AtomicU64::new(0),
             analytics_mirror_last_error: RwLock::new(None),
             purge_ineffective: Arc::new(AtomicBool::new(false)),
+            stream_purge_ineffective: Arc::new(AtomicBool::new(false)),
             nothing_purgeable: Arc::new(AtomicBool::new(false)),
             recording_held: Arc::new(AtomicBool::new(false)),
             http_responses: RwLock::new(HashMap::new()),
@@ -464,6 +476,34 @@ impl MetricsRegistry {
         std::mem::take(
             &mut *self
                 .effort_pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// Hold `secs` of analysed audio for the UTC effort ledger, under the
+    /// start of the UTC hour it began in (`hour_start_utc`, a multiple of
+    /// 3600) and its `source`. A length that is not a finite, non-negative
+    /// number is not held.
+    pub fn add_effort_pending_utc(&self, hour_start_utc: i64, source: &str, secs: f64) {
+        if !(secs.is_finite() && secs >= 0.0) {
+            return;
+        }
+        let mut pending = self
+            .effort_pending_utc
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *pending
+            .entry((hour_start_utc, source.to_owned()))
+            .or_insert(0.0) += secs;
+    }
+
+    /// Take everything held for the UTC effort ledger; the recorder gives
+    /// back with [`Self::add_effort_pending_utc`] any it could not write.
+    pub fn take_effort_pending_utc(&self) -> HashMap<(i64, String), f64> {
+        std::mem::take(
+            &mut *self
+                .effort_pending_utc
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         )
@@ -620,17 +660,26 @@ impl MetricsRegistry {
             .clone()
     }
 
-    /// The flag a disk manager sets when its purge stopped achieving
-    /// anything (PR-7), for the manager to hold.
+    /// The flag the recordings disk manager sets when its purge stopped
+    /// achieving anything (PR-7), for the manager to hold.
     #[must_use]
     pub fn purge_ineffective_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.purge_ineffective)
     }
 
-    /// Whether the last purge removed recordings without lowering usage.
+    /// The same flag for the stream (watch) directory's manager: a flag of
+    /// its own, so neither manager overwrites the other's verdict (N25-10).
+    #[must_use]
+    pub fn stream_purge_ineffective_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.stream_purge_ineffective)
+    }
+
+    /// Whether either manager's last purge removed recordings without
+    /// lowering usage.
     #[must_use]
     pub fn purge_ineffective(&self) -> bool {
         self.purge_ineffective.load(Ordering::Relaxed)
+            || self.stream_purge_ineffective.load(Ordering::Relaxed)
     }
 
     /// The flag a disk manager sets while the disk is over the purge threshold
@@ -2354,6 +2403,28 @@ mod operational_metrics_tests {
             out.contains("birdnet_analytics_mirror_failures_total 2"),
             "{out}"
         );
+    }
+
+    /// N25-10: the stream manager writing "effective" every cycle does not
+    /// clear the recordings manager's latched "ineffective", and the
+    /// counterpart: either one latched alone is reported.
+    #[test]
+    fn one_disk_manager_does_not_overwrite_the_others_purge_verdict() {
+        let r = MetricsRegistry::new();
+        let recordings = r.purge_ineffective_flag();
+        let stream = r.stream_purge_ineffective_flag();
+        recordings.store(true, Ordering::Relaxed);
+        stream.store(false, Ordering::Relaxed);
+        assert!(
+            r.purge_ineffective(),
+            "the stream manager's pass cleared the recordings manager's verdict"
+        );
+        recordings.store(false, Ordering::Relaxed);
+        assert!(!r.purge_ineffective(), "neither latched");
+        stream.store(true, Ordering::Relaxed);
+        assert!(r.purge_ineffective(), "the stream manager's own verdict");
+        let out = render_runtime_metrics(&r.snapshot());
+        assert!(out.contains("birdnet_purge_ineffective 1"), "{out}");
     }
 
     /// N25-01: the flag the disk manager holds reaches the exposition, as `0`

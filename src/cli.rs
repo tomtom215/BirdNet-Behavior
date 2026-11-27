@@ -372,6 +372,60 @@ pub struct Cli {
     #[arg(long)]
     pub apply_import: bool,
 
+    /// Analyse long recordings (an SD card's, a recorder's) by splitting them
+    /// into station segments.
+    ///
+    /// Give one recording or a folder of them (.wav, .flac, .mp3; not
+    /// descended into). Each is read a packet at a time, never whole, and
+    /// written into the watch directory as segments of `--ingest-source`, a
+    /// few at a time, for the running station to analyse as it analyses its
+    /// own; its detections are kept as imported history. A damaged packet or a
+    /// gap in the recording starts a new segment where the audio resumes.
+    /// Needs `--ingest-source` and the start: `--ingest-start`, or
+    /// `--ingest-name-rule` with `--ingest-utc-offset`. A rerun skips what was
+    /// imported (by content, source and start), so it is safe to repeat.
+    #[arg(long, value_name = "PATH")]
+    pub ingest_recordings: Option<PathBuf>,
+
+    /// The source name `--ingest-recordings` records the audio under: letters,
+    /// digits and `_`. Use one no live source has.
+    #[arg(long, value_name = "NAME", requires = "ingest_recordings")]
+    pub ingest_source: Option<String>,
+
+    /// When the recording given to `--ingest-recordings` started, with its UTC
+    /// offset: `2026-05-19T04:30:00Z` or `2026-05-19T06:30:00+02:00`. One
+    /// recording only; nothing is read from the clock or the file's date.
+    #[arg(long, value_name = "TIME", requires = "ingest_recordings")]
+    pub ingest_start: Option<String>,
+
+    /// Read each recording's start from its name: `yyyymmdd_hhmmss`, the last
+    /// `YYYYMMDD_HHMMSS` in it, as `AudioMoth` and Song Meter recorders write.
+    /// Needs `--ingest-utc-offset`.
+    #[arg(long, value_name = "RULE", requires = "ingest_recordings")]
+    pub ingest_name_rule: Option<String>,
+
+    /// The UTC offset the recorder wrote its names in, for
+    /// `--ingest-name-rule`: `Z` (`AudioMoth`'s default) or `+HH:MM` / `-HH:MM`.
+    #[arg(long, value_name = "OFFSET", requires = "ingest_name_rule")]
+    pub ingest_utc_offset: Option<String>,
+
+    /// The length of each segment `--ingest-recordings` writes, in seconds
+    /// (3 to 600). Default: the station's segment length.
+    #[arg(long, value_name = "SECONDS", requires = "ingest_recordings",
+          value_parser = clap::value_parser!(u32).range(3..=600))]
+    pub ingest_segment_secs: Option<u32>,
+
+    /// At most this many imported segments wait in the watch directory at
+    /// once; the next is written when the station has analysed one.
+    #[arg(long, value_name = "N", default_value_t = 4)]
+    pub ingest_max_pending: u32,
+
+    /// Stop `--ingest-recordings` when the station has analysed none of the
+    /// waiting segments for this many seconds (is it running?). A rerun
+    /// carries on.
+    #[arg(long, value_name = "SECONDS", default_value_t = 600)]
+    pub ingest_stall_secs: u32,
+
     /// Attempt safe automatic repairs, then run the diagnostic.
     ///
     /// Implies `--doctor` (use with `--doctor-json` for machine-readable

@@ -327,7 +327,7 @@ fn render_weekly_chart(
         mean_line: true,
         future_from,
         weekday_labels: true,
-        table: false,
+        table: true,
         class: "",
     })
 }

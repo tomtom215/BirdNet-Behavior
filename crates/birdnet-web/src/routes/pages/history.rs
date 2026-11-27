@@ -56,7 +56,13 @@ pub fn router() -> Router<AppState> {
 pub struct HistoryParams {
     /// Selected date (YYYY-MM-DD). Defaults to today.
     pub date: Option<String>,
+    /// The day page's page of its log, from 1 (newest first). Anything else is page 1.
+    pub page: Option<String>,
 }
+
+/// Rows of a day's log on one page of the day page. A busy dawn on a station with several
+/// sources is thousands of rows, which the page drew in one response (UIC-21).
+const DAY_PAGE_ROWS: u32 = 200;
 
 /// Query parameters for the calendar partial.
 #[derive(Debug, Deserialize)]
@@ -77,8 +83,10 @@ pub struct CalendarParams {
 /// initial day-detail panel; month navigation and day selection then swap the
 /// two partials below.
 pub(super) async fn content(state: AppState) -> String {
+    // Only the last day is needed here (it seeds the calendar's month and the day panel), and
+    // the per-day counts of every day ever recorded were read to learn it (UIC-21).
     let days = tokio::task::spawn_blocking(move || {
-        state.with_read_db(birdnet_db::sqlite::detections_per_day)
+        state.with_read_db(birdnet_db::sqlite::detection_date_bounds)
     })
     .await;
     // A failed read is not an empty history. Collapsing both into `Vec::new()`
@@ -88,15 +96,15 @@ pub(super) async fn content(state: AppState) -> String {
     let days = match days {
         Ok(Ok(d)) => d,
         Ok(Err(e)) => {
-            tracing::warn!(error = %e, "history: detections_per_day failed");
+            tracing::warn!(error = %e, "history: detection_date_bounds failed");
             return history_error();
         }
         Err(e) => {
-            tracing::warn!(error = %e, "history: detections_per_day task failed");
+            tracing::warn!(error = %e, "history: detection_date_bounds task failed");
             return history_error();
         }
     };
-    render_history(&days)
+    render_history(days.as_ref().map(|(_, last)| last.as_str()))
 }
 
 /// The hero, then an honest failure card in place of the calendar.
@@ -119,7 +127,7 @@ fn history_error() -> String {
 }
 
 /// Editorial hero + the calendar / day-detail two-column layout.
-fn render_history(days: &[birdnet_db::sqlite::DayCount]) -> String {
+fn render_history(latest: Option<&str>) -> String {
     let help_link = super::help::help_link(super::help::Topic::Reports);
     let mut html = String::new();
     let _ = write!(
@@ -135,13 +143,13 @@ fn render_history(days: &[birdnet_db::sqlite::DayCount]) -> String {
         }),
     );
 
-    let Some(latest) = days.last() else {
+    let Some(latest) = latest else {
         html.push_str(
             r#"<p class="hist-empty">No detection history yet. Once your station logs its first day, it'll appear here.</p>"#,
         );
         return html;
     };
-    let sel = latest.date.as_str();
+    let sel = latest;
     let month = sel.get(0..7).unwrap_or("");
 
     let _ = write!(
@@ -162,11 +170,30 @@ async fn history_calendar_partial(
     State(state): State<AppState>,
     Query(params): Query<CalendarParams>,
 ) -> impl IntoResponse {
+    let month_param = params.month.clone();
     let result = tokio::task::spawn_blocking(move || {
-        state.with_read_db(birdnet_db::sqlite::detections_per_day)
+        state.with_read_db(|conn| {
+            // The month asked for, clamped to the history's two ends, and that month's counts
+            // only: every month click grouped the whole table to draw thirty days (UIC-21).
+            let Some(bounds) = birdnet_db::sqlite::detection_date_bounds(conn)? else {
+                return Ok((Vec::new(), None, None));
+            };
+            let span = MonthSpan::of(&bounds.0, &bounds.1);
+            let month = span.clamp(month_param.as_deref());
+            let (year, mon) = parse_month(&month);
+            let days = birdnet_db::sqlite::detections_per_day_between(
+                conn,
+                &format!("{month}-01"),
+                &format!("{month}-{:02}", days_in_month(year, mon)),
+            )?;
+            // The ledger only adds a statement ("off"); a failed read of it leaves the
+            // calendar without that statement, never without the calendar.
+            let ledger = super::listening::StationLedger::read(conn).ok();
+            Ok::<_, birdnet_db::sqlite::DbError>((days, ledger, Some((span, month))))
+        })
     })
     .await;
-    let Ok(Ok(days)) = result else {
+    let Ok(Ok((days, ledger, span))) = result else {
         // These four partials all answer 200, so the layout's
         // `htmx:responseError` fallback never runs and whatever is written
         // here is the reader's last word. `content()` in this same file
@@ -181,7 +208,89 @@ async fn history_calendar_partial(
         .sel
         .as_deref()
         .filter(|s| crate::routes::is_valid_date(s));
-    axum::response::Html(render_calendar(&days, params.month.as_deref(), sel))
+    let Some((span, month)) = span else {
+        return axum::response::Html(
+            r#"<p class="hist-empty">No detection history yet.</p>"#.to_string(),
+        );
+    };
+    let today = today_date_string();
+    axum::response::Html(render_month(
+        &days,
+        &span,
+        &month,
+        sel,
+        &DayStates {
+            ledger: ledger.as_ref(),
+            today: &today,
+        },
+    ))
+}
+
+/// The first and the last month with history (`YYYY-MM`): what the calendar's month buttons
+/// may reach.
+struct MonthSpan {
+    earliest: String,
+    latest: String,
+}
+
+impl MonthSpan {
+    /// The span of two `YYYY-MM-DD` dates.
+    fn of(first: &str, last: &str) -> Self {
+        Self {
+            earliest: first.get(0..7).unwrap_or("").to_owned(),
+            latest: last.get(0..7).unwrap_or("").to_owned(),
+        }
+    }
+
+    /// The month asked for, or the latest when none (or not a `YYYY-MM`) was, held inside the
+    /// span.
+    fn clamp(&self, asked: Option<&str>) -> String {
+        let month = asked
+            .filter(|m| m.len() == 7 && m.as_bytes()[4] == b'-')
+            .unwrap_or(&self.latest);
+        if month < self.earliest.as_str() {
+            self.earliest.clone()
+        } else if month > self.latest.as_str() {
+            self.latest.clone()
+        } else {
+            month.to_owned()
+        }
+    }
+}
+
+/// What the calendar needs, beyond the counts, to tell a day's three empty states apart
+/// (UIR-09; `docs/design/charts.md` honesty rule 3): the effort ledger, for "off", and today,
+/// for "not yet".
+struct DayStates<'a> {
+    /// The station's ledger; `None` when it could not be read or the station has none, and
+    /// then no day is called off.
+    ledger: Option<&'a super::listening::StationLedger>,
+    /// The local date today, `YYYY-MM-DD`.
+    today: &'a str,
+}
+
+/// The calendar as the tests before UIR-09 drew it: no ledger, and no day to come.
+#[cfg(test)]
+fn render_calendar(
+    days: &[birdnet_db::sqlite::DayCount],
+    month_opt: Option<&str>,
+    sel: Option<&str>,
+) -> String {
+    let (Some(first), Some(last)) = (days.first(), days.last()) else {
+        return r#"<p class="hist-empty">No detection history yet.</p>"#.to_string();
+    };
+    let span = MonthSpan::of(&first.date, &last.date);
+    let month = span.clamp(month_opt);
+    render_month(
+        days,
+        &span,
+        &month,
+        sel,
+        &DayStates {
+            ledger: None,
+            today: "9999-12-31",
+        },
+    )
 }
 
 #[allow(
@@ -190,28 +299,19 @@ async fn history_calendar_partial(
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap
 )]
-fn render_calendar(
+fn render_month(
     days: &[birdnet_db::sqlite::DayCount],
-    month_opt: Option<&str>,
+    span: &MonthSpan,
+    month: &str,
     sel: Option<&str>,
+    states: &DayStates<'_>,
 ) -> String {
-    if days.is_empty() {
-        return r#"<p class="hist-empty">No detection history yet.</p>"#.to_string();
-    }
     let map: HashMap<&str, (i64, i64)> = days
         .iter()
         .map(|d| (d.date.as_str(), (d.count, d.species)))
         .collect();
-    let earliest_month = days[0].date.get(0..7).unwrap_or("");
-    let latest_month = days[days.len() - 1].date.get(0..7).unwrap_or("");
-
-    // Resolve + clamp the requested month to the range that has data.
-    let mut month = month_opt.filter(|m| m.len() == 7).unwrap_or(latest_month);
-    if month < earliest_month {
-        month = earliest_month;
-    } else if month > latest_month {
-        month = latest_month;
-    }
+    let earliest_month = span.earliest.as_str();
+    let latest_month = span.latest.as_str();
     let (year, mon) = parse_month(month);
 
     // Month-local maximum drives the heat ramp so each month reads on its own.
@@ -265,9 +365,42 @@ fn render_calendar(
     for _ in 0..lead {
         html.push_str(r#"<div class="rp-day empty"></div>"#);
     }
+    let (mut any_off, mut any_future) = (false, false);
     for day in 1..=days_in_month(year, mon) {
         let date = format!("{year:04}-{mon:02}-{day:02}");
         let (count, species) = map.get(date.as_str()).copied().unwrap_or((0, 0));
+        // UIR-09: three empty cells that are three different facts. A day to come is not a
+        // link (there is nothing to open) and is outlined; a day the ledger says the station
+        // did not listen to is hatched and says "off"; a listened day with nothing heard is
+        // the plain cell. Today is never off: the recorder credits on a timer.
+        let month_sr = format!(r#"<span class="sr-only"> {month_label},</span>"#);
+        if date.as_str() > states.today {
+            any_future = true;
+            let _ = write!(
+                html,
+                r#"<div class="rp-day future"><span class="dn">{day}{month_sr}</span><span class="sr-only"> not yet</span></div>"#,
+            );
+            continue;
+        }
+        let off = count == 0
+            && date.as_str() != states.today
+            && states
+                .ledger
+                .and_then(|l| l.listened(&date))
+                .is_some_and(|listened| !listened);
+        if off {
+            any_off = true;
+            let current = if sel == Some(date.as_str()) {
+                r#" aria-current="date""#
+            } else {
+                ""
+            };
+            let _ = write!(
+                html,
+                r#"<a class="rp-day off" href="/reports/day?date={date}" hx-get="/pages/history-chart?date={date}" hx-target='#rp-daydetail' hx-swap="innerHTML"{current}><span class="dn">{day}{month_sr}</span><span class="doff" aria-hidden="true">off</span><span class="sr-only"> station not listening</span></a>"#,
+            );
+            continue;
+        }
         let heat = heat_bg(count, cmax);
         let sel_cls = if sel == Some(date.as_str()) {
             " sel"
@@ -279,7 +412,6 @@ fn render_calendar(
         // own text, with what the eye takes from the grid ("May", "detections") written for a
         // screen reader only, so the visible label is part of its name (WCAG 2.5.3): an
         // `aria-label` replaced the visible "23 sp" with "23 species" and axe reported every cell.
-        let month_sr = format!(r#"<span class="sr-only"> {month_label},</span>"#);
         let body = if count > 0 {
             format!(
                 r#"<span class="dc"> {count}<span class="sr-only"> detection{s},</span></span><span class="dsp"> {species} sp<span class="sr-only">ecies</span></span>"#,
@@ -310,7 +442,14 @@ fn render_calendar(
             heat_bg((cmax * n / 100).max(1), cmax),
         );
     }
-    html.push_str("more</div>");
+    html.push_str("more");
+    if any_off {
+        html.push_str(r#"<span class="rp-key"><span class="rp-legend-off" aria-hidden="true"></span>station not listening</span>"#);
+    }
+    if any_future {
+        html.push_str(r#"<span class="rp-key"><span class="rp-legend-future" aria-hidden="true"></span>not yet</span>"#);
+    }
+    html.push_str("</div>");
     html
 }
 
@@ -404,6 +543,12 @@ async fn day_page(
         .filter(|d| d.len() == 10)
         .unwrap_or_else(today_date_string);
 
+    let page = params
+        .page
+        .as_deref()
+        .and_then(|p| p.parse::<u32>().ok())
+        .filter(|p| *p >= 1)
+        .unwrap_or(1);
     let date2 = date.clone();
     let names = state.names_handle();
     let result = tokio::task::spawn_blocking(move || {
@@ -411,7 +556,12 @@ async fn day_page(
             let hours = birdnet_db::sqlite::hourly_activity(conn, &date)?;
             let total = birdnet_db::sqlite::detection_count_for_date(conn, &date)?;
             let species = birdnet_db::sqlite::species_for_date(conn, &date)?;
-            let rows = birdnet_db::sqlite::detections_by_date(conn, &date)?;
+            let rows = birdnet_db::sqlite::detections_by_date_page(
+                conn,
+                &date,
+                DAY_PAGE_ROWS,
+                (page - 1).saturating_mul(DAY_PAGE_ROWS),
+            )?;
             let floor = super::confidence::station_floor(conn);
             Ok::<_, birdnet_db::sqlite::DbError>((hours, total, species, rows, floor))
         })
@@ -420,14 +570,22 @@ async fn day_page(
 
     let content = match result {
         Ok(Ok((hours, total, species, rows, floor))) => {
-            render_day_page(&date2, total, &species, &hours, &rows, &names, floor)
+            let log = DayLog {
+                rows: &rows,
+                page,
+                total,
+            };
+            render_day_page(&date2, &species, &hours, &log, &names, floor)
         }
         _ => format!(
             r#"<a class="action" href="/reports?tab=history">‹ Back to history</a>{}"#,
             super::error_states::could_not_load("this day")
         ),
     };
-    let title = format!("History · {date2}");
+    let title = format!(
+        "History · {}",
+        crate::display::date_text(&date2).unwrap_or_else(|| date2.clone())
+    );
     super::render_page_for_request(&title, &content, "reports", &headers)
 }
 
@@ -471,9 +629,8 @@ fn render_chart_content(
     };
     let _ = write!(
         html,
-        r#"<div class="section-header"><div><div class="bnb-eyebrow">{date} · {weekday}</div><h2 class="sh-h">{total} detections · {n} species</h2></div>{open_day}</div>"#,
-        date = escape_html(date),
-        weekday = weekday_name(date),
+        r#"<div class="section-header"><div><div class="bnb-eyebrow">{date}</div><h2 class="sh-h">{total} detections · {n} species</h2></div>{open_day}</div>"#,
+        date = crate::display::date(date),
         n = species.len(),
     );
     let _ = write!(
@@ -504,19 +661,19 @@ fn render_chart_content(
 /// Read-only — managing detections stays on Today / Recordings.
 fn render_day_page(
     date: &str,
-    total: i64,
     species: &[(String, String, i64)],
     hours: &[birdnet_db::sqlite::HourlyCount],
-    rows: &[birdnet_db::sqlite::DetectionRow],
+    log: &DayLog<'_>,
     names: &birdnet_core::i18n::NameLocalizer,
     floor: f64,
 ) -> String {
+    let total = log.total;
     let mut html = String::new();
     // The shared head (UIR-27): the day's heading was an `sh-h` inside its first card.
     let head = super::frame::page_head(&super::frame::Head {
         eyebrow: &format!("Reports · {}", weekday_name(date)),
         help: &super::help::help_link(super::help::Topic::Reports),
-        title: &escape_html(date),
+        title: &crate::display::date(date),
         lead: "",
         lede: &format!(
             "{total} detections · {n} species. <a href=\"/reports?tab=history\">‹ Back to history</a>",
@@ -552,16 +709,87 @@ fn render_day_page(
     }
     html.push_str("</div>");
 
-    // The complete log for the day, newest first.
-    html.push_str(
-        r#"<div class="bnb-card pad"><div class="rp-h3">Every detection · newest first</div>"#,
+    // The day's log, newest first, a page at a time.
+    let pager = log.pager(date);
+    let _ = write!(
+        html,
+        r#"<div class="bnb-card pad" id="day-log"><div class="rp-h3">Every detection · newest first</div>{range}"#,
+        range = log.range_line(),
     );
+    html.push_str(&super::frame::counted(""));
     html.push_str(&super::confidence::legend(floor));
-    for d in rows {
+    for d in log.rows {
         render_day_log_row(&mut html, d, names, floor);
     }
+    html.push_str(&pager);
     html.push_str("</div>");
     html
+}
+
+/// One page of a day's log, and where it sits in the day.
+struct DayLog<'a> {
+    /// This page's rows, newest first.
+    rows: &'a [birdnet_db::sqlite::DetectionRow],
+    /// The page, from 1.
+    page: u32,
+    /// Every detection of the day.
+    total: i64,
+}
+
+impl DayLog<'_> {
+    /// How many pages the day has (at least one).
+    fn pages(&self) -> u32 {
+        let total = u32::try_from(self.total.max(0)).unwrap_or(u32::MAX);
+        total.div_ceil(DAY_PAGE_ROWS).max(1)
+    }
+
+    /// "Detections 201–400 of 450", only when the day has more than one page.
+    fn range_line(&self) -> String {
+        if self.pages() <= 1 {
+            return String::new();
+        }
+        let first = (self.page - 1).saturating_mul(DAY_PAGE_ROWS) + 1;
+        let shown = u32::try_from(self.rows.len()).unwrap_or(0);
+        if shown == 0 {
+            return format!(
+                r#"<p class="bnb-meta">No detections on this page; the day has {} pages.</p>"#,
+                self.pages()
+            );
+        }
+        format!(
+            r#"<p class="bnb-meta">Detections {first}–{last} of {total}, page {page} of {pages}.</p>"#,
+            last = first + shown - 1,
+            total = super::group_thousands(self.total),
+            page = self.page,
+            pages = self.pages(),
+        )
+    }
+
+    /// Newer and older links: real links, which work without a script.
+    fn pager(&self, date: &str) -> String {
+        if self.pages() <= 1 {
+            return String::new();
+        }
+        let d = simple_url_encode(date);
+        let mut out =
+            String::from(r#"<nav class="rp-pager" aria-label="Pages of this day's log">"#);
+        if self.page > 1 {
+            let _ = write!(
+                out,
+                r#"<a class="bnb-btn ghost" href="/reports/day?date={d}&amp;page={p}#day-log">‹ Newer</a> "#,
+                p = self.page - 1,
+            );
+        }
+        if self.page < self.pages() {
+            let _ = write!(
+                out,
+                r#"<a class="bnb-btn ghost" href="/reports/day?date={d}&amp;page={p}#day-log">Older ›</a>"#,
+                p = self.page + 1,
+            );
+        }
+        out.push_str("</nav>");
+        out
+    }
 }
 
 /// One read-only row of the Open-day log: avatar · species (→ detail) ·
@@ -1036,10 +1264,13 @@ mod tests {
         ];
         let html = render_day_page(
             "2026-06-14",
-            7,
             &species,
             &hours,
-            &rows,
+            &DayLog {
+                rows: &rows,
+                page: 1,
+                total: 7,
+            },
             &birdnet_core::i18n::NameLocalizer::english(),
             0.70,
         );
@@ -1062,15 +1293,271 @@ mod tests {
     fn render_day_page_empty_day_has_no_log() {
         let html = render_day_page(
             "2026-06-14",
-            0,
             &[],
             &[],
-            &[],
+            &DayLog {
+                rows: &[],
+                page: 1,
+                total: 0,
+            },
             &birdnet_core::i18n::NameLocalizer::english(),
             0.70,
         );
         assert!(html.contains("No detections were recorded"));
         assert!(html.contains("Back to history"));
         assert!(!html.contains("tdl-card"));
+    }
+
+    // -----------------------------------------------------------------------
+    // UIR-09: an off day, a quiet day and a day to come are three things
+    // -----------------------------------------------------------------------
+
+    /// The class list of the cell for `date`, which is either a link (`<a class=`) or, for a
+    /// day to come, a plain box (`<div class=`).
+    fn cell_class<'a>(html: &'a str, date: &str) -> &'a str {
+        let day: u32 = date[8..].parse().expect("day");
+        // Every cell's first text is its day number in `<span class="dn">`.
+        let marker = format!(r#"<span class="dn">{day}<"#);
+        let at = html
+            .find(&marker)
+            .unwrap_or_else(|| panic!("no cell {date}"));
+        let open = html[..at]
+            .rfind("class=\"rp-day")
+            .expect("the cell's class");
+        let rest = &html[open + 7..];
+        &rest[..rest.find('"').expect("closing quote")]
+    }
+
+    /// November 2026: detections on the 5th and the 8th; the ledger from the 1st, with no
+    /// audio on the 6th and 7th; today the 10th, so the 11th onward has not happened.
+    fn november(ledger: bool) -> String {
+        let days = vec![
+            birdnet_db::sqlite::DayCount {
+                date: "2026-11-05".into(),
+                count: 30,
+                species: 4,
+            },
+            birdnet_db::sqlite::DayCount {
+                date: "2026-11-08".into(),
+                count: 10,
+                species: 2,
+            },
+        ];
+        let ledger = ledger.then(|| {
+            super::super::listening::StationLedger::from_daily(
+                [1, 2, 3, 4, 5, 8, 9]
+                    .iter()
+                    .map(|d| (format!("2026-11-{d:02}"), 86_400.0))
+                    .collect(),
+            )
+        });
+        render_month(
+            &days,
+            &MonthSpan::of("2026-11-01", "2026-11-08"),
+            "2026-11",
+            None,
+            &DayStates {
+                ledger: ledger.as_ref(),
+                today: "2026-11-10",
+            },
+        )
+    }
+
+    /// UIR-09. The 6th and 7th (no audio) were blank like the 23rd to the 30th (to come): the
+    /// reader could not tell an outage from the future. An off day is hatched and says "off";
+    /// a day to come is outlined, is not a link, and says "not yet"; a listened day with
+    /// nothing heard is a plain cell that says so.
+    #[test]
+    fn an_off_day_does_not_look_like_a_day_to_come() {
+        let html = november(true);
+        assert_eq!(cell_class(&html, "2026-11-06"), "rp-day off");
+        assert_eq!(cell_class(&html, "2026-11-07"), "rp-day off");
+        assert!(html.contains(r#"<span class="doff" aria-hidden="true">off</span>"#));
+        assert!(html.contains("<span class=\"sr-only\"> station not listening</span>"));
+        assert_eq!(cell_class(&html, "2026-11-04"), "rp-day", "quiet, listened");
+        assert_eq!(
+            cell_class(&html, "2026-11-10"),
+            "rp-day",
+            "today is never off"
+        );
+        for d in 11..=30 {
+            assert_eq!(
+                cell_class(&html, &format!("2026-11-{d:02}")),
+                "rp-day future"
+            );
+        }
+        assert!(
+            !html.contains("href=\"/reports/day?date=2026-11-11\""),
+            "a day to come is not a link"
+        );
+        assert!(html.contains("<span class=\"sr-only\"> not yet</span>"));
+        // And the legend names the two states.
+        assert!(html.contains("station not listening"));
+        assert!(html.contains("rp-legend-off") && html.contains("rp-legend-future"));
+    }
+
+    /// Counterpart: a station with no ledger (imported history) claims no day was off, and
+    /// the future is still the future.
+    #[test]
+    fn without_a_ledger_no_day_is_called_off() {
+        let html = november(false);
+        assert_eq!(cell_class(&html, "2026-11-06"), "rp-day");
+        assert!(!html.contains("rp-day off"));
+        assert!(!html.contains("rp-legend-off"));
+        assert_eq!(cell_class(&html, "2026-11-11"), "rp-day future");
+    }
+
+    /// Statements SQLite ran on the traced connection of the test below.
+    static STATEMENTS: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+    fn record(event: rusqlite::trace::TraceEvent<'_>) {
+        if let rusqlite::trace::TraceEvent::Stmt(stmt, _) = event {
+            STATEMENTS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(stmt.sql().into_owned());
+        }
+    }
+
+    /// Two years of one detection a day, and the calendar asked for one month of it.
+    fn two_years() -> rusqlite::Connection {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        conn.execute_batch(
+            "WITH RECURSIVE d(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM d WHERE n < 730)
+             INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             SELECT date('2024-11-01', '+' || n || ' days'), '06:10:00', 'Turdus merula',
+                    'Eurasian Blackbird', 0.9, 'b' || n || '.wav' FROM d;",
+        )
+        .expect("seed");
+        conn
+    }
+
+    async fn body(response: axum::response::Response) -> String {
+        let body = axum::body::to_bytes(response.into_body(), 1 << 22)
+            .await
+            .expect("body");
+        String::from_utf8(body.to_vec()).expect("utf-8")
+    }
+
+    /// UIC-21. Every month click ran `GROUP BY Date` over the whole table — every day the
+    /// station has ever recorded, to draw thirty of them (measured at 1.27 s on a 3.3 M-row
+    /// copy). The month's counts are now read for that month only. Read from SQLite's own
+    /// statement trace, not inferred from the page.
+    #[tokio::test(flavor = "current_thread")]
+    async fn the_month_calendar_asks_only_for_its_month() {
+        let mut conn = two_years();
+        conn.trace_v2(
+            rusqlite::trace::TraceEventCodes::SQLITE_TRACE_STMT,
+            Some(record),
+        )
+        .expect("trace");
+        STATEMENTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        let html = body(
+            history_calendar_partial(
+                State(state),
+                Query(CalendarParams {
+                    month: Some("2025-06".into()),
+                    sel: None,
+                }),
+            )
+            .await
+            .into_response(),
+        )
+        .await;
+        // The counterpart: the month was drawn, with its days and both neighbours.
+        assert!(html.contains("June 2025"), "{html}");
+        assert!(html.contains("/reports/day?date=2025-06-30"), "{html}");
+        assert!(
+            html.contains(r#"aria-label="Previous month""#)
+                && html.contains(r#"aria-label="Next month""#),
+            "{html}"
+        );
+        let ran = STATEMENTS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        let per_day: Vec<&String> = ran.iter().filter(|q| q.contains("GROUP BY Date")).collect();
+        assert!(
+            !per_day.is_empty(),
+            "the calendar read its counts: {ran:#?}"
+        );
+        for q in per_day {
+            assert!(
+                q.contains("Date BETWEEN"),
+                "a month of the calendar must be read for that month only: {q}"
+            );
+        }
+    }
+
+    /// UIC-21. The day page drew every detection of the day in one response: a busy dawn on a
+    /// two-model station is thousands of rows. It draws a page of them and links the next.
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_day_page_lists_one_page_of_its_detections() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open");
+        birdnet_db::migration::migrate(&conn).expect("migrate");
+        conn.execute_batch(
+            "WITH RECURSIVE d(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM d WHERE n < 449)
+             INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             SELECT '2026-06-14', printf('%02d:%02d:00', 4 + n / 60, n % 60),
+                    'Turdus merula', 'Eurasian Blackbird', 0.9, 'b' || n || '.wav' FROM d;",
+        )
+        .expect("seed");
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        let ask = |uri: &'static str| {
+            let state = state.clone();
+            async move {
+                let q = Query::<HistoryParams>::try_from_uri(&uri.parse().expect("uri"))
+                    .expect("query");
+                let Html(html) = day_page(State(state), q, HeaderMap::new()).await;
+                html
+            }
+        };
+        let first = ask("http://x/reports/day?date=2026-06-14").await;
+        let rows = first.matches("bnb-card tdl-card").count();
+        assert!(rows > 0, "the day page drew its log: {first}");
+        assert!(
+            rows <= 200,
+            "a day page must draw one page of the day's detections, not all 450: drew {rows}"
+        );
+        assert!(
+            first.contains("450 detections"),
+            "the head still counts the whole day"
+        );
+        assert!(
+            first.contains("/reports/day?date=2026-06-14&amp;page=2"),
+            "and links the next page"
+        );
+        // Newest first: page one opens on the day's last detection, 11:29.
+        let newest = first.find("time=11%3A29%3A00").expect("the newest row");
+        let older = first.find("time=11%3A28%3A00").expect("the next row");
+        assert!(newest < older, "newest first");
+        let third = ask("http://x/reports/day?date=2026-06-14&page=3").await;
+        assert_eq!(third.matches("bnb-card tdl-card").count(), 50, "the rest");
+        assert!(!third.contains("page=4"), "nothing after the last page");
+        assert!(third.contains("page=2"), "the previous page");
+    }
+
+    /// UIR-20. History wrote a day three ways: "2026-06-14 · Sun" over the panel, a bare
+    /// "2026-06-14" as the day page's heading, "Sun 26 Jul" in a calendar note. Prose dates are
+    /// now one shape, "Sun 14 Jun 2026", in a `<time>` carrying the ISO date for a machine.
+    #[test]
+    fn a_day_in_prose_is_written_one_way() {
+        let panel = render_chart_content(
+            "2026-06-14",
+            0,
+            &[],
+            &[],
+            &birdnet_core::i18n::NameLocalizer::english(),
+        );
+        assert!(
+            panel.contains(r#"<time datetime="2026-06-14">Sun 14 Jun 2026</time>"#),
+            "{panel}"
+        );
+        assert!(!panel.contains("2026-06-14 · "), "{panel}");
     }
 }

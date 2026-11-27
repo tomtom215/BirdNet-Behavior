@@ -14,6 +14,7 @@ mod cli;
 mod daemon;
 mod doctor;
 mod helpers;
+mod ingest;
 mod integrations;
 mod log_capture;
 mod log_filter;
@@ -62,6 +63,9 @@ enum Action {
     /// `--import-birdnet-pi-clips`: find, or with `--apply-import` bring
     /// across, the recordings of imported detections; then exit.
     ImportBirdnetPiClips,
+    /// `--ingest-recordings`: split long recordings into segments in the
+    /// watch directory for the running station to analyse; then exit.
+    IngestRecordings,
     /// `--rebuild-species-summary`: recompute the maintained per-species
     /// totals from the detections and exit.
     RebuildSpeciesSummary,
@@ -109,6 +113,8 @@ const fn dispatch_subcommand(cli: &Cli) -> Action {
         Action::ImportBirdnetPiConf
     } else if cli.import_birdnet_pi_clips.is_some() {
         Action::ImportBirdnetPiClips
+    } else if cli.ingest_recordings.is_some() {
+        Action::IngestRecordings
     } else if cli.rebuild_species_summary {
         Action::RebuildSpeciesSummary
     } else if cli.decrypt_backup.is_some() {
@@ -181,7 +187,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // structured output like `--doctor-json`.
     tracing_subscriber::registry()
         .with(filter_layer)
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                // Colour only on a terminal (MDL-28): under systemd the
+                // journal stored the escape codes. `NO_COLOR` still wins.
+                .with_ansi(
+                    std::io::IsTerminal::is_terminal(&std::io::stderr())
+                        && std::env::var_os("NO_COLOR").is_none(),
+                ),
+        )
         .with(log_capture::LogCapture::new(
             log_broadcaster.clone(),
             error_log,
@@ -220,11 +235,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        config = %cli.config.display(),
-        "starting BirdNet-Behavior"
-    );
+    if announces_start(dispatch_subcommand(&cli)) {
+        tracing::info!(
+            version = env!("CARGO_PKG_VERSION"),
+            config = %cli.config.display(),
+            "starting BirdNet-Behavior"
+        );
+    }
 
     // Load configuration (optional — may not exist on fresh installs).
     let config = match birdnet_core::config::Config::load_from(&cli.config) {
@@ -274,7 +291,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // own, instead of starting with the web page and no listening.
     if matches!(
         dispatch_subcommand(&cli),
-        Action::RunServer | Action::Doctor(_)
+        Action::RunServer | Action::Doctor(_) | Action::IngestRecordings
     ) {
         let applied = helpers::station_defaults::apply(&mut cli, config.as_ref());
         if applied.classifier {
@@ -314,6 +331,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Action::ImportBirdnetPiClips => {
             let code = helpers::migrate_cli::run_import_clips(&cli, config.as_ref());
+            std::process::exit(code);
+        }
+        Action::IngestRecordings => {
+            // `spawn_blocking`: it decodes, writes and waits on the station
+            // for as long as the recordings take.
+            let (cli, config) = (cli.clone(), config.clone());
+            let code = tokio::task::spawn_blocking(move || ingest::run(&cli, config.as_ref()))
+                .await
+                .unwrap_or(1);
             std::process::exit(code);
         }
         Action::RebuildSpeciesSummary => {
@@ -411,6 +437,13 @@ fn reload_filter_spec(cli: &Cli, startup_rust_log: Option<&str>) -> (String, Vec
     )
 }
 
+/// Whether this invocation says "starting BirdNet-Behavior" (MDL-28): only
+/// the station itself. The unit's pre-start `--doctor` runs the same binary,
+/// and every start logged the line twice.
+const fn announces_start(action: Action) -> bool {
+    matches!(action, Action::RunServer)
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests for the pure top-level dispatch.
@@ -430,6 +463,18 @@ mod tests {
         let mut full = vec!["birdnet-behavior"];
         full.extend_from_slice(args);
         Cli::parse_from(full)
+    }
+
+    /// MDL-28: the station announces its start; the doctor the unit runs
+    /// before it, and every other one-shot command, does not.
+    #[test]
+    fn only_the_station_says_it_is_starting() {
+        assert!(super::announces_start(super::dispatch_subcommand(
+            &cli(&[])
+        )));
+        assert!(!super::announces_start(super::dispatch_subcommand(&cli(
+            &["--doctor"]
+        ))));
     }
 
     #[test]
@@ -486,6 +531,21 @@ mod tests {
         assert!(!parsed.apply_import, "the default is to look");
         assert_eq!(parsed.clips_mode, "copy");
         assert!(cli(&["--import-birdnet-pi-conf", "/x", "--apply-import"]).apply_import);
+    }
+
+    /// `--ingest-recordings` is a run-and-exit command too, and a flag that
+    /// only means something beside it is refused without it.
+    #[test]
+    fn ingest_recordings_is_a_run_and_exit_command() {
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--ingest-recordings", "/cards", "--doctor"])),
+            Action::IngestRecordings
+        );
+        assert!(
+            Cli::try_parse_from(["birdnet-behavior", "--ingest-source", "c1"]).is_err(),
+            "--ingest-source alone is refused"
+        );
+        assert_eq!(dispatch_subcommand(&cli(&[])), Action::RunServer);
     }
 
     /// The dry-run must not be reachable only by an operator who happens not to

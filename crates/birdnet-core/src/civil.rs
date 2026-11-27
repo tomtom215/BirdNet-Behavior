@@ -452,6 +452,17 @@ pub fn birdnet_week_from_date(date: &str) -> Option<u32> {
     Some(birdnet_week(civil.month, civil.day))
 }
 
+/// The BirdNET week of the instant `offset_secs` after `date` `time`.
+///
+/// The week a window starting that far into a recording was heard in (review
+/// F13). [`shift_datetime`] rolls the day, month and year, leap days included,
+/// and [`birdnet_week`] bins the result. `None` when the input does not parse.
+#[must_use]
+pub fn birdnet_week_at(date: &str, time: &str, offset_secs: f64) -> Option<u32> {
+    let (shifted, _) = shift_datetime(date, time, offset_secs)?;
+    birdnet_week_from_date(&shifted)
+}
+
 /// Unix-time floor below which the system clock is not trusted for anything
 /// that depends on knowing the date.
 ///
@@ -1738,5 +1749,46 @@ mod rfc3339_tests {
         assert_eq!(rfc3339_utc(0), "1970-01-01T00:00:00Z");
         let t = unix_secs_from_civil(&parse_civil("2026-07-01", "11:00:00").unwrap());
         assert_eq!(rfc3339_utc(t), "2026-07-01T11:00:00Z");
+    }
+}
+
+#[cfg(test)]
+mod window_week_tests {
+    use super::birdnet_week_at;
+
+    /// Review F13: the week a window was heard in, from the recording's start
+    /// and the window's offset. Days 1-7 of March are bin 9 and day 8 begins
+    /// bin 10; a window five seconds into a recording that starts at
+    /// 23:59:55 on the 7th starts at midnight on the 8th.
+    #[test]
+    fn a_window_s_week_is_the_week_of_its_own_capture_date() {
+        let at = |d, t, o| birdnet_week_at(d, t, o);
+        assert_eq!(at("2026-03-07", "23:59:55", 0.0), Some(9));
+        assert_eq!(
+            at("2026-03-07", "23:59:55", 4.9),
+            Some(9),
+            "a second to midnight"
+        );
+        assert_eq!(
+            at("2026-03-07", "23:59:55", 5.0),
+            Some(10),
+            "midnight is the 8th"
+        );
+        assert_eq!(at("2026-03-07", "23:59:55", 12.0), Some(10));
+        // The year: 31 December is bin 48, 1 January bin 1.
+        assert_eq!(at("2026-12-31", "23:59:55", 3.0), Some(48));
+        assert_eq!(at("2026-12-31", "23:59:55", 6.0), Some(1));
+        // A leap year's 29 February is a day of its own, in bin 8 with the
+        // 28th; the day after it is 1 March, bin 9.
+        assert_eq!(at("2028-02-28", "23:59:55", 6.0), Some(8), "2028-02-29");
+        assert_eq!(at("2028-02-29", "23:59:55", 6.0), Some(9), "2028-03-01");
+        // Counterpart: in a common year the 28th is followed by 1 March.
+        assert_eq!(at("2027-02-28", "23:59:55", 6.0), Some(9), "2027-03-01");
+        // A bin boundary inside a month: the 14th (bin 2) to the 15th (bin 3).
+        assert_eq!(at("2026-05-14", "23:59:58", 0.0), Some(18));
+        assert_eq!(at("2026-05-14", "23:59:58", 3.0), Some(19));
+        // Nothing invented for input that does not parse.
+        assert_eq!(at("2026-03-07", "25:00:00", 6.0), None);
+        assert_eq!(at("2026-03-07", "23:59:55", f64::NAN), None);
     }
 }

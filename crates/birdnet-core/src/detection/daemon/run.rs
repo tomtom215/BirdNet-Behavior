@@ -517,6 +517,8 @@ struct DaemonLoop {
     model_state: Option<ModelStateObserver>,
     throughput: Option<ThroughputObserver>,
     in_flight: Option<InFlight>,
+    /// [`DaemonConfig::refused_dir`].
+    refused_dir: Option<PathBuf>,
     shed_policy: Option<ShedPolicy>,
     /// The shed decision in force, logged on change rather than on every
     /// 500 ms sweep.
@@ -566,6 +568,7 @@ impl DaemonLoop {
             model_state: config.on_model_state.clone(),
             throughput: config.on_file_analysed.clone(),
             in_flight: config.in_flight.clone(),
+            refused_dir: config.refused_dir.clone(),
             shed_policy: config.shed.clone(),
             shedding: None,
             shedder: Shedder::default(),
@@ -790,7 +793,11 @@ impl DaemonLoop {
                     );
                     return SweepEnd::ReceiverGone;
                 }
-                Analysed::Failed(e) => self.report_failure(&path, &correlation_id, &e),
+                Analysed::Failed(e) => {
+                    if !self.set_aside_if_too_long(&path, &e) {
+                        self.report_failure(&path, &correlation_id, &e);
+                    }
+                }
             }
         }
         SweepEnd::Swept
@@ -871,6 +878,45 @@ impl DaemonLoop {
         Analysed::Done
     }
 
+    /// Move a recording the pipeline refused as too long out of the watch
+    /// directory (review F11), and say where and what takes it. `true` when
+    /// the error was that refusal, whether or not the move worked: either way
+    /// it has been reported.
+    ///
+    /// Moved because the stream directory's purge drains every file older
+    /// than its age limit, analysed or not. Before the admission check such a
+    /// recording was decoded whole and then purged; refused and left there,
+    /// it would be purged unanalysed.
+    fn set_aside_if_too_long(&self, path: &Path, error: &DaemonError) -> bool {
+        use crate::audio::admission::{AdmissionError, INGEST_COMMAND};
+        let DaemonError::Pipeline(crate::detection::pipeline::PipelineError::Refused(
+            refusal @ AdmissionError::TooLong { .. },
+        )) = error
+        else {
+            return false;
+        };
+        let Some(dir) = self.refused_dir.as_deref() else {
+            tracing::warn!(file = %path.display(), "{refusal}");
+            return true;
+        };
+        match set_aside(path, dir) {
+            Ok(moved) => tracing::warn!(
+                file = %path.display(),
+                moved_to = %moved.display(),
+                "{refusal}. It has been moved out of the watch directory, whose purge would \
+                 have deleted it; analyse it with `{INGEST_COMMAND} {}`",
+                moved.display()
+            ),
+            Err(e) => tracing::error!(
+                file = %path.display(),
+                error = %e,
+                "{refusal}. It could not be moved out of the watch directory, whose purge \
+                 will delete it; move it yourself"
+            ),
+        }
+        true
+    }
+
     /// A live file the pipeline failed on: a warning, and a dropped segment
     /// when it is gone — the same loss as a vanished pending file, counted
     /// the same way.
@@ -946,12 +992,14 @@ impl DaemonLoop {
                     return;
                 }
                 Analysed::Failed(e) => {
-                    tracing::debug!(
-                        correlation_id = %correlation_id,
-                        file = %path.display(),
-                        error = %e,
-                        "skipping existing file"
-                    );
+                    if !self.set_aside_if_too_long(&path, &e) {
+                        tracing::debug!(
+                            correlation_id = %correlation_id,
+                            file = %path.display(),
+                            error = %e,
+                            "skipping existing file"
+                        );
+                    }
                 }
             }
         }
@@ -959,6 +1007,47 @@ impl DaemonLoop {
             tracing::info!(count, "processed existing audio files");
         }
     }
+}
+
+/// Move `path` into `dir`, whole, under its own name (or `<stem>-<n>.<ext>`
+/// when that is taken), and return where it went.
+///
+/// A rename where `dir` is on the same filesystem. Otherwise (the stream
+/// directory is usually RAM-backed) a copy to a hidden partial file, synced,
+/// renamed into place, and only then the original removed: a failure at any
+/// step leaves the original where it was.
+fn set_aside(path: &Path, dir: &Path) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let name = path.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the path has no file name",
+        )
+    })?;
+    let mut dest = dir.join(name);
+    let stem = path
+        .file_stem()
+        .map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+    let ext = path.extension().map(|e| e.to_string_lossy().into_owned());
+    let mut n = 1_u32;
+    while dest.exists() {
+        dest = dir.join(
+            ext.as_deref()
+                .map_or_else(|| format!("{stem}-{n}"), |ext| format!("{stem}-{n}.{ext}")),
+        );
+        n += 1;
+    }
+    if std::fs::rename(path, &dest).is_err() {
+        let partial = dir.join(format!(".{}.partial", name.to_string_lossy()));
+        std::fs::copy(path, &partial)?;
+        std::fs::File::open(&partial)?.sync_all()?;
+        std::fs::rename(&partial, &dest)?;
+        std::fs::remove_file(path)?;
+    }
+    if let Ok(d) = std::fs::File::open(dir) {
+        let _ = d.sync_all();
+    }
+    Ok(dest)
 }
 
 /// The whole-chunk filters, sized to the chunks the pipeline actually cuts.
@@ -969,13 +1058,21 @@ impl DaemonLoop {
 /// speech span a second and a half short, so a clip reaching into the tail of
 /// a chunk with a human in it was kept.
 fn chunk_filters(config: &DaemonConfig, pipeline_config: &PipelineConfig) -> ChunkFilters {
-    ChunkFilters {
-        privacy: PrivacyFilter::new(config.privacy_threshold)
+    let privacy = config.classifier_privacy.iter().fold(
+        PrivacyFilter::new(config.privacy_threshold)
             .with_rank_cutoff(config.privacy_rank)
             .with_clip_reach(config.privacy_clip_reach)
             .with_chunk_secs(pipeline_config.chunk_duration_secs),
-        noise: NoiseFilter::new(config.noise_threshold, config.noise_classes.clone())
+        |filter, (id, rule)| filter.with_classifier_rule(id.clone(), *rule),
+    );
+    let noise = config.classifier_noise.iter().fold(
+        NoiseFilter::new(config.noise_threshold, config.noise_classes.clone())
             .remembering(config.noise_remember_secs),
+        |filter, (id, threshold)| filter.with_classifier_threshold(id.clone(), *threshold),
+    );
+    ChunkFilters {
+        privacy,
+        noise,
         confirmation: config.confirmation,
     }
 }
@@ -1216,6 +1313,43 @@ mod tests {
     use super::*;
     use crate::inference::model::ModelConfig;
 
+    /// Review F09: a classifier's own privacy and noise rules, from the
+    /// daemon's configuration, reach the filters every file is judged by, and
+    /// a per-classifier privacy rule turns the filter on by itself.
+    #[test]
+    fn each_classifier_s_own_filter_rules_reach_the_filters() {
+        use crate::detection::privacy::ClassifierPrivacyRule;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.noise_threshold = 0.2;
+        config.noise_classes = vec!["Dog".to_owned()];
+        config.classifier_privacy = vec![(
+            "perch".to_owned(),
+            ClassifierPrivacyRule {
+                threshold: Some(0.4),
+                rank_cutoff: None,
+            },
+        )];
+        config.classifier_noise = vec![("perch".to_owned(), 0.6)];
+        let filters = chunk_filters(&config, &config.pipeline);
+        assert_eq!(filters.privacy.rule_for("perch"), (0.4, 0));
+        assert_eq!(filters.privacy.rule_for("birdnet"), (0.0, 0));
+        assert!(filters.privacy.is_enabled(), "perch's own rule is a rule");
+        assert!((filters.noise.threshold_for(Some("perch")) - 0.6).abs() < f32::EPSILON);
+        assert!((filters.noise.threshold_for(Some("birdnet")) - 0.2).abs() < f32::EPSILON);
+    }
+
+    /// The counterpart: with no classifier rules, privacy stays off at the
+    /// station's off.
+    #[test]
+    fn with_no_classifier_rules_the_station_s_rules_stand() {
+        let tmp = tempfile::tempdir().unwrap();
+        let config = tiny_config(tmp.path());
+        let filters = chunk_filters(&config, &config.pipeline);
+        assert!(!filters.privacy.is_enabled());
+        assert_eq!(filters.privacy.rule_for("perch"), (0.0, 0));
+    }
+
     /// A daemon over the tiny bundled model, watching an empty directory.
     fn tiny_config(tmp: &std::path::Path) -> DaemonConfig {
         const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
@@ -1249,6 +1383,7 @@ mod tests {
             species_aliases_path: None,
             on_model_state: None,
             on_file_analysed: None,
+            refused_dir: None,
             in_flight: None,
             shed: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
@@ -1259,6 +1394,8 @@ mod tests {
             noise_threshold: 0.0,
             noise_remember_secs: 0.0,
             noise_classes: Vec::new(),
+            classifier_privacy: Vec::new(),
+            classifier_noise: Vec::new(),
             confirmation: crate::detection::corroboration::ConfirmationLevel::Off,
             latitude: None,
             longitude: None,
@@ -1629,6 +1766,80 @@ mod tests {
         assert_eq!(count("2026-05-19-birdnet-09:00:00.wav"), 1, "{seen:?}");
         // Counterpart: the finished backlog is still read, once.
         assert_eq!(count("2026-05-19-birdnet-08:00:00.wav"), 1, "{seen:?}");
+    }
+
+    /// Review F11: a recording too long for a live segment is refused before
+    /// it is decoded, and moved out of the watch directory, whose purge drains
+    /// every file older than its age limit analysed or not, to where
+    /// `--ingest-recordings` can take it. A file refused for another reason
+    /// stays where it is.
+    #[test]
+    fn a_recording_too_long_to_analyse_is_set_aside_and_not_purged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut config = tiny_config(tmp.path());
+        config.process_existing = true;
+        let refused = tmp.path().join("refused");
+        config.refused_dir = Some(refused.clone());
+        let long = config.watch_dir.join("2026-05-19-birdnet-08:00:00.wav");
+        {
+            let spec = hound::WavSpec {
+                channels: 1,
+                sample_rate: 8_000,
+                bits_per_sample: 16,
+                sample_format: hound::SampleFormat::Int,
+            };
+            let mut w = hound::WavWriter::create(&long, spec).unwrap();
+            let secs = u32::try_from(crate::audio::admission::LIVE_MAX_FILE_SECS).unwrap() + 1;
+            for i in 0..8_000 * secs {
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    clippy::cast_possible_wrap,
+                    reason = "i % 97 fits an i16"
+                )]
+                w.write_sample(((i % 97) as i16) - 48).unwrap();
+            }
+            w.finalize().unwrap();
+        }
+        let bytes = std::fs::metadata(&long).unwrap().len();
+        let broken = config.watch_dir.join("2026-05-19-birdnet-08:30:00.wav");
+        std::fs::write(&broken, b"not a recording").unwrap();
+        for f in [&long, &broken] {
+            std::fs::File::options()
+                .write(true)
+                .open(f)
+                .unwrap()
+                .set_modified(std::time::SystemTime::now() - Duration::from_secs(60))
+                .unwrap();
+        }
+
+        let (event_tx, _event_rx) = mpsc::sync_channel(4096);
+        let handle = run_daemon(&config, event_tx).expect("daemon starts");
+        let moved = refused.join("2026-05-19-birdnet-08:00:00.wav");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !moved.exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        handle.stop();
+        assert!(moved.exists(), "the long recording was not set aside");
+        assert!(!long.exists(), "and it is no longer in the watch directory");
+        assert_eq!(std::fs::metadata(&moved).unwrap().len(), bytes, "whole");
+        assert!(broken.exists(), "a file refused for another reason stays");
+    }
+
+    /// A recording set aside under a name already taken keeps both: the
+    /// second is numbered, and neither is overwritten.
+    #[test]
+    fn a_set_aside_recording_never_overwrites_another() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("refused");
+        let first = tmp.path().join("a.wav");
+        std::fs::write(&first, b"first").unwrap();
+        assert_eq!(set_aside(&first, &dir).unwrap(), dir.join("a.wav"));
+        std::fs::write(&first, b"second").unwrap();
+        assert_eq!(set_aside(&first, &dir).unwrap(), dir.join("a-1.wav"));
+        assert_eq!(std::fs::read(dir.join("a.wav")).unwrap(), b"first");
+        assert_eq!(std::fs::read(dir.join("a-1.wav")).unwrap(), b"second");
+        assert!(!first.exists());
     }
 
     /// `e853776`: after a file, the loop reports each classifier's health —

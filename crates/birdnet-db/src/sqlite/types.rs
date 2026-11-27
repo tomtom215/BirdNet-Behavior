@@ -219,6 +219,21 @@ pub struct DetectionRow {
     /// (migration 45), when it was uploaded.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub birdweather_soundscape_id: Option<i64>,
+    /// The detection's permanent identifier, a version 4 UUID (RES-25). Given
+    /// once when the row is written and never changed: it survives a relabel,
+    /// a `VACUUM` (which may renumber the rowid) and an export read back by
+    /// the CSV import. `None` only on a row built outside the database.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detection_uuid: Option<String>,
+    /// SHA-256 of the clip as it was written, lowercase hex (RES-23). `None`
+    /// is unknown: a row stored before checksums were recorded, or whose clip
+    /// could not be read when it was written. Never computed afterwards from
+    /// whatever file is there now.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clip_sha256: Option<String>,
+    /// The clip's length in bytes as it was written, beside `clip_sha256`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clip_bytes: Option<i64>,
 }
 
 /// A concurrent detection of the same species from a *different* audio source.
@@ -343,6 +358,9 @@ pub(super) fn map_detection_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Det
         clip_pruned_at: row.get(23)?,
         import_batch_id: row.get(24)?,
         birdweather_soundscape_id: row.get(25)?,
+        detection_uuid: row.get(26)?,
+        clip_sha256: row.get(27)?,
+        clip_bytes: row.get(28)?,
     })
 }
 
@@ -387,13 +405,16 @@ pub(super) const DETECTION_COL_NAMES: &[&str] = &[
     "Clip_Pruned_At",
     "import_batch_id",
     "birdweather_soundscape_id",
+    "detection_uuid",
+    "Clip_Sha256",
+    "Clip_Bytes",
 ];
 
 /// Columns selected in all full-row detection queries.
 ///
 /// Must equal `DETECTION_COL_NAMES.join(", ")` — the
 /// `detection_cols_matches_names` test pins the invariant.
-pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs, review_verdict, run_id, detected_at_utc, clip_offset_secs, detection_secs, model_id, model_agreement, chunk_offset_secs, Clip_Pruned_At, import_batch_id, birdweather_soundscape_id";
+pub(super) const DETECTION_COLS: &str = "Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name, correlation_id, Source, Duration_Secs, review_verdict, run_id, detected_at_utc, clip_offset_secs, detection_secs, model_id, model_agreement, chunk_offset_secs, Clip_Pruned_At, import_batch_id, birdweather_soundscape_id, detection_uuid, Clip_Sha256, Clip_Bytes";
 
 #[cfg(test)]
 mod drift_gate_tests {
@@ -519,5 +540,8 @@ mod drift_gate_tests {
         assert_eq!(row.source.as_deref(), Some("cam1"));
         assert_eq!(row.run_id, Some(run));
         assert_eq!(row.detected_at_utc, Some(1_779_181_200));
+        assert!(row.detection_uuid.is_some(), "detection_uuid");
+        assert_eq!(row.clip_sha256, None, "Clip_Sha256");
+        assert_eq!(row.clip_bytes, None, "Clip_Bytes");
     }
 }

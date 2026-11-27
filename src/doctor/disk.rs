@@ -41,6 +41,130 @@ pub(super) fn check_disk_space(cli: &Cli, config: Option<&Config>) -> Vec<Check>
     out
 }
 
+/// Whether the stream directory's filesystem can hold what the configured
+/// sources write before the age drain removes it (MSC-15).
+///
+/// The drain keeps `STREAM_RETENTION_SECS` of segments per source and the
+/// size cap is `STREAM_MAX_MB`, both fixed numbers: five 48 kHz mono sources
+/// write 288 MB in the default ten minutes, more than the installer's 256 MB
+/// tmpfs, and the default 512 MB cap is above that mount so it never acts.
+/// When the filesystem fills, every source's capture fails at once. A warning,
+/// never an error: the station records until it fills.
+pub(super) fn check_stream_room(cli: &Cli, config: Option<&Config>) -> Vec<Check> {
+    let Some(dir) = cli
+        .watch_dir
+        .clone()
+        .or_else(|| config?.get("RECS_DIR").map(PathBuf::from))
+        .filter(|d| d.exists())
+    else {
+        return Vec::new();
+    };
+    let Some(total) = birdnet_core::audio::capture::disk_usage(&dir)
+        .ok()
+        .map(|u| u.total_bytes)
+    else {
+        return Vec::new();
+    };
+    let db = crate::helpers::db_path_from_config(config);
+    let sources: Vec<crate::capture::stream_budget::SourceRate> = match db
+        .exists()
+        .then(|| birdnet_db::sqlite::open_readonly(&db).ok())
+        .flatten()
+        .map(|conn| {
+            use birdnet_db::audio_sources::AudioSourceStore as _;
+            conn.list()
+        }) {
+        Some(Ok(list)) => list
+            .iter()
+            .filter(|s| s.disabled_at.is_none())
+            .map(crate::capture::stream_budget::SourceRate::of)
+            .collect(),
+        _ => return Vec::new(),
+    };
+    if sources.is_empty() {
+        return Vec::new();
+    }
+    let retention = if cli.stream_retention_secs > 0 {
+        cli.stream_retention_secs
+    } else {
+        config
+            .and_then(|c| c.get_parsed::<u64>("STREAM_RETENTION_SECS").ok())
+            .unwrap_or(crate::helpers::DEFAULT_STREAM_RETENTION_SECS)
+    };
+    let max_mb = if cli.stream_max_mb > 0 {
+        cli.stream_max_mb
+    } else {
+        config
+            .and_then(|c| c.get_parsed::<u64>("STREAM_MAX_MB").ok())
+            .unwrap_or(crate::helpers::DEFAULT_STREAM_MAX_MB)
+    };
+    vec![grade_stream_room(
+        total,
+        &sources,
+        retention,
+        max_mb.saturating_mul(1024 * 1024),
+        &dir,
+    )]
+}
+
+/// The verdict of [`check_stream_room`], from numbers alone.
+fn grade_stream_room(
+    filesystem_bytes: u64,
+    sources: &[crate::capture::stream_budget::SourceRate],
+    retention_secs: u64,
+    cap_bytes: u64,
+    dir: &Path,
+) -> Check {
+    use crate::capture::stream_budget::{bytes_over, derived_cap_bytes};
+    const MB: u64 = 1_000_000;
+    let name = "Stream directory room";
+    let need = bytes_over(sources, retention_secs);
+    let fits = derived_cap_bytes(Some(filesystem_bytes), sources, retention_secs);
+    if need > filesystem_bytes {
+        let per_sec: u64 = sources.iter().map(|s| s.bytes_per_sec()).sum();
+        let retention_fits = fits / per_sec.max(1);
+        return Check::warn(
+            name,
+            format!(
+                "{} sources write about {} MB in {retention_secs} s, and {} holds {} MB: \
+                 it fills before the age drain removes anything, and every source's \
+                 capture fails at once",
+                sources.len(),
+                need / MB,
+                dir.display(),
+                filesystem_bytes / MB
+            ),
+            format!(
+                "give the stream directory more room (the installer's tmpfs is size=256M), or \
+                 set STREAM_RETENTION_SECS to at most {retention_fits}"
+            ),
+        );
+    }
+    if cap_bytes > filesystem_bytes {
+        return Check::warn(
+            name,
+            format!(
+                "STREAM_MAX_MB ({} MB) is more than {} holds ({} MB), so the size cap \
+                 cannot act before it is full",
+                cap_bytes / (1024 * 1024),
+                dir.display(),
+                filesystem_bytes / MB
+            ),
+            format!("set STREAM_MAX_MB to at most {}", fits / (1024 * 1024)),
+        );
+    }
+    Check::pass(
+        name,
+        format!(
+            "{} sources write about {} MB in {retention_secs} s; {} holds {} MB",
+            sources.len(),
+            need / MB,
+            dir.display(),
+            filesystem_bytes / MB
+        ),
+    )
+}
+
 /// Whether the data directory is somewhere its contents outlive the container.
 ///
 /// A data directory with nothing mounted at it leaves the database, the
@@ -208,6 +332,35 @@ mod tests {
     use std::path::Path;
 
     const GIB: u64 = 1024 * 1024 * 1024;
+
+    /// MSC-15: five 48 kHz mono sources on the installer's 256 MB tmpfs fill it
+    /// in the default retention, and the report says so and names a
+    /// retention that fits; one source there passes.
+    #[test]
+    fn five_sources_on_a_256_mb_tmpfs_are_warned_about() {
+        use crate::capture::stream_budget::SourceRate;
+        let mono = SourceRate {
+            sample_rate: 48_000,
+            channels: 1,
+            bit_depth: 16,
+        };
+        let tmpfs = 256 * 1024 * 1024;
+        let five =
+            super::grade_stream_room(tmpfs, &[mono; 5], 600, 512 * 1024 * 1024, Path::new("/s"));
+        assert_eq!(five.status, Status::Warn, "{five:?}");
+        let fix = five.remediation.expect("a remedy");
+        assert!(
+            fix.contains("STREAM_RETENTION_SECS to at most 447"),
+            "{fix}"
+        );
+        // One source fits, but the default 512 MB cap is above the mount.
+        let one = super::grade_stream_room(tmpfs, &[mono], 600, 512 * 1024 * 1024, Path::new("/s"));
+        assert_eq!(one.status, Status::Warn, "{one:?}");
+        assert!(one.message.contains("cannot act"), "{}", one.message);
+        // Counterpart: one source with a cap below the mount passes.
+        let ok = super::grade_stream_room(tmpfs, &[mono], 600, 200 * 1024 * 1024, Path::new("/s"));
+        assert_eq!(ok.status, Status::Pass, "{ok:?}");
+    }
 
     /// The regression: a nearly full disk must warn, never fail.
     ///

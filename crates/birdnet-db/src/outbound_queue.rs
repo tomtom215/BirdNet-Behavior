@@ -106,6 +106,50 @@ pub fn enqueue(
     Ok(())
 }
 
+/// Park `payload` before it is sent, held back from the drainer until
+/// `available_at`, and return its id (review batch 2, the outbox).
+///
+/// The sender that parks it removes it ([`delete`]) once the receiver has it
+/// or has refused it for good, or hands it to the drainer ([`release`]) on a
+/// transient failure. A sender that never comes back (the station stopped or
+/// crashed mid-post) leaves it for the drainer once the lease ends: an upload
+/// is sent at least once. A crash after the receiver took it and before the
+/// delete sends it twice; `BirdWeather` takes no idempotency key, so that
+/// window is stated rather than closed.
+///
+/// # Errors
+///
+/// Returns [`QueueError::Sqlite`] when the insert or prune fails.
+pub fn enqueue_leased(
+    conn: &Connection,
+    kind: &str,
+    payload: &str,
+    available_at: u64,
+) -> Result<i64, QueueError> {
+    enqueue(conn, kind, payload, available_at)?;
+    Ok(conn.last_insert_rowid())
+}
+
+/// Hand a leased entry to the drainer now, with the payload the sender ended
+/// up with (a soundscape id it learned) and the error that stopped it.
+///
+/// # Errors
+///
+/// Returns [`QueueError::Sqlite`] when the update fails.
+pub fn release(
+    conn: &Connection,
+    id: i64,
+    payload: &str,
+    error: &str,
+    now_unix: u64,
+) -> Result<(), QueueError> {
+    conn.execute(
+        "UPDATE outbound_queue SET payload = ?2, last_error = ?3, next_attempt_at = ?4 WHERE id = ?1",
+        params![id, payload, error, i64::try_from(now_unix).unwrap_or(i64::MAX)],
+    )?;
+    Ok(())
+}
+
 /// Fetch up to `limit` entries of `kind` whose backoff has elapsed, oldest
 /// first (preserving upload order across an outage).
 ///

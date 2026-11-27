@@ -182,3 +182,51 @@ fn a_listened_run_up_is_no_gap_and_an_unrecorded_one_is_unknown() {
         "no effort was recorded on or before 2024, so the station cannot say: {wren:?}"
     );
 }
+
+/// N26-05: the run-up is judged by the one listened-day rule (half the
+/// station's typical day, `site_effort::LISTENED_DAY` in `birdnet-db`), not by
+/// "any audio at all". A station that analysed an hour a day and then, for the
+/// eleven days before an arrival, a minute a day (an SD card full, a stream
+/// dropping) did not listen to those days; the arrival after them follows a
+/// gap. Counterpart: the same arrival after full days is not flagged (the
+/// Blackbird of [`store`]).
+#[test]
+fn a_run_up_of_minute_long_days_is_a_gap() {
+    let dir = TempDir::new().expect("temp dir");
+    let db = AnalyticsDb::open(&dir.path().join("a.duckdb")).expect("open");
+    let detections: Vec<String> = days(&db, "2025-05-01", 61)
+        .iter()
+        .map(|d| {
+            format!(
+                "('{d}','06:00:00','Turdus merula','Eurasian Blackbird',0.9,'b-{d}.wav',\
+                  epoch(TIMESTAMP '{d} 06:00:00'))"
+            )
+        })
+        .collect();
+    let effort: Vec<String> = days(&db, "2025-01-01", 181)
+        .iter()
+        .map(|d| {
+            let short = ("2025-04-20".."2025-05-01").contains(&d.as_str());
+            format!("('{d}','local',{})", if short { 60 } else { 3600 })
+        })
+        .collect();
+    db.conn()
+        .execute_batch(&format!(
+            "INSERT INTO detections
+                 (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, detected_at_utc)
+             VALUES {};
+             CREATE TABLE IF NOT EXISTS recording_effort (date TEXT, source TEXT, seconds DOUBLE);
+             INSERT INTO recording_effort VALUES {};",
+            detections.join(","),
+            effort.join(",")
+        ))
+        .expect("seed");
+    let out = timings(&db);
+    let blackbird = of(&out, "Eurasian Blackbird");
+    assert_eq!(
+        blackbird.gap_before,
+        Some(true),
+        "eleven days of a minute each, against a typical hour, are not listened days: \
+         {blackbird:?}"
+    );
+}

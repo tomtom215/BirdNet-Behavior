@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
-use crate::audio::capture::process::is_audio_file;
+use super::is_kept_audio_file as is_audio_file;
 use crate::audio::capture::types::CaptureError;
 
 use super::disk_usage;

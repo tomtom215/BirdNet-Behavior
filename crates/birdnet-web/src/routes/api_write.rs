@@ -63,6 +63,7 @@ pub const WRITE_ROUTES: &[(&str, &str)] = &[
     ("POST", "/api/v2/detections/comments"),
     ("POST", "/api/v2/detections/comments/delete"),
     ("POST", "/api/v2/dynamic-thresholds/reset"),
+    ("POST", "/api/v2/deployments"),
 ];
 
 /// Read endpoints that live behind the same bearer gate.
@@ -87,6 +88,7 @@ pub const READ_ROUTES: &[(&str, &str)] = &[
     ("GET", "/api/v2/system/database/overview"),
     ("GET", "/api/v2/models/catalog"),
     ("GET", "/api/v2/detections/comments"),
+    ("GET", "/api/v2/station/record"),
 ];
 
 /// Whether `path` is one of the mutating API endpoints.
@@ -128,6 +130,14 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/v2/dynamic-thresholds/reset",
             post(reset_learned_thresholds),
+        )
+        .route(
+            "/api/v2/station/record",
+            get(crate::routes::station_record::record),
+        )
+        .route(
+            "/api/v2/deployments",
+            post(crate::routes::station_record::open_deployment),
         )
 }
 

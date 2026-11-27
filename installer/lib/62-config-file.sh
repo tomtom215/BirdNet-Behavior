@@ -85,6 +85,13 @@ enable_range_filter_in_kept_config() {
 }
 
 write_config() {
+    # Never through a link: chmod follows one, `sed -i` replaces it with a copy
+    # and `>>` appends to the file behind it, which on BirdNET-Pi is BirdNET-Pi's
+    # own settings (OOB-03). main refuses such a host first; this is the
+    # backstop for any path that reaches here without it.
+    if [ -L "${CONFIG_FILE}" ]; then
+        fatal "${CONFIG_FILE} is a link (to $(readlink "${CONFIG_FILE}" 2>/dev/null || echo '?')); the installer does not write through links. Move it aside and run the installer again."
+    fi
     if [ -f "${CONFIG_FILE}" ]; then
         warn "Config file already exists at ${CONFIG_FILE} — skipping."
         move_config_off_legacy_names

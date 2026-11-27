@@ -161,6 +161,11 @@ pub const APPLIES: &[Entry] = &[
         evidence: "read on every request by routes/livestream.rs",
     },
     Entry {
+        key: "live_audio",
+        applies: Applies::Now,
+        evidence: "read on every request to /stream and the HLS control routes by live_audio.rs, from the auth middleware",
+    },
+    Entry {
         key: "analytics_exclude_imports",
         applies: Applies::Now,
         evidence: "the analytics view is rebuilt when the setting is flipped (connection/sync.rs set_exclude_imports)",

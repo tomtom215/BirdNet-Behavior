@@ -92,7 +92,8 @@ pub(super) fn write_verified(
         let _ = fs::remove_file(&part);
         return Err(e.into());
     }
-    fs::rename(&part, dest)?;
+    // Synced, renamed, and the directory synced: whole and durable (F21).
+    birdnet_core::atomic_file::commit(&part, dest)?;
     Ok(())
 }
 
@@ -149,7 +150,8 @@ pub(super) fn copy_verified(
         let _ = fs::remove_file(&part);
         return Err(InstallError::NotThePinnedFile { expected, actual });
     }
-    fs::rename(&part, dest)?;
+    // Synced, renamed, and the directory synced: whole and durable (F21).
+    birdnet_core::atomic_file::commit(&part, dest)?;
     Ok(())
 }
 
@@ -187,6 +189,7 @@ pub(super) fn adopt(
         let _ = fs::remove_file(&part);
         return Ok(false);
     }
-    fs::rename(&part, dest)?;
+    // Synced, renamed, and the directory synced: whole and durable (F21).
+    birdnet_core::atomic_file::commit(&part, dest)?;
     Ok(true)
 }

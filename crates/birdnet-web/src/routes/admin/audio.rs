@@ -54,8 +54,10 @@ static ROW_TPL: crate::seal::Sealed = crate::seal::Sealed::new(include_str!(
 /// once shipped as editable controls that nothing read. This page is a third
 /// writer of the settings table and had no such list, so it was outside that
 /// guard entirely.
-pub const AUDIO_ADMIN_SETTING_KEYS: &[&str] =
-    &[crate::routes::livestream::LIVESTREAM_SOURCE_SETTING];
+pub const AUDIO_ADMIN_SETTING_KEYS: &[&str] = &[
+    crate::routes::livestream::LIVESTREAM_SOURCE_SETTING,
+    crate::live_audio::LIVE_AUDIO_SETTING,
+];
 
 /// Mount the audio sources CRUD admin routes.
 pub fn router() -> Router<AppState> {
@@ -73,6 +75,7 @@ pub fn router() -> Router<AppState> {
             post(listen_default),
         )
         .route("/admin/audio/sources/{id}/probe", get(probe))
+        .route("/admin/audio/live-access", post(live_access))
         .route("/admin/audio/sources/{id}/eq-preview", get(eq_preview))
 }
 
@@ -253,7 +256,78 @@ pub(crate) fn sources_body(state: &AppState, show_credentials: bool) -> String {
         String::new()
     };
     let body = render_body(&sources, |row| daemon_status(row, state), &listen_default);
-    format!("{note}{body}")
+    let access = live_access_form(state, show_credentials);
+    format!("{note}{body}{access}")
+}
+
+/// The live-audio policy control (OOB-13): who can hear the microphone.
+///
+/// Disabled for a viewer, who cannot change it.
+fn live_access_form(state: &AppState, editable: bool) -> String {
+    use crate::live_audio::LiveAudioPolicy;
+    let current = state.with_read_db(crate::live_audio::policy);
+    let checked = |p: LiveAudioPolicy| if current == p { " checked" } else { "" };
+    let disabled = if editable { "" } else { " disabled" };
+    format!(
+        r#"<form id="live-access" class="audio-live-access" hx-post="/admin/audio/live-access" hx-swap="none">
+  <fieldset{disabled}>
+    <legend>Who can hear the live audio</legend>
+    <label><input type="radio" name="live_audio" value="signed-in"{si}> Signed-in users only</label>
+    <label><input type="radio" name="live_audio" value="anyone"{any}> Anyone who can reach the station</label>
+    <button type="submit" class="bnb-btn">Save</button>
+  </fieldset>
+  <p class="hint">Recordings &rarr; Live plays the microphone as it is, before the human-sound filter that stored clips pass. The live spectrogram stays visible to everyone either way. Applies immediately.</p>
+</form>"#,
+        si = checked(LiveAudioPolicy::SignedIn),
+        any = checked(LiveAudioPolicy::Anyone),
+    )
+}
+
+#[derive(Deserialize)]
+struct LiveAccessForm {
+    live_audio: String,
+}
+
+/// `POST /admin/audio/live-access` — store the live-audio policy.
+async fn live_access(
+    State(state): State<AppState>,
+    request_user: crate::auth_middleware::RequestUser,
+    HtmxForm(form): HtmxForm<LiveAccessForm>,
+) -> Response {
+    use crate::live_audio::{LIVE_AUDIO_SETTING, LiveAudioPolicy};
+    let Some(policy) = LiveAudioPolicy::parse(&form.live_audio) else {
+        return validation_response("Choose who can hear the live audio.");
+    };
+    state
+        .run_blocking(move |state| {
+            let stored = state.with_db(|conn| {
+                birdnet_db::settings::set(
+                    conn,
+                    LIVE_AUDIO_SETTING,
+                    policy.as_str(),
+                    birdnet_db::settings::SettingsCategory::Audio,
+                )
+            });
+            if let Err(e) = stored {
+                tracing::error!(error = %e, "storing the live-audio policy failed");
+                return internal_response("Could not save who can hear the live audio.");
+            }
+            crate::audit::audit(
+                state,
+                Some(&request_user),
+                "audio.live_access",
+                Some(policy.as_str()),
+                None,
+            );
+            let message = match policy {
+                LiveAudioPolicy::SignedIn => "Live audio now plays only to signed-in users.",
+                LiveAudioPolicy::Anyone => {
+                    "Live audio now plays to anyone who can reach the station."
+                }
+            };
+            toast::oob_only(Toast::success(message)).into_response()
+        })
+        .await
 }
 
 /// Stands in for the listen-default id when the settings table could not be

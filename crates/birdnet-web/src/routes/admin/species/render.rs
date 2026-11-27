@@ -636,7 +636,7 @@ fn render_threshold_suggestions(suggestions: &[SuggestedThreshold]) -> String {
     let mut out = String::with_capacity(1024);
     out.push_str(
         r#"<div class="section-title mt">Suggested from your reviews</div>
-  <p class="hint">Worked out from the detections you have confirmed and rejected for each species — the threshold that best separates the two. Nothing is applied until you press Apply. The counts are what the suggestion would have done to the reviews it was derived from.</p>
+  <p class="hint">Worked out from the detections you have confirmed and rejected for each species — the threshold that best separates the two. Nothing is applied until you press Apply. The counts are what the suggestion would have done to the reviews it was derived from. The reviews you chose are not a random sample, and nothing below the threshold in force was ever stored, so this is a prompt to listen again, not an estimate of how often a species is right.</p>
   <table class="thr-table"><thead><tr><th class="cell-left">Species</th><th>Suggested</th><th>Would have kept</th><th>Would have caught</th><th>Separation</th><th></th></tr></thead><tbody>"#,
     );
     for s in worth_showing {

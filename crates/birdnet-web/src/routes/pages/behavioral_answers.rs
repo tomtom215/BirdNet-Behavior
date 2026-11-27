@@ -18,7 +18,7 @@
 
 use std::fmt::Write as _;
 
-use birdnet_behavioral::types::Answers;
+use birdnet_behavioral::types::{Answers, AnswersChance};
 
 use super::viz::kit;
 use super::{escape_html, group_thousands};
@@ -107,30 +107,103 @@ fn headline(a: &Answers, names: &[String]) -> Option<String> {
     Some(out)
 }
 
+/// The figure's sentence, the drawn grid, what its marks mean, and the table of the same
+/// numbers: [`render`]'s text around `svg`, whose largest mark is `max`.
+fn caption(
+    a: &Answers,
+    chance: Option<&AnswersChance>,
+    shown: &[String],
+    window_days: u32,
+    max: f64,
+    svg: &str,
+) -> String {
+    let names: Vec<String> = shown.to_vec();
+    let lead = chance
+        .map_or_else(|| headline(a, &names), |c| chance_headline(a, c, &names))
+        .unwrap_or_else(|| {
+        format!(
+            "No pair was heard within a minute of each other at least {MIN_EXCHANGES} times in these {window_days} days."
+        )
+    });
+    let mut html = String::with_capacity(svg.len() + 2048);
+    let _ = write!(
+        html,
+        r#"<p class="fig-take">{lead}</p>{svg}<div class="ck-scale ck-scale--discs"><span class="bnb-meta">Read across: the bird on the left was heard first; the disc says how often the bird above was heard within {within} after it.</span></div><p class="bnb-meta">{scale} {days} days with these birds in the last {window_days}. Two birds heard at the same instant are not replies, and neither is a bird repeating itself. {ring}</p>"#,
+        scale = if chance.is_some() {
+            format!("A disc's area is how many times chance; the largest here is {max:.1} times.")
+        } else {
+            format!("The largest disc here is {max:.0} times; a disc's area is the count.")
+        },
+        ring = chance.map_or_else(
+            || format!("A small ring is fewer than {MIN_EXCHANGES} times: too few to read."),
+            |c| format!(
+                "A small ring was heard, but no more often than chance. Chance is the same count with the second bird's times moved by each of {k} shifts of 5 to 30 minutes, either way (seed {seed}), which keeps how much each bird sings and when in the morning, and breaks only the timing a reply is; a cell is marked when it stands above them after allowing for the {t} pairs tested (Benjamini\u{2013}Hochberg, 5%). Exploratory and associational: a reply here is a timing, not a conversation.",
+                k = c.shifts_secs.len(),
+                seed = birdnet_behavioral::null::NULL_SEED,
+                t = c.tests,
+            ),
+        ),
+        lead = escape_html(&lead),
+        within = if a.within_secs == 60 {
+            "a minute".to_string()
+        } else {
+            format!("{} seconds", a.within_secs)
+        },
+        days = a.days_heard,
+    );
+    html.push_str(&table(a, chance, shown));
+    html
+}
+
 /// The card's body: a sentence, the grid, what a disc means, and the table of the same numbers.
 ///
 /// `shown` are the species' names in the station's language, in the order of `a.species`; each
 /// bird's mark is the colour its species owns on the station (`slots`), as on every other chart.
 pub(super) fn render(
     a: &Answers,
+    chance: Option<&AnswersChance>,
     shown: &[String],
     window_days: u32,
     slots: &kit::SpeciesSlots,
 ) -> String {
     let n = a.species.len();
+    // With a chance level (CHT-14), a disc is a cell that stands out above the same count with
+    // the answering bird's clock moved by minutes, and its size is how many times that count it
+    // is; without one, the old rule (a count at the floor) and the count itself.
+    let marked = |i: usize, j: usize| -> bool {
+        chance.map_or_else(
+            || a.exchanges[i][j] >= MIN_EXCHANGES,
+            |c| {
+                c.marked
+                    .get(i)
+                    .and_then(|r| r.get(j))
+                    .copied()
+                    .unwrap_or(false)
+            },
+        )
+    };
+    let expected = |i: usize, j: usize| -> Option<f64> {
+        chance.and_then(|c| c.expected.get(i).and_then(|r| r.get(j)).copied())
+    };
+    // The size of a disc: the count, or how many times chance (a mean under one is taken as one,
+    // so a handful of replies where the shifts give almost none is not drawn as infinite).
+    let size = |i: usize, j: usize| -> f64 {
+        let v = a.exchanges[i][j] as f64;
+        expected(i, j).map_or(v, |e| v / e.max(1.0))
+    };
     if n < 2 || shown.len() != n {
         return String::from(
             r#"<p class="bnb-meta viz-empty">Not enough different birds heard yet to see who answers whom.</p>"#,
         );
     }
-    let max = a
-        .exchanges
-        .iter()
-        .flatten()
-        .copied()
-        .max()
-        .unwrap_or(0)
-        .max(1);
+    let mut max = 1.0_f64;
+    for i in 0..n {
+        for j in 0..n {
+            if i != j && marked(i, j) {
+                max = max.max(size(i, j));
+            }
+        }
+    }
     let (label_w, cell, head) = (132.0_f64, 40.0_f64, 30.0_f64);
     let w = label_w + n as f64 * cell + 8.0;
     let h = head + n as f64 * cell + 6.0;
@@ -144,7 +217,11 @@ pub(super) fn render(
     );
     svg.push_str(&super::viz::svg_a11y(
         "Who answers whom",
-        "A grid. Each row is a bird heard first and each column a bird heard within a minute after it; the disc where they meet is how many times that happened.",
+        if chance.is_some() {
+            "A grid. Each row is a bird heard first and each column a bird heard within a minute after it. A disc is drawn only where that happened more often than chance, which is the same count with the second bird's times moved by 5 to 30 minutes; its area is how many times chance."
+        } else {
+            "A grid. Each row is a bird heard first and each column a bird heard within a minute after it; the disc where they meet is how many times that happened."
+        },
     ));
     let _ = write!(
         svg,
@@ -164,7 +241,7 @@ pub(super) fn render(
     }
     let (mut halos, mut discs, mut hits) = (String::new(), String::new(), String::new());
     let mut peak: Option<(usize, usize)> = None;
-    let mut peak_v = 0;
+    let mut peak_v = 0.0_f64;
     for (i, row) in a.exchanges.iter().enumerate() {
         let y0 = head + i as f64 * cell;
         let cy = y0 + cell / 2.0;
@@ -195,8 +272,9 @@ pub(super) fn render(
                 0.0
             };
             let heading = format!("{} \u{2192} {}", shown[i], shown[j]);
-            let tip = if v >= MIN_EXCHANGES {
-                let t = v as f64 / max as f64;
+            let chance_row = expected(i, j).map(|e| format!("{e:.1}"));
+            let tip = if marked(i, j) {
+                let t = size(i, j) / max;
                 let class = format!("ck-q{}", kit::seq_step(t));
                 let r = (r_max * t.sqrt()).max(2.4);
                 let _ = write!(
@@ -208,16 +286,22 @@ pub(super) fn render(
                     discs,
                     r#"<circle class="ck-disc {class}" cx="{cx:.1}" cy="{cy:.1}" r="{r:.1}" data-ck-i="{idx}"/>"#
                 );
-                if v > peak_v {
-                    peak_v = v;
+                if size(i, j) > peak_v {
+                    peak_v = size(i, j);
                     peak = Some((i, j));
                 }
+                let mut rows = vec![
+                    ("Heard within a minute after", group_thousands(v)),
+                    ("Per 100 songs of the first", format!("{per_100:.0}")),
+                ];
+                if let Some(c) = &chance_row {
+                    rows.push(("Chance gives", c.clone()));
+                }
+                let rows: Vec<(&str, &str, Option<&str>)> =
+                    rows.iter().map(|(k, v)| (*k, v.as_str(), None)).collect();
                 kit::tip(
                     &heading,
-                    &[
-                        ("Heard within a minute after", &group_thousands(v), None),
-                        ("Per 100 songs of the first", &format!("{per_100:.0}"), None),
-                    ],
+                    &rows,
                     Some(&format!(
                         "{} heard {} times in {} days",
                         shown[i],
@@ -230,10 +314,19 @@ pub(super) fn render(
                     discs,
                     r#"<circle class="ck-sparse" cx="{cx:.1}" cy="{cy:.1}" r="2.6" data-ck-i="{idx}"/>"#
                 );
+                let count = group_thousands(v);
+                let mut rows = vec![("Heard within a minute after", count.as_str(), None)];
+                if let Some(c) = &chance_row {
+                    rows.push(("Chance gives", c.as_str(), None));
+                }
                 kit::tip(
                     &heading,
-                    &[("Heard within a minute after", &group_thousands(v), None)],
-                    Some("Too few times to read as a pattern"),
+                    &rows,
+                    Some(if chance.is_some() {
+                        "Within chance: no more often than with its clock moved by minutes"
+                    } else {
+                        "Too few times to read as a pattern"
+                    }),
                 )
             } else {
                 let _ = write!(
@@ -263,30 +356,54 @@ pub(super) fn render(
     svg.push_str(&hits);
     svg.push_str("</svg></div>");
 
-    let names: Vec<String> = shown.to_vec();
-    let lead = headline(a, &names).unwrap_or_else(|| {
-        format!(
-            "No pair was heard within a minute of each other at least {MIN_EXCHANGES} times in these {window_days} days."
-        )
-    });
-    let mut html = String::with_capacity(svg.len() + 2048);
-    let _ = write!(
-        html,
-        r#"<p class="fig-take">{lead}</p>{svg}<div class="ck-scale ck-scale--discs"><span class="bnb-meta">Read across: the bird on the left was heard first; the disc says how often the bird above was heard within {within} after it.</span></div><p class="bnb-meta">The largest disc here is {max} times; a disc's area is the count. {days} days with these birds in the last {window_days}. Two birds heard at the same instant are not replies, and neither is a bird repeating itself. A small ring is fewer than {MIN_EXCHANGES} times: too few to read.</p>"#,
-        lead = escape_html(&lead),
-        within = if a.within_secs == 60 {
-            "a minute".to_string()
-        } else {
-            format!("{} seconds", a.within_secs)
-        },
-        days = a.days_heard,
-    );
-    html.push_str(&table(a, shown));
-    html
+    caption(a, chance, shown, window_days, max, &svg)
 }
 
+/// The sentence over the grid when chance is known: the cell furthest above it, or that nothing
+/// stands out. `None` only for fewer than two birds.
+fn chance_headline(a: &Answers, c: &AnswersChance, names: &[String]) -> Option<String> {
+    let n = a.species.len();
+    if n < 2 {
+        return None;
+    }
+    let mut best: Option<(usize, usize, f64)> = None;
+    for i in 0..n {
+        for j in 0..n {
+            if i == j
+                || !c
+                    .marked
+                    .get(i)
+                    .and_then(|r| r.get(j))
+                    .copied()
+                    .unwrap_or(false)
+            {
+                continue;
+            }
+            let lift = a.exchanges[i][j] as f64 / c.expected[i][j].max(1.0);
+            if best.is_none_or(|(_, _, b)| lift > b) {
+                best = Some((i, j, lift));
+            }
+        }
+    }
+    Some(best.map_or_else(
+        || NOTHING_ANSWERS.to_owned(),
+        |(i, j, lift)| {
+            format!(
+                "{} is heard within a minute after {} {} times, {lift:.1} times what chance gives ({:.1}).",
+                names[j],
+                names[i],
+                group_thousands(a.exchanges[i][j]),
+                c.expected[i][j],
+            )
+        },
+    ))
+}
+
+/// What the grid says when no cell stands above chance.
+pub(super) const NOTHING_ANSWERS: &str = "Nothing stands out: no bird was heard within a minute after another more often than it is with its clock moved by minutes, so what looks like answering is birds singing in the same part of the morning.";
+
 /// The same numbers as a table: every ordered pair, the one that was heard first as the row.
-fn table(a: &Answers, shown: &[String]) -> String {
+fn table(a: &Answers, chance: Option<&AnswersChance>, shown: &[String]) -> String {
     let mut t = String::from(
         r#"<details class="pt-disc"><summary>See the numbers — who was heard within a minute after whom</summary><div class="viz-table-scroll"><table class="pt-tbl" id="aw-table"><caption class="sr-only">Times the column bird was heard within a minute after the row bird</caption><thead><tr><th scope="col">First heard</th><th scope="col" class="num">Songs</th>"#,
     );
@@ -309,7 +426,18 @@ fn table(a: &Answers, shown: &[String]) -> String {
             if i == j {
                 t.push_str("<td class=\"num\">\u{2014}</td>");
             } else {
-                let _ = write!(t, r#"<td class="num">{}</td>"#, group_thousands(v));
+                match chance.and_then(|c| c.expected.get(i).and_then(|r| r.get(j))) {
+                    Some(e) => {
+                        let _ = write!(
+                            t,
+                            r#"<td class="num">{} <span class="bnb-meta">(chance {e:.1})</span></td>"#,
+                            group_thousands(v)
+                        );
+                    }
+                    None => {
+                        let _ = write!(t, r#"<td class="num">{}</td>"#, group_thousands(v));
+                    }
+                }
             }
         }
         t.push_str("</tr>");
@@ -351,7 +479,7 @@ mod tests {
     #[test]
     fn a_cell_is_a_disc_an_outline_or_empty_by_how_much_there_is_to_say() {
         let (a, names) = answers(vec![vec![0, 30, 2], vec![4, 0, 0], vec![0, 0, 0]]);
-        let html = render(&a, &names, 30, &kit::SpeciesSlots::default());
+        let html = render(&a, None, &names, 30, &kit::SpeciesSlots::default());
         assert_eq!(
             html.matches(r#"class="ck-disc "#).count(),
             2,
@@ -375,7 +503,7 @@ mod tests {
         // A best pair at the floor is a hint, not a standout, and the grid says so.
         let (a, names) = answers(vec![vec![0, 3], vec![1, 0]]);
         assert!(
-            render(&a, &names, 30, &kit::SpeciesSlots::default())
+            render(&a, None, &names, 30, &kit::SpeciesSlots::default())
                 .contains("Nothing stands out yet"),
             "a pair at the floor is not a headline"
         );
@@ -419,14 +547,14 @@ mod tests {
     #[test]
     fn nothing_to_say_is_said_and_one_bird_is_no_grid() {
         let (a, names) = answers(vec![vec![0, 2], vec![1, 0]]);
-        let html = render(&a, &names, 30, &kit::SpeciesSlots::default());
+        let html = render(&a, None, &names, 30, &kit::SpeciesSlots::default());
         assert!(
             html.contains("No pair was heard within a minute of each other at least 3 times"),
             "{html}"
         );
         let (one, names) = answers(vec![vec![0]]);
         assert!(
-            render(&one, &names, 30, &kit::SpeciesSlots::default())
+            render(&one, None, &names, 30, &kit::SpeciesSlots::default())
                 .contains("Not enough different birds")
         );
     }
@@ -438,12 +566,49 @@ mod tests {
         let (mut a, mut names) = answers(vec![vec![0, 9], vec![9, 0]]);
         names[0] = "<i>Extraordinarily Long-named Warbler</i>".to_string();
         a.species[0] = names[0].clone();
-        let html = render(&a, &names, 30, &kit::SpeciesSlots::default());
+        let html = render(&a, None, &names, 30, &kit::SpeciesSlots::default());
         assert!(!html.contains("<i>Extra"), "{html}");
         assert!(
             html.contains("&lt;i&gt;Extraordinarily Long-named Warbler&lt;/i&gt;"),
             "whole in the table: {html}"
         );
         assert!(html.contains('\u{2026}'), "the label is cut: {html}");
+    }
+
+    fn chance(n: usize, expected: f64, marked: &[(usize, usize)]) -> AnswersChance {
+        let mut m = vec![vec![false; n]; n];
+        for &(i, j) in marked {
+            m[i][j] = true;
+        }
+        AnswersChance {
+            shifts_secs: vec![300; 19],
+            expected: vec![vec![expected; n]; n],
+            p: vec![vec![0.5; n]; n],
+            marked: m,
+            tests: n * (n - 1),
+        }
+    }
+
+    /// CHT-14: with a chance level, counts that are only birds singing in the same hours draw no
+    /// disc and say so, however large they are; the one cell above its shifts is the one disc.
+    #[test]
+    fn with_chance_only_a_cell_above_its_shifts_is_a_disc() {
+        let (a, names) = answers(vec![vec![0, 30, 12], vec![28, 0, 9], vec![11, 10, 0]]);
+        let none = chance(3, 25.0, &[]);
+        let html = render(&a, Some(&none), &names, 30, &kit::SpeciesSlots::default());
+        assert_eq!(html.matches(r#"class="ck-disc "#).count(), 0, "{html}");
+        assert!(html.contains(NOTHING_ANSWERS), "{html}");
+        assert!(html.contains("Within chance"), "{html}");
+        assert!(html.contains("(chance 25.0)"), "{html}");
+        assert!(html.contains("19 shifts of 5 to 30 minutes"), "{html}");
+        assert!(html.contains("seed 20261127"), "{html}");
+
+        let one = chance(3, 4.0, &[(0, 2)]);
+        let html = render(&a, Some(&one), &names, 30, &kit::SpeciesSlots::default());
+        assert_eq!(html.matches(r#"class="ck-disc "#).count(), 1, "{html}");
+        assert!(
+            html.contains("Eurasian Wren is heard within a minute after European Robin 12 times, 3.0 times what chance gives (4.0)."),
+            "{html}"
+        );
     }
 }

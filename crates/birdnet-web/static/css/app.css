@@ -712,6 +712,9 @@ a:hover { text-decoration: underline; }
    health lists the models the detector last reported." axe's link-in-text-block
    caught it on its first run (UIR-12). */
 .cls-detail a,
+/* What a count counts, under the species list and a day's log (UIR-30): axe's
+   link-in-text-block caught its link to the events on its first sweep. */
+[data-counts] a,
 a.dr-link {
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -1059,7 +1062,7 @@ main {
 /* Feed rows (dashboard live feed) */
 .feed { display: flex; flex-direction: column; gap: var(--space-6); }
 .feed-row {
-  display: grid; grid-template-columns: 64px 36px 1fr 130px 92px auto;
+  display: grid; grid-template-columns: 64px 36px 1fr 92px auto;
   align-items: center; gap: var(--space-12); padding: var(--space-10); border-radius: var(--r-base);
   border: var(--bw) solid transparent; transition: background var(--dur-glow), border-color var(--dur-glow);
 }
@@ -1069,10 +1072,6 @@ main {
 .feed-row .who .sci  { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .feed-row:hover { background: color-mix(in oklab, var(--fg) 3.5%, transparent); }
 .feed-row.fresh { background: color-mix(in oklab, var(--moss) 6%, var(--surface)); border-color: color-mix(in oklab, var(--moss) 30%, var(--border)); }
-
-/* Mini bar waveform (deterministic envelope rendered server-side) */
-.waveform { display: inline-flex; align-items: center; gap: 1.5px; height: 22px; }
-.waveform span { width: 2px; border-radius: var(--r-3xs); background: color-mix(in oklab, var(--moss) 60%, var(--fg-4)); }
 
 /* Activity heatmap (compact) */
 .miniheat-row { display: flex; gap: var(--space-6); align-items: center; margin-top: 3px; }
@@ -1305,7 +1304,7 @@ footer a:hover { color: var(--moss-ink); }
      scientific name (nowrap) held it at 143px, so at 320px the play button was drawn
      past the card and the whole page scrolled sideways. */
   .feed-row { grid-template-columns: 52px 30px minmax(0, 1fr) auto; }
-  .feed-row .waveform, .feed-row .bnb-conf { display: none; }
+  .feed-row .bnb-conf { display: none; }
   .topnav { padding: var(--space-8) var(--space-14); }
   .topnav-right .bnb-meta.mono { display: none; }
   table { display: block; overflow-x: auto; }
@@ -1389,7 +1388,7 @@ footer a:hover { color: var(--moss-ink); }
   }
   .bnb-conf .track, .progress, .st-vital .meter { border: 1px solid CanvasText; }
   .bnb-conf .fill, .progress-bar, .st-meter-fill, .meter-fill, .st-uptime span.up,
-  .bnb-conf-key i, .waveform span {
+  .bnb-conf-key i {
     forced-color-adjust: none;
     background: Highlight;
   }
@@ -3807,7 +3806,7 @@ a.spp-inherit    { color: inherit; }
       the dc-row*/dc-strip/dc-polar-svg partial classes already. ──────────── */
 .dc-head       { align-items: flex-start; }
 
-.dc-pills      { margin: 0; }
+.dc-cover      { margin: 0; }
 .dc-cols       { grid-template-columns: 1.05fr 0.95fr; }
 .dc-polar-card { display: flex; align-items: center; justify-content: center; min-height: 560px; }
 .dc-polar-wrap { width: 100%; display: flex; align-items: center; justify-content: center; }
@@ -4033,6 +4032,17 @@ a.spp-inherit    { color: inherit; }
 .rp-day.sel { border-color: var(--moss); box-shadow: 0 0 0 var(--bw-strong) var(--moss); }
 .rp-legend { display: flex; align-items: center; gap: 5px; margin-top: var(--space-12); justify-content: flex-end; font-size: var(--fs-xs); color: var(--fg-4); }
 .rp-legend span { width: 13px; height: 13px; border-radius: var(--r-2xs); }
+/* UIR-09: an off day, a quiet day and a day to come are three cells. Off is the kit's
+   "not listening" hatch (`.ck-off`), with the word; a day to come is a dashed outline with
+   nothing in it, and is not a link. */
+.rp-day.off { background: repeating-linear-gradient(45deg, var(--chart-grid-strong) 0 2px, transparent 2px 6px); }
+.rp-day .doff { position: absolute; left: 9px; bottom: 5px; line-height: 1; font-family: var(--font-mono); font-size: var(--fs-2xs); color: var(--fg-2); }
+.rp-day.future { background: transparent; border-style: dashed; cursor: default; }
+.rp-day.future:hover { border-color: var(--hairline); }
+.rp-day.future .dn { color: var(--fg-3); }
+.rp-legend .rp-key { width: auto; height: auto; display: inline-flex; align-items: center; gap: 5px; margin-left: var(--space-10); }
+.rp-legend .rp-legend-off { background: repeating-linear-gradient(45deg, var(--chart-grid-strong) 0 2px, transparent 2px 5px); border: var(--bw) solid var(--chart-grid-strong); }
+.rp-legend .rp-legend-future { border: var(--bw) dashed var(--fg-4); }
 
 /* ── Analytics shell (/analytics) — legacy --text-muted/--pad-3 preserved. ─ */
 
@@ -4750,6 +4760,12 @@ svg[data-ck="marks"] { cursor: default; }
 .ck-m3 { --c: var(--seq-moss-3); } .ck-m4 { --c: var(--seq-moss-4); }
 .ck-m5 { --c: var(--seq-moss-5); } .ck-m6 { --c: var(--seq-moss-6); }
 .ck-m7 { --c: var(--seq-moss-7); }
+/* The diverging ramp, for a measure with a meaningful middle (how many times chance, CHT-08):
+   dn = less than the middle, dp = more, 1 nearest it. The middle itself is the empty track. */
+.ck-dn1 { --c: var(--div-neg-1); } .ck-dn2 { --c: var(--div-neg-2); } .ck-dn3 { --c: var(--div-neg-3); }
+.ck-dp1 { --c: var(--div-pos-1); } .ck-dp2 { --c: var(--div-pos-2); } .ck-dp3 { --c: var(--div-pos-3); }
+.ck-track-sw { background: var(--chart-track); }
+.ck-ctrack { --c: var(--chart-track); }
 .ck-sw { background: var(--c); }
 .ck-fill { fill: var(--c); }
 /* A mark that fills from a gradient: full colour at its data end, a little toward
@@ -5197,9 +5213,9 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 .x-play { width: 30px; height: 30px; border-radius: var(--r-pill); border: var(--bw) solid var(--border-2); background: var(--surface); color: var(--fg-2); font-size: var(--fs-2xs); cursor: pointer; flex: none; }
 .x-play:hover, .x-play.playing { border-color: var(--moss); color: var(--moss-ink); }
 
-/* Feed rows: force one-line names so every row is the SAME height (waveforms
-   & play buttons then line up; was uneven because long names wrapped) */
-#detections-table .feed-row { grid-template-columns: 50px 32px minmax(0,1fr) 88px 86px 30px; gap: var(--space-10); }
+/* Feed rows: force one-line names so every row is the SAME height (confidence
+   bars & play buttons then line up; was uneven because long names wrapped) */
+#detections-table .feed-row { grid-template-columns: 50px 32px minmax(0,1fr) 86px 30px; gap: var(--space-10); }
 #detections-table .feed-row .who { min-width: 0; }
 #detections-table .feed-row .who .name { display: flex; align-items: center; gap: 7px; min-width: 0; flex-wrap: nowrap; }
 #detections-table .feed-row .who .name > a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -5207,8 +5223,8 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 
 /* Phone: the six-track desktop grid above is (1,1,0) and therefore beats the
    `@media (max-width: 720px) .feed-row` rule at the top of this sheet, which is
-   (0,1,0) — a media query does not raise specificity. The waveform and
-   confidence bar *are* hidden on a phone, but their 88px + 86px tracks are not,
+   (0,1,0) — a media query does not raise specificity. The confidence bar (and a
+   since-removed waveform) *were* hidden on a phone, but their 88px + 86px tracks were not,
    so `minmax(0,1fr)` collapsed the species-name column to exactly 0px: every
    row in the Today live feed rendered as time + banding-code + play button with
    ~200px of dead air and no name at all. Measured at 390px before this rule:
@@ -6151,22 +6167,29 @@ h1.display + p.bnb-meta, h2.display + p.bnb-meta { margin-top: var(--space-8); }
    the kit's classes (.ck-q1..7, .ck-c1..8, .ck-scale, …) carry the colour of a mark.
    Written in routes/pages/viz/{radial,matrix,ridge,…}.rs. */
 
-/* Who sings with whom: a ring on a wide screen, a ladder on a narrow one. The ring's
-   names need about 760 units of width; below 1000 px they would be drawn under the
-   legibility floor, and a ladder is as readable at 340 px as at 900. */
+/* Who sings with whom: the ladder is the figure at every width (it can say "less often than
+   chance" and "within chance", which a ring cannot, CHT-08). The ring is folded under it and
+   shown only from 1000 px: its names need about 760 units of width, and below that they would
+   be drawn under the legibility floor. */
 .co-fig { display: flex; flex-direction: column; gap: var(--space-12); width: 100%; }
+/* The figure's card lays its contents out in a row (a centred picture); this figure is a column
+   of its own with the as-of line under it, so the row would squeeze it beside that line. */
+#acoustic-network { display: block; }
 .co-controls { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-10); flex-wrap: wrap; }
 .co-main { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-24); align-items: start; }
-.co-chord { display: none; min-width: 0; }
+.co-chord { min-width: 0; }
+/* A migration ridge on a handful of detections is an outline (CHT-09). */
+.rd-few .rd-area { fill: none; }
+.rd-few .rd-line { stroke-dasharray: 3 3; }
+.co-ring { display: none; }
+.co-none { margin: 0; }
 .co-chord .viz-svg-chord { max-width: 800px; }
 .co-ladder { min-width: 0; }
 .viz-svg-ladder { display: block; width: 100%; max-width: 480px; height: auto; margin-inline: auto; }
 .co-aside-h { margin: 0 0 var(--space-10); font-family: var(--font-display); font-size: var(--fs-lead); font-weight: var(--fw-regular); letter-spacing: var(--track-tight); }
-@media (max-width: 999px) { .co-controls { display: none; } }
 @media (min-width: 1000px) {
   .co-main { grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); }
-  .co-chord { display: block; }
-  .co-ladder { display: none; }
+  .co-ring { display: block; }
 }
 .co-rank { list-style: none; margin: 0 0 var(--space-12); padding: 0; display: grid; gap: var(--space-10); }
 .co-rank-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "n v" "b b"; gap: var(--space-4) var(--space-8); font-size: var(--fs-md); }
@@ -6634,7 +6657,11 @@ input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
 :root[data-illustration="plate"] .ck-q7, :root[data-illustration="plate"] .ck-m1,
 :root[data-illustration="plate"] .ck-m2, :root[data-illustration="plate"] .ck-m3,
 :root[data-illustration="plate"] .ck-m4, :root[data-illustration="plate"] .ck-m5,
-:root[data-illustration="plate"] .ck-m6, :root[data-illustration="plate"] .ck-m7 { --hatch: initial; }
+:root[data-illustration="plate"] .ck-m6, :root[data-illustration="plate"] .ck-m7,
+:root[data-illustration="plate"] .ck-dn1, :root[data-illustration="plate"] .ck-dn2,
+:root[data-illustration="plate"] .ck-dn3, :root[data-illustration="plate"] .ck-dp1,
+:root[data-illustration="plate"] .ck-dp2, :root[data-illustration="plate"] .ck-dp3,
+:root[data-illustration="plate"] .ck-ctrack { --hatch: initial; }
 :root[data-illustration="plate"] .ck-fill,
 :root[data-illustration="plate"] .bt-bar,
 :root[data-illustration="plate"] .chord-arc,
@@ -7085,3 +7112,14 @@ input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
 /* The line under a figure from the analytics cache that says when it was worked out (UIC-23). */
 .ck-asof { margin: var(--space-6) 0 0; }
 /* /Lane L1 */
+/* Lane F (review 2026-11): the band mark and the usual range (CHT-23, CHT-06). The band is the
+   interval's hue one step paler than `.ck-ci` (a band is an area behind other marks, a whisker a
+   thin bar beside one), so a range reads as the same family on every figure without drowning the
+   columns it sits behind. A day outside its usual range is an open diamond in the annotation ink,
+   ringed off the card. */
+.ck-band { fill: var(--seq-moss-1); pointer-events: none; }
+.ck-out { fill: var(--chart-gap); stroke: var(--chart-annot); stroke-width: 1.5px; vector-effect: non-scaling-stroke; pointer-events: none; }
+.ck-keyband { display: inline-block; width: 14px; height: 10px; border-radius: var(--r-2xs); vertical-align: -1px; background: var(--seq-moss-1); }
+.ck-keyout { display: inline-block; width: 7px; height: 7px; margin: 0 var(--space-2); vertical-align: 0; transform: rotate(45deg); border: 1.5px solid var(--chart-annot); background: var(--chart-gap); }
+.ck-method { margin-top: var(--space-6); max-width: 72ch; }
+/* /Lane F */

@@ -128,7 +128,7 @@ page). **One rule picks the tier** — `crates/birdnet-web/src/routes/pages/conf
 
 | Tier | Whole percent | Reads as |
 |---|---|---|
-| high | 90 and up | very sure |
+| high | 90 and up | high score |
 | mid | from the borderline edge to 89 | sure |
 | low | below the borderline edge | borderline |
 
@@ -139,7 +139,7 @@ a detection the station accepted at 72 % is not a fault.
 
 | Token | Light | Dark | Use |
 |---|---|---|---|
-| `--conf-high` | `var(--moss)` | `oklch(70% 0.12 150)` | Bar fill for a very sure detection. |
+| `--conf-high` | `var(--moss)` | `oklch(70% 0.12 150)` | Bar fill for a high-score detection. |
 | `--conf-high-soft` | `var(--moss-soft)` | Pill background, high. |
 | `--conf-high-ink` | `var(--moss-ink)` | Pill text, high. |
 | `--conf-mid` | `oklch(58% 0.025 150)` | `oklch(68% 0.025 150)` | Bar fill for a sure detection. |

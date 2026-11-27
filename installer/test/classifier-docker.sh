@@ -320,6 +320,9 @@ run_entrypoint "${vol}" BIRDNET_SKIP_MODEL_DOWNLOAD=1
 [ ! -s "${WORK}/stub.log" ] && [ "$(denv BIRDNET_MODEL)" = "${vol}/${V24_MODEL}" ] && [ -z "$(denv BIRDNET_METADATA_MODEL)" ] && [ "$(classifier_lines)" = 1 ] \
     && pass "no install, the V2.4 paths are set, no filter is claimed, one Classifier line" \
     || fail "skip handling: calls '$(asked)' model '$(denv BIRDNET_MODEL)' filter '$(denv BIRDNET_METADATA_MODEL)'"
+grep -q 'fetches missing model files itself' "${WORK}/e2e.out" && grep -q 'BIRDNET_OFFLINE=1' "${WORK}/e2e.out" \
+    && pass "it says the station fetches the files itself, and how to stop it (MDL-27)" \
+    || fail "the skip message does not say the station fetches the files itself (MDL-27)"
 vol="${WORK}/skip-old-v3"
 seed "${vol}" "${OLD_V3_MODEL}:${V3_MODEL}"
 run_entrypoint "${vol}" BIRDNET_SKIP_MODEL_DOWNLOAD=1

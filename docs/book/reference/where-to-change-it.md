@@ -37,6 +37,7 @@ Every key the settings pages and `PUT /api/v2/settings` write, where it is chang
 | `freq_shift_hz` | Settings → Capture → Audio Capture → Frequency Shift (Hz, 0 = disabled) (`freq_shift_hz`) | Applies after restart |
 | `clip_target_lufs` | Settings → Capture → Audio Capture → Even out clip volume (`clip_target_lufs`) | Applies after restart |
 | `livestream_source` | Recordings → Live (the source picker) | Applies immediately |
+| `live_audio` | Settings → Capture → Audio sources → Who can hear the live audio | Applies immediately |
 | `analytics_exclude_imports` | Settings → Data → Bring your history with you | Applies immediately |
 | `today_layout` | Settings → General → Today Page Layout | Applies immediately |
 | `latitude` | Settings → Capture → Location & Recording Schedule → Latitude (`latitude`) | Applies after restart |
@@ -138,6 +139,7 @@ Every key `birdnet.conf` can carry (`KNOWN_CONFIG_KEYS`). A settings key bridged
 |---|---|---|
 | `ALSA_CARD` | Settings → Capture → Audio Capture → Microphone address (`alsa_device`) | |
 | `ALSA_CARDS` | Settings → Capture → Audio sources (several microphones are rows there; this key only seeds them at the first start) | |
+| `ANALYSIS_CHANNELS` | — | A property of how the microphones are wired, decided once with the hardware in hand; the per-source Mono/Left/Right pick on the Audio page is the everyday control, and this applies to recordings that reach the pipeline with their channels intact. |
 | `ANALYTICS_DB_PATH` | — | Where the station keeps its data. Moving it means moving the files first, which a page cannot do; pointing the station at a new path from a form would start it on an empty database and look like lost history. |
 | `APPRISE_BODY_TEMPLATE` | Settings → Alerts → Notifications → Notification Body Template (`notify_body_template`) | |
 | `APPRISE_CONFIG_FILE` | Settings → Alerts → Notifications → Path to an Apprise configuration file (`apprise_config`) | |
@@ -169,6 +171,7 @@ Every key `birdnet.conf` can carry (`KNOWN_CONFIG_KEYS`). A settings key bridged
 | `CUSTOM_IMAGE_DIR` | Settings → General → System & Display → Custom Species Image Directory (`custom_image_dir`) | |
 | `DATABASE_LANG` | Settings → General → System & Display → Common-name language (`database_lang`) | |
 | `DB_PATH` | — | Where the station keeps its data. Moving it means moving the files first, which a page cannot do; pointing the station at a new path from a form would start it on an empty database and look like lost history. |
+| `DB_SYNCHRONOUS` | — | A trade between the life of an SD card and the last seconds of detections before a power cut, made once with the storage in hand; a form would invite toggling it to see what happens, and it takes effect at the next start. |
 | `DEADMAN_HOURS` | Settings → Alerts → Notifications → Dead-man alert after (hours of no detections) (`deadman_hours`) | |
 | `DISK_PURGE_THRESHOLD` | Settings → General → System & Display → Disk Purge Threshold (%) (`purge_threshold`) | |
 | `DUPLICATE_INTERVAL_SECS` | Settings → Capture → Detection filters → Ignore repeats of the same bird for (seconds) (`duplicate_interval_secs`) | |
@@ -199,20 +202,29 @@ Every key `birdnet.conf` can carry (`KNOWN_CONFIG_KEYS`). A settings key bridged
 | `MODEL` | — | Names the primary classifier's id for the routing and statistics pages; part of the multi-classifier setup, which is file-only (see MODEL_2_PATH). |
 | `MODEL_2_ID` | — | A second or third classifier running beside the first. Each needs its own model and labels file on disk, a sample rate the model's shape cannot state, and enough memory (the station refuses a model that would not fit); a wrong value silently mislabels species. `--install-model list` prints the exact lines. |
 | `MODEL_2_LABELS` | — | A second or third classifier running beside the first. Each needs its own model and labels file on disk, a sample rate the model's shape cannot state, and enough memory (the station refuses a model that would not fit); a wrong value silently mislabels species. `--install-model list` prints the exact lines. |
+| `MODEL_2_NOISE_THRESHOLD` | — | A classifier's own privacy or noise rule, part of the multi-classifier set-up; each reads that classifier's own scores, so it is set with the classifier, in the file, beside MODEL_2_PATH. |
 | `MODEL_2_PATH` | — | A second or third classifier running beside the first. Each needs its own model and labels file on disk, a sample rate the model's shape cannot state, and enough memory (the station refuses a model that would not fit); a wrong value silently mislabels species. `--install-model list` prints the exact lines. |
 | `MODEL_2_OUTPUT_SCALE` | — | A second or third classifier running beside the first. Each needs its own model and labels file on disk, a sample rate the model's shape cannot state, and enough memory (the station refuses a model that would not fit); a wrong value silently mislabels species. `--install-model list` prints the exact lines. |
+| `MODEL_2_PRIVACY_RANK` | — | A classifier's own privacy or noise rule, part of the multi-classifier set-up; each reads that classifier's own scores, so it is set with the classifier, in the file, beside MODEL_2_PATH. |
+| `MODEL_2_PRIVACY_THRESHOLD` | — | A classifier's own privacy or noise rule, part of the multi-classifier set-up; each reads that classifier's own scores, so it is set with the classifier, in the file, beside MODEL_2_PATH. |
 | `MODEL_2_SAMPLE_RATE` | — | A second or third classifier running beside the first. Each needs its own model and labels file on disk, a sample rate the model's shape cannot state, and enough memory (the station refuses a model that would not fit); a wrong value silently mislabels species. `--install-model list` prints the exact lines. |
 | `MODEL_2_THRESHOLD` | — | A second or third classifier running beside the first. Each needs its own model and labels file on disk, a sample rate the model's shape cannot state, and enough memory (the station refuses a model that would not fit); a wrong value silently mislabels species. `--install-model list` prints the exact lines. |
 | `MODEL_3_ID` | — | A second or third classifier running beside the first. Each needs its own model and labels file on disk, a sample rate the model's shape cannot state, and enough memory (the station refuses a model that would not fit); a wrong value silently mislabels species. `--install-model list` prints the exact lines. |
 | `MODEL_3_LABELS` | — | A second or third classifier running beside the first. Each needs its own model and labels file on disk, a sample rate the model's shape cannot state, and enough memory (the station refuses a model that would not fit); a wrong value silently mislabels species. `--install-model list` prints the exact lines. |
+| `MODEL_3_NOISE_THRESHOLD` | — | A classifier's own privacy or noise rule, part of the multi-classifier set-up; each reads that classifier's own scores, so it is set with the classifier, in the file, beside MODEL_2_PATH. |
 | `MODEL_3_PATH` | — | A second or third classifier running beside the first. Each needs its own model and labels file on disk, a sample rate the model's shape cannot state, and enough memory (the station refuses a model that would not fit); a wrong value silently mislabels species. `--install-model list` prints the exact lines. |
 | `MODEL_3_OUTPUT_SCALE` | — | A second or third classifier running beside the first. Each needs its own model and labels file on disk, a sample rate the model's shape cannot state, and enough memory (the station refuses a model that would not fit); a wrong value silently mislabels species. `--install-model list` prints the exact lines. |
+| `MODEL_3_PRIVACY_RANK` | — | A classifier's own privacy or noise rule, part of the multi-classifier set-up; each reads that classifier's own scores, so it is set with the classifier, in the file, beside MODEL_2_PATH. |
+| `MODEL_3_PRIVACY_THRESHOLD` | — | A classifier's own privacy or noise rule, part of the multi-classifier set-up; each reads that classifier's own scores, so it is set with the classifier, in the file, beside MODEL_2_PATH. |
 | `MODEL_3_SAMPLE_RATE` | — | A second or third classifier running beside the first. Each needs its own model and labels file on disk, a sample rate the model's shape cannot state, and enough memory (the station refuses a model that would not fit); a wrong value silently mislabels species. `--install-model list` prints the exact lines. |
 | `MODEL_3_THRESHOLD` | — | A second or third classifier running beside the first. Each needs its own model and labels file on disk, a sample rate the model's shape cannot state, and enough memory (the station refuses a model that would not fit); a wrong value silently mislabels species. `--install-model list` prints the exact lines. |
 | `MODEL_DIR` | — | Where the model panel installs and the station looks. The default (beside the database) is what almost everyone wants. |
 | `MODEL_ID` | — | Part of the multi-classifier set-up; see MODEL_2_PATH. |
+| `MODEL_NOISE_THRESHOLD` | — | A classifier's own privacy or noise rule, part of the multi-classifier set-up; each reads that classifier's own scores, so it is set with the classifier, in the file, beside MODEL_2_PATH. |
 | `MODEL_OUTPUT_SCALE` | — | Part of the multi-classifier set-up; see MODEL_2_PATH. Needed only for a model whose input shape the station does not recognise, which it refuses to start without. |
 | `MODEL_PATH` | — | Set for you by the installer or by the Bird-identifying model panel (Settings → Capture). Pointing at a model file of your own is the advanced case and is done in the file, together with its labels. |
+| `MODEL_PRIVACY_RANK` | — | A classifier's own privacy or noise rule, part of the multi-classifier set-up; each reads that classifier's own scores, so it is set with the classifier, in the file, beside MODEL_2_PATH. |
+| `MODEL_PRIVACY_THRESHOLD` | — | A classifier's own privacy or noise rule, part of the multi-classifier set-up; each reads that classifier's own scores, so it is set with the classifier, in the file, beside MODEL_2_PATH. |
 | `MODEL_ROUTES` | — | Part of the multi-classifier set-up; see MODEL_2_PATH. |
 | `MODEL_SAMPLE_RATE` | — | Part of the multi-classifier set-up; see MODEL_2_PATH. |
 | `MODEL_THRESHOLD` | — | Part of the multi-classifier set-up; see MODEL_2_PATH. |
@@ -237,6 +249,7 @@ Every key `birdnet.conf` can carry (`KNOWN_CONFIG_KEYS`). A settings key bridged
 | `NOISE_THRESHOLD` | Settings → Capture → Detection filters → Drop recordings with a barking dog above (0 to 1) (`noise_threshold`) | |
 | `NOTIFY_RATE_PER_MINUTE` | Settings → Alerts → Alert limits → At most this many alerts per minute (`notify_rate_per_minute`) | |
 | `NOTIFY_URLS` | Settings → Alerts → Notifications → Where to send alerts (`notify_urls`) | |
+| `OCCURRENCE_WEEK` | — | A choice between BirdNET-Pi's way of reading the range model and a study's, made once for what the station is for; switching it back and forth would make the history judged two ways without a trace in the page. |
 | `OFFSITE_BACKUP` | — | Offsite backups are encrypted with a passphrase and need credentials. The settings table is inside every backup, so a passphrase or secret key saved there would sit inside the archive it protects; they are read from the environment or the config file only, on purpose (src/helpers/offsite.rs). |
 | `OFFSITE_KEEP` | — | Part of the offsite-backup set-up; see OFFSITE_BACKUP for why it is file-only. |
 | `OFFSITE_PASSPHRASE` | — | A secret that must never be stored in the database being backed up; see OFFSITE_BACKUP. |
@@ -275,9 +288,11 @@ Every key `birdnet.conf` can carry (`KNOWN_CONFIG_KEYS`). A settings key bridged
 | `SENSITIVITY` | Settings → Capture → Detection Settings → Sensitivity (0.5–1.5) (`sensitivity`) | |
 | `SF_THRESH` | Settings → Capture → Detection Settings → Species Frequency Threshold (0–1) (`sf_thresh`) | |
 | `SITENAME` | Settings → General → System & Display → Site Name (`site_name`) | |
+| `SOURCE_SITES` | — | Says which microphones are in one place, decided once with the hardware laid out; it changes what is counted as one event and what BirdWeather is sent, so it is set beside the sources it names. |
 | `SPECIES_ALIASES_PATH` | — | A tab-separated file of legacy names kept by hand over months; it needs a file on the station's disk. |
 | `STATION_HEALTH_ALERTS` | Settings → Alerts → Alert limits → Tell me when the station has a problem (`station_health_alerts`) | |
 | `STATION_NAME` | Settings → Capture → Location & Recording Schedule → Station Name (`station_name`) | |
+| `STATION_PROFILE` | — | Chosen once for what the station is for, with its storage and its study in hand; it changes several defaults together, and a page that flipped it would change how the next commits are kept without the operator having read what it does. |
 | `STREAM_MAX_MB` | Settings → General → System & Display → Streaming Folder Limit (MB) (`stream_max_mb`) | |
 | `STREAM_RETENTION_SECS` | Settings → General → System & Display → Raw Segment Retention (seconds) (`stream_retention_secs`) | |
 | `TLS_CERT` | — | Changing how the page is served (HTTPS, certificates, the address it listens on) from the page itself can lock the owner out: a wrong certificate or address makes the page unreachable, with no page left to undo it. Set in the file with the service stopped. |
@@ -334,6 +349,14 @@ Every flag `birdnet-behavior --help` lists, the environment variable that sets i
 | `--image-cache-dir` | `BIRDNET_IMAGE_CACHE_DIR` | Settings → General → System & Display → Species Image Cache Directory (`image_cache_dir`) (the same as `IMAGE_CACHE_DIR`) | |
 | `--import-birdnet-pi-clips` | — | Settings → Data → Bring your history with you → Recordings |  |
 | `--import-birdnet-pi-conf` | — | Settings → Data → Bring your history with you (upload `birdnet.conf`; the page shows every line before anything changes) |  |
+| `--ingest-max-pending` | — | — | Only meaningful with --ingest-recordings, a one-shot command run at the station's shell against recordings on its disk. |
+| `--ingest-name-rule` | — | — | Only meaningful with --ingest-recordings, a one-shot command run at the station's shell against recordings on its disk. |
+| `--ingest-recordings` | — | — | Reads recordings already on the station's disk (an SD card, a recorder's folder), which a browser cannot reach, and runs for as long as they take. |
+| `--ingest-segment-secs` | — | — | Only meaningful with --ingest-recordings, a one-shot command run at the station's shell against recordings on its disk. |
+| `--ingest-source` | — | — | Only meaningful with --ingest-recordings, a one-shot command run at the station's shell against recordings on its disk. |
+| `--ingest-stall-secs` | — | — | Only meaningful with --ingest-recordings, a one-shot command run at the station's shell against recordings on its disk. |
+| `--ingest-start` | — | — | Only meaningful with --ingest-recordings, a one-shot command run at the station's shell against recordings on its disk. |
+| `--ingest-utc-offset` | — | — | Only meaningful with --ingest-recordings, a one-shot command run at the station's shell against recordings on its disk. |
 | `--info-site` | `BIRDNET_INFO_SITE` | Settings → General → System & Display → Species Info Links (`info_site`) (the same as `INFO_SITE`) | |
 | `--install-model` | — | Settings → Capture → Bird-identifying model → Install |  |
 | `--labels` | `BIRDNET_LABELS` | — | Same as `LABELS_PATH`: Set for you by the installer or by the Bird-identifying model panel. A different labels file than the model's own reports species under other species' names, so it is only ever set together with its model, in the file. |

@@ -3,11 +3,13 @@
 pub mod analysis_runs;
 pub mod analytics;
 pub mod charts;
+pub mod clip_evidence;
 pub mod correlation;
 pub mod detection_reviews;
 pub mod detections;
 pub mod discards;
 pub mod effort;
+pub mod events;
 pub mod heatmap;
 pub mod images;
 pub mod imports;
@@ -16,11 +18,17 @@ pub mod maintenance;
 pub mod model_scores;
 pub mod overview;
 pub mod quarantine;
+pub mod rates;
+pub mod run_config;
+pub mod site_effort;
 pub mod species;
+pub mod study;
+pub mod validation;
 
 pub use analysis_runs::{
-    AnalysisRun, NewAnalysisRun, RunModel, analysis_run, detection_counts_by_run,
-    insert_analysis_run, latest_analysis_run, list_analysis_runs, run_models,
+    AnalysisRun, ModelAttribution, NewAnalysisRun, NewRunClassifier, RunModel, analysis_run,
+    detection_counts_by_run, insert_analysis_run, insert_run_classifier, latest_analysis_run,
+    list_analysis_runs, model_attribution, run_models,
 };
 pub use analytics::{
     QualitySummary, ReviewVerdictDay, SpeciesReviewShare, confidence_distribution,
@@ -34,7 +42,14 @@ pub use charts::{
     CONFIDENCE_HISTOGRAM_MIN_DETECTIONS, ConfidenceHistogram, DayOnset, SpeciesDay, SpeciesHours,
     confidence_histograms, day_counts_between, day_onsets, slot_counts, species_day, species_hours,
 };
-pub use correlation::{companion_species, top_cooccurrence_pairs};
+pub use clip_evidence::{
+    ClipDigest, ClipRecord, ClipState, clip_record, detection_uuid_of, digest_clip, digest_file,
+    for_each_clip_record, record_clip_digest, record_quarantine_clip_digest, verify as verify_clip,
+};
+pub use correlation::{
+    COOCCURRENCE_METHOD, CoStrata, CooccurrenceAnalysis, CooccurrenceQuery, ListenedFrom,
+    companion_species, cooccurrence_analysis, cooccurrence_strata, top_cooccurrence_pairs,
+};
 pub use detection_reviews::{
     Detached, DetectionReview, ReviewEvent, ReviewStatus, Reviewer, UnreviewedDetection,
     clear_detection_review, clear_detection_review_by, detached_review_count, detection_clips,
@@ -45,20 +60,22 @@ pub use detection_reviews::{
 };
 pub use detections::{
     CLIP_AVAILABLE, DateRange, DetectionFilter, DetectionKey, HourWindow, LockFilter,
-    RecordingsFilter, SearchTerm, SortOrder, SpeciesHeard, TodayFilter, VerdictFilter,
-    analytic_detection_count, analytic_detection_count_for_date, analytic_detections,
-    analytic_detections_above, analytic_species_count_for_date, best_detections_for_date,
-    clip_kept_back_sql, com_name_for, concurrent_detections_from_other_sources, delete_detection,
-    delete_detection_at, detected_at_utc_for, detection_at, detection_count,
-    detection_count_for_date, detection_count_for_species_date, detection_dates,
-    detection_with_clip, detections_by_date, detections_by_species, detections_for_clip,
-    detections_per_day, insert_detection, is_detection_locked, is_detection_locked_at,
-    kept_back_file_names, known_sources, like_contains, lock_detection, lock_detection_at,
-    locked_file_names, parse_search_term, recent_clips, recent_clips_count, recent_detections,
-    relabel_detection, relabel_detection_at, search_detection_count, search_detections,
-    seconds_since_last_detection, set_birdweather_soundscape, species_detection_count_between,
-    species_for_date, species_heard_on, todays_detection_count, todays_detections,
-    todays_source_activity, unlock_detection, unlock_detection_at, unstamped_detection_count,
+    RecordedDetection, RecordingsFilter, SearchTerm, SortOrder, SpeciesHeard, TodayFilter,
+    VerdictFilter, analytic_detection_count, analytic_detection_count_for_date,
+    analytic_detections, analytic_detections_above, analytic_species_count_for_date,
+    best_detections_for_date, clip_kept_back_sql, com_name_for,
+    concurrent_detections_from_other_sources, delete_detection, delete_detection_at,
+    detected_at_utc_for, detection_at, detection_count, detection_count_for_date,
+    detection_count_for_species_date, detection_date_bounds, detection_dates, detection_recorded,
+    detection_with_clip, detections_by_date, detections_by_date_page, detections_by_species,
+    detections_for_clip, detections_per_day, detections_per_day_between, insert_detection,
+    is_detection_locked, is_detection_locked_at, kept_back_file_names, known_sources,
+    like_contains, lock_detection, lock_detection_at, locked_file_names, parse_search_term,
+    recent_clips, recent_clips_count, recent_detections, relabel_detection, relabel_detection_at,
+    search_detection_count, search_detections, seconds_since_last_detection,
+    set_birdweather_soundscape, species_detection_count_between, species_for_date,
+    species_heard_on, todays_detection_count, todays_detections, todays_source_activity,
+    unlock_detection, unlock_detection_at, unstamped_detection_count,
 };
 pub use discards::{DiscardRow, add_discards, discards_on};
 pub use effort::{EffortHour, Occasion, detection_history, effort_hours, total_recording_seconds};
@@ -84,15 +101,17 @@ pub use overview::{EngineDetails, TableSize, detection_rate_24h, engine_details,
 pub use quarantine::{
     ALL_QUARANTINE_REASONS, QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow,
     QuarantineStats, approve_quarantine, approve_quarantine_by, count_quarantine,
-    delete_quarantine, get_quarantine, insert_quarantine, list_quarantine, prune_quarantine,
-    quarantine_pending_count, quarantine_stats, reject_quarantine,
+    delete_quarantine, get_quarantine, insert_quarantine, insert_quarantine_with_clip,
+    list_quarantine, prunable_quarantine_clips, prune_quarantine, quarantine_clip_of,
+    quarantine_pending_count, quarantine_recorded, quarantine_stats, reject_quarantine,
+    unreferenced_clips,
 };
 pub use species::{
     BulkOutcome, SpeciesInterval, SpeciesThreshold, SpeciesUsage, delete_species_detections,
     delete_species_interval, delete_species_threshold, get_species_interval_map,
     get_species_intervals, get_species_threshold_map, get_species_thresholds, prune_species_clips,
     recent_by_species, search_species, set_species_interval, set_species_threshold,
-    species_clip_files, species_count, species_daily_counts, species_disk_usage,
-    species_first_detection, species_first_seen, species_hourly_activity,
+    species_clip_files, species_count, species_counts_by_day, species_daily_counts,
+    species_disk_usage, species_first_detection, species_first_seen, species_hourly_activity,
     species_hourly_activity_batch, species_sparklines, species_summary, top_species,
 };

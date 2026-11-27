@@ -2914,6 +2914,387 @@ pub const MIGRATIONS: &[Migration] = &[
                     OLD.Sci_Name);
         END;",
     },
+    Migration {
+        version: 67,
+        description: "Each classifier a run used, with the file it loaded",
+        // Review F19 / MMP-08. `analysis_runs` records one classifier, the
+        // primary, and every export resolved a row's model through `run_id`
+        // alone, so a row the second classifier answered was exported with the
+        // primary's name and SHA-256. Each classifier a run registers is now a
+        // row here, keyed by the id rows carry in `model_id`.
+        //
+        // A run from before this migration has no rows here and is left as it
+        // was: what classifiers it used was never recorded, and nothing is
+        // inferred into this table. Purely additive.
+        up_sql: "CREATE TABLE IF NOT EXISTS analysis_run_models (
+            run_id        INTEGER NOT NULL REFERENCES analysis_runs(id),
+            model_id      TEXT    NOT NULL,
+            model_name    TEXT    NOT NULL,
+            model_sha256  TEXT    NOT NULL,
+            labels_sha256 TEXT    NOT NULL,
+            is_primary    INTEGER NOT NULL CHECK (is_primary IN (0, 1)),
+            PRIMARY KEY (run_id, model_id)
+        );",
+    },
+    Migration {
+        version: 68,
+        description: "How much of each classifier's window was padding",
+        // Review F09. On the last chunk of a recording each classifier's window
+        // runs past the recording's end and is filled with zeros. The answer's
+        // `window_end_secs` is clamped to the audio that exists, and this says
+        // how much of the window was padding, so a reader comparing classifiers
+        // can tell a score given mostly to silence.
+        //
+        // NULL for an answer stored before this migration: how much of its
+        // window was padding was not recorded, and is not inferred. Additive.
+        up_sql: "ALTER TABLE detection_model_scores ADD COLUMN padded_secs REAL;",
+    },
+    Migration {
+        version: 69,
+        description: "A stable identifier for every detection, and the checksum of its clip",
+        // RES-25. A detection had no identifier of its own. The rowid is
+        // renumbered by a `VACUUM` of a table without an INTEGER PRIMARY KEY,
+        // which this one (BirdNET-Pi's schema) is; the unique key
+        // `(Date, Time, Sci_Name, File_Name, chunk_offset_secs)` changes when
+        // the detection is relabelled; and neither travels through an export.
+        // `detection_uuid` is a random (version 4) UUID given once, by a
+        // trigger, so every write path present and future gets one, and a
+        // second trigger refuses to change it once given. An export carries it
+        // and the CSV import keeps it, so a detection read back is the same
+        // detection.
+        //
+        // Every row already stored is given one here. That writes a new column
+        // and changes no value a row already has, so it is not a history
+        // rewrite and takes no pre-migration backup (as migration 32's
+        // `detected_at_utc` backfill did not).
+        //
+        // RES-23. `Clip_Sha256` and `Clip_Bytes` are the SHA-256 and length of
+        // the clip as it was written, recorded beside the row so a study can
+        // tell later that the file it holds is the one the row describes.
+        // NULL on a row stored before this migration, or one whose clip could
+        // not be read when it was written: unknown, never computed after the
+        // fact from whatever file is there now. Once recorded they cannot be
+        // changed. The quarantine keeps the same two values for the clip it
+        // cuts, and approval carries them to the detection.
+        up_sql: "ALTER TABLE detections ADD COLUMN detection_uuid TEXT;
+        ALTER TABLE detections ADD COLUMN Clip_Sha256 TEXT;
+        ALTER TABLE detections ADD COLUMN Clip_Bytes INTEGER;
+        ALTER TABLE quarantine ADD COLUMN clip_sha256 TEXT;
+        ALTER TABLE quarantine ADD COLUMN clip_bytes INTEGER;
+
+        UPDATE detections
+           SET detection_uuid = lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2)))
+                 || '-4' || substr(lower(hex(randomblob(2))), 2)
+                 || '-' || substr('89ab', 1 + (abs(random()) % 4), 1)
+                 || substr(lower(hex(randomblob(2))), 2)
+                 || '-' || lower(hex(randomblob(6)))
+         WHERE detection_uuid IS NULL;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_detections_uuid ON detections(detection_uuid);
+
+        CREATE TRIGGER detections_stamp_uuid AFTER INSERT ON detections
+        WHEN NEW.detection_uuid IS NULL
+        BEGIN
+            UPDATE detections
+               SET detection_uuid = lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2)))
+                     || '-4' || substr(lower(hex(randomblob(2))), 2)
+                     || '-' || substr('89ab', 1 + (abs(random()) % 4), 1)
+                     || substr(lower(hex(randomblob(2))), 2)
+                     || '-' || lower(hex(randomblob(6)))
+             WHERE rowid = NEW.rowid;
+        END;
+
+        CREATE TRIGGER detections_uuid_is_permanent
+            BEFORE UPDATE OF detection_uuid ON detections
+            WHEN OLD.detection_uuid IS NOT NULL
+             AND NEW.detection_uuid IS NOT OLD.detection_uuid
+        BEGIN
+            SELECT RAISE(ABORT, 'detection_uuid is permanent: a detection keeps its identifier');
+        END;
+
+        CREATE TRIGGER detections_clip_checksum_is_permanent
+            BEFORE UPDATE OF Clip_Sha256, Clip_Bytes ON detections
+            WHEN OLD.Clip_Sha256 IS NOT NULL
+             AND (NEW.Clip_Sha256 IS NOT OLD.Clip_Sha256 OR NEW.Clip_Bytes IS NOT OLD.Clip_Bytes)
+        BEGIN
+            SELECT RAISE(ABORT, 'Clip_Sha256 is permanent: it records the clip as it was written');
+        END;",
+    },
+    Migration {
+        version: 70,
+        description: "The station's identity, its deployments, each source's devices, the clock's state, and effort by UTC hour",
+        // RES-12, RES-13, RES-22, MSC-13, OOB-17. Five additive records; no
+        // existing row is changed and every source id stays what it was.
+        //
+        // `station_identity` holds one random RFC 4122 version 4 id, minted
+        // here once. An export or a run names the station by it; a copy of the
+        // database is the same station, a fresh database another.
+        //
+        // `deployments` is what an operator states about where and how a
+        // source listened: from when, at what coordinates and height, facing
+        // which way, with which microphone. Nothing is inferred into it. Its
+        // triggers keep it a record: a deployment of one source may not
+        // overlap another, what was stated is not rewritten, and an open
+        // deployment's end is set once. A mistake is corrected by closing it
+        // and stating the next.
+        //
+        // `audio_source_devices` says which device each source was, and when.
+        // `device_seq` numbers a source's distinct devices (kind and device
+        // string) in the order first seen, so removing and re-adding the same
+        // microphone keeps its number, and editing a camera's URL starts a new
+        // one rather than continuing the old camera's history under it. The
+        // triggers write it on every path that adds, edits, removes or
+        // re-adds a source. A source that existed before this migration gets
+        // one record, starting at its creation if the row was never edited
+        // and at an unknown time (NULL) if it was, because the device may have
+        // been changed in between; a removed source's record ends at its
+        // removal.
+        //
+        // `clock_observations` is the clock as the station saw it: its
+        // synchronisation state, which authority said so, the boot it was
+        // seen in, and any step against elapsed time. A row is written when
+        // the state or the boot changes or the clock steps; between rows the
+        // state is the last row's.
+        //
+        // `recording_effort_utc` is the effort ledger by UTC hour, so the
+        // repeated autumn hour is two rows rather than one, with the time each
+        // source was up split by the clock's state while it was. Rows before
+        // this migration are not inferred into it.
+        up_sql: "CREATE TABLE IF NOT EXISTS station_identity (
+            id             INTEGER PRIMARY KEY CHECK (id = 1),
+            station_uuid   TEXT    NOT NULL,
+            created_at_utc INTEGER NOT NULL
+        );
+        INSERT OR IGNORE INTO station_identity (id, station_uuid, created_at_utc)
+        VALUES (
+            1,
+            lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4'
+                || substr(lower(hex(randomblob(2))), 2) || '-'
+                || substr('89ab', 1 + (abs(random()) % 4), 1)
+                || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))),
+            CAST(strftime('%s', 'now') AS INTEGER)
+        );
+
+        CREATE TABLE IF NOT EXISTS deployments (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            station_uuid        TEXT    NOT NULL,
+            source_id           TEXT    NOT NULL,
+            start_utc           INTEGER NOT NULL,
+            end_utc             INTEGER CHECK (end_utc IS NULL OR end_utc > start_utc),
+            latitude            REAL CHECK (latitude IS NULL OR latitude BETWEEN -90 AND 90),
+            longitude           REAL CHECK (longitude IS NULL OR longitude BETWEEN -180 AND 180),
+            coord_uncertainty_m REAL CHECK (coord_uncertainty_m IS NULL OR coord_uncertainty_m >= 0),
+            elevation_m         REAL,
+            height_m            REAL CHECK (height_m IS NULL OR height_m >= 0),
+            orientation_deg     REAL CHECK (orientation_deg IS NULL
+                                            OR (orientation_deg >= 0 AND orientation_deg < 360)),
+            microphone          TEXT,
+            recorder            TEXT,
+            enclosure           TEXT,
+            habitat             TEXT,
+            notes               TEXT,
+            recorded_at_utc     INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_deployments_source ON deployments (source_id, start_utc);
+        CREATE TRIGGER deployments_do_not_overlap
+            BEFORE INSERT ON deployments
+            WHEN EXISTS (SELECT 1 FROM deployments d
+                          WHERE d.source_id = NEW.source_id
+                            AND d.start_utc < COALESCE(NEW.end_utc, 9223372036854775807)
+                            AND COALESCE(d.end_utc, 9223372036854775807) > NEW.start_utc)
+        BEGIN
+            SELECT RAISE(ABORT, 'deployments of one source may not overlap: close the open one first');
+        END;
+        CREATE TRIGGER deployments_are_not_rewritten
+            BEFORE UPDATE OF id, station_uuid, source_id, start_utc, latitude, longitude,
+                             coord_uncertainty_m, elevation_m, height_m, orientation_deg,
+                             microphone, recorder, enclosure, habitat, notes, recorded_at_utc
+            ON deployments
+        BEGIN
+            SELECT RAISE(ABORT, 'a deployment is a record: close it and state the next');
+        END;
+        CREATE TRIGGER deployments_end_once
+            BEFORE UPDATE OF end_utc ON deployments
+            WHEN OLD.end_utc IS NOT NULL
+        BEGIN
+            SELECT RAISE(ABORT, 'a closed deployment keeps its end');
+        END;
+        CREATE TRIGGER deployments_are_never_deleted
+            BEFORE DELETE ON deployments
+        BEGIN
+            SELECT RAISE(ABORT, 'a deployment is a record and is never deleted');
+        END;
+
+        CREATE TABLE IF NOT EXISTS audio_source_devices (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_id  TEXT    NOT NULL,
+            device_seq INTEGER NOT NULL CHECK (device_seq >= 1),
+            kind       TEXT    NOT NULL,
+            device_id  TEXT    NOT NULL,
+            from_utc   INTEGER,
+            to_utc     INTEGER,
+            CHECK (to_utc IS NULL OR from_utc IS NULL OR to_utc >= from_utc)
+        );
+        CREATE INDEX IF NOT EXISTS idx_audio_source_devices_source
+            ON audio_source_devices (source_id, from_utc);
+        INSERT INTO audio_source_devices (source_id, device_seq, kind, device_id, from_utc, to_utc)
+        SELECT id, 1, kind, device_id,
+               CASE WHEN created_at = updated_at
+                    THEN CAST(strftime('%s', created_at) AS INTEGER) END,
+               CAST(strftime('%s', disabled_at) AS INTEGER)
+          FROM audio_sources
+         WHERE NOT EXISTS (SELECT 1 FROM audio_source_devices);
+        CREATE TRIGGER audio_source_devices_on_insert
+            AFTER INSERT ON audio_sources
+            WHEN NEW.disabled_at IS NULL
+        BEGIN
+            INSERT INTO audio_source_devices (source_id, device_seq, kind, device_id, from_utc)
+            VALUES (
+                NEW.id,
+                COALESCE(
+                    (SELECT device_seq FROM audio_source_devices
+                      WHERE source_id = NEW.id AND kind = NEW.kind AND device_id = NEW.device_id
+                      ORDER BY id DESC LIMIT 1),
+                    (SELECT COALESCE(MAX(device_seq), 0) + 1 FROM audio_source_devices
+                      WHERE source_id = NEW.id)),
+                NEW.kind, NEW.device_id, CAST(strftime('%s', 'now') AS INTEGER));
+        END;
+        CREATE TRIGGER audio_source_devices_on_update
+            AFTER UPDATE OF kind, device_id, disabled_at ON audio_sources
+            WHEN OLD.kind IS NOT NEW.kind OR OLD.device_id IS NOT NEW.device_id
+              OR OLD.disabled_at IS NOT NEW.disabled_at
+        BEGIN
+            UPDATE audio_source_devices SET to_utc = CAST(strftime('%s', 'now') AS INTEGER)
+             WHERE source_id = NEW.id AND to_utc IS NULL;
+            INSERT INTO audio_source_devices (source_id, device_seq, kind, device_id, from_utc)
+            SELECT NEW.id,
+                   COALESCE(
+                       (SELECT device_seq FROM audio_source_devices
+                         WHERE source_id = NEW.id AND kind = NEW.kind AND device_id = NEW.device_id
+                         ORDER BY id DESC LIMIT 1),
+                       (SELECT COALESCE(MAX(device_seq), 0) + 1 FROM audio_source_devices
+                         WHERE source_id = NEW.id)),
+                   NEW.kind, NEW.device_id, CAST(strftime('%s', 'now') AS INTEGER)
+             WHERE NEW.disabled_at IS NULL;
+        END;
+        CREATE TRIGGER audio_source_devices_on_delete
+            AFTER DELETE ON audio_sources
+        BEGIN
+            UPDATE audio_source_devices SET to_utc = CAST(strftime('%s', 'now') AS INTEGER)
+             WHERE source_id = OLD.id AND to_utc IS NULL;
+        END;
+
+        CREATE TABLE IF NOT EXISTS clock_observations (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            at_utc      INTEGER NOT NULL,
+            state       TEXT    NOT NULL CHECK (state IN ('synced', 'unsynced', 'unknown', 'unset')),
+            authority   TEXT    NOT NULL,
+            reason      TEXT    NOT NULL DEFAULT 'changed'
+                                CHECK (reason IN ('first', 'changed', 'boot', 'step')),
+            boot_id     TEXT,
+            uptime_secs REAL,
+            step_secs   REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_clock_observations_at ON clock_observations (at_utc);
+
+        CREATE TABLE IF NOT EXISTS recording_effort_utc (
+            hour_start_utc            INTEGER NOT NULL CHECK (hour_start_utc % 3600 = 0),
+            source                    TEXT    NOT NULL,
+            seconds_analysed          REAL    NOT NULL DEFAULT 0,
+            seconds_up                REAL    NOT NULL DEFAULT 0,
+            seconds_up_clock_synced   REAL    NOT NULL DEFAULT 0,
+            seconds_up_clock_unsynced REAL    NOT NULL DEFAULT 0,
+            PRIMARY KEY (hour_start_utc, source)
+        );",
+    },
+    Migration {
+        version: 71,
+        description: "What decided a run, a blind validation sample, and where weather came from",
+        // RES-11, RES-07, RES-21. Three additive records a methods section needs.
+        //
+        // `analysis_runs.config_json` is the run's deciding configuration as one
+        // canonical JSON object (keys sorted, no secrets), and `config_sha256` its
+        // digest, written by `record_run_config` when the run is registered. NULL
+        // for a run registered before: what it was configured with beyond the
+        // columns it already has was not recorded, and nothing is inferred.
+        //
+        // `validation_samples` / `validation_sample_items` hold a review sample
+        // drawn by a recorded seed from a recorded frame, each item with its
+        // stratum and inclusion probability; `validation_verdicts` the verdicts
+        // given on it. All three are append-only: a sample is the protocol, and a
+        // verdict on record is never rewritten (a correction is a later verdict).
+        //
+        // `weather.provider` and `weather.product` say where an hour's weather
+        // came from and what it is (an observation, a model's analysis, a
+        // forecast). NULL for every row stored before: not recorded.
+        up_sql: "ALTER TABLE analysis_runs ADD COLUMN config_json TEXT;
+        ALTER TABLE analysis_runs ADD COLUMN config_sha256 TEXT;
+        CREATE TABLE IF NOT EXISTS validation_samples (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+            seed            INTEGER NOT NULL,
+            blind           INTEGER NOT NULL CHECK (blind IN (0, 1)),
+            protocol_json   TEXT NOT NULL,
+            protocol_sha256 TEXT NOT NULL,
+            frame_size      INTEGER NOT NULL CHECK (frame_size >= 0)
+        );
+        CREATE TABLE IF NOT EXISTS validation_sample_items (
+            sample_id             INTEGER NOT NULL REFERENCES validation_samples(id),
+            position              INTEGER NOT NULL CHECK (position >= 0),
+            date                  TEXT NOT NULL,
+            time                  TEXT NOT NULL,
+            sci_name              TEXT NOT NULL,
+            file_name             TEXT NOT NULL DEFAULT '',
+            stratum               TEXT NOT NULL,
+            stratum_size          INTEGER NOT NULL CHECK (stratum_size > 0),
+            inclusion_probability REAL NOT NULL
+                CHECK (inclusion_probability > 0.0 AND inclusion_probability <= 1.0),
+            PRIMARY KEY (sample_id, position)
+        );
+        CREATE TABLE IF NOT EXISTS validation_verdicts (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            sample_id     INTEGER NOT NULL,
+            position      INTEGER NOT NULL,
+            verdict       TEXT NOT NULL
+                CHECK (verdict IN ('present', 'absent', 'uncertain', 'not_identifiable')),
+            reviewer_name TEXT,
+            at            TEXT NOT NULL DEFAULT (datetime('now')),
+            FOREIGN KEY (sample_id, position)
+                REFERENCES validation_sample_items(sample_id, position)
+        );
+        CREATE TRIGGER validation_samples_are_append_only
+            BEFORE UPDATE ON validation_samples
+        BEGIN
+            SELECT RAISE(ABORT, 'validation_samples is append-only: a drawn sample is its protocol');
+        END;
+        CREATE TRIGGER validation_samples_are_never_deleted
+            BEFORE DELETE ON validation_samples
+        BEGIN
+            SELECT RAISE(ABORT, 'validation_samples is append-only: a drawn sample is its protocol');
+        END;
+        CREATE TRIGGER validation_sample_items_are_append_only
+            BEFORE UPDATE ON validation_sample_items
+        BEGIN
+            SELECT RAISE(ABORT, 'validation_sample_items is append-only');
+        END;
+        CREATE TRIGGER validation_sample_items_are_never_deleted
+            BEFORE DELETE ON validation_sample_items
+        BEGIN
+            SELECT RAISE(ABORT, 'validation_sample_items is append-only');
+        END;
+        CREATE TRIGGER validation_verdicts_are_append_only
+            BEFORE UPDATE ON validation_verdicts
+        BEGIN
+            SELECT RAISE(ABORT, 'validation_verdicts is append-only: a correction is a later verdict');
+        END;
+        CREATE TRIGGER validation_verdicts_are_never_deleted
+            BEFORE DELETE ON validation_verdicts
+        BEGIN
+            SELECT RAISE(ABORT, 'validation_verdicts is append-only: a correction is a later verdict');
+        END;
+        ALTER TABLE weather ADD COLUMN provider TEXT;
+        ALTER TABLE weather ADD COLUMN product TEXT;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -5481,5 +5862,151 @@ mod tests {
             .unwrap();
         assert_eq!(current, None, "migration 59 clears it; the event agrees");
         assert_eq!(before(&conn)[0], kept[0], "the old event is not rewritten");
+    }
+
+    /// The identifier and checksum migration on a station with history.
+    ///
+    /// Every stored row gets an identifier, distinct from every other and
+    /// shaped as a version 4 UUID; a row inserted afterwards, by any path that
+    /// names none, gets one too; and the identifier is the same after a
+    /// relabel and after a `VACUUM`, which is what the five-column key and the
+    /// rowid each fail. Rows stored before it have no clip checksum: unknown,
+    /// not invented.
+    #[test]
+    fn migration_69_gives_every_detection_a_permanent_identifier() {
+        let conn = memory_db_at_version(68);
+        for i in 0..50 {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES ('2026-05-01', printf('06:00:%02d', ?1), 'Strix aluco', 'Tawny Owl',
+                         0.9, printf('c%d.wav', ?1))",
+                [i],
+            )
+            .unwrap();
+        }
+        let m69 = MIGRATIONS.iter().find(|m| m.version == 69).unwrap();
+        conn.execute_batch(m69.up_sql).unwrap();
+
+        let ids = |c: &Connection| -> Vec<(String, Option<String>)> {
+            c.prepare("SELECT File_Name, detection_uuid FROM detections ORDER BY File_Name")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        let before = ids(&conn);
+        assert_eq!(before.len(), 50);
+        let distinct: std::collections::BTreeSet<_> =
+            before.iter().map(|(_, id)| id.clone()).collect();
+        assert_eq!(
+            distinct.len(),
+            50,
+            "every stored row has its own identifier"
+        );
+        for (_, id) in &before {
+            let id = id.as_deref().expect("every stored row has an identifier");
+            assert!(is_uuid_v4(id), "{id} is not a version 4 UUID");
+        }
+
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-05-02', '07:00:00', 'Parus major', 'Great Tit', 0.8, 'new.wav')",
+            [],
+        )
+        .unwrap();
+        let new_id: Option<String> = conn
+            .query_row(
+                "SELECT detection_uuid FROM detections WHERE File_Name = 'new.wav'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            new_id.as_deref().is_some_and(is_uuid_v4),
+            "a row inserted with no identifier is given one: {new_id:?}"
+        );
+
+        // Relabel, delete a row so a VACUUM has something to renumber, VACUUM.
+        conn.execute_batch(
+            "UPDATE detections SET Sci_Name = 'Asio otus', Com_Name = 'Long-eared Owl'
+              WHERE File_Name = 'c7.wav';
+             DELETE FROM detections WHERE File_Name = 'c0.wav';
+             VACUUM;",
+        )
+        .unwrap();
+        let after = ids(&conn);
+        for (file, id) in &after {
+            if let Some((_, was)) = before.iter().find(|(f, _)| f == file) {
+                assert_eq!(
+                    id, was,
+                    "{file} kept its identifier across a relabel and VACUUM"
+                );
+            }
+        }
+
+        assert!(
+            conn.execute(
+                "UPDATE detections SET detection_uuid = 'something-else' WHERE File_Name = 'c1.wav'",
+                [],
+            )
+            .is_err(),
+            "an identifier once given cannot be rewritten"
+        );
+        // Its counterpart: other columns of the row are still writable.
+        conn.execute(
+            "UPDATE detections SET is_locked = 1 WHERE File_Name = 'c1.wav'",
+            [],
+        )
+        .unwrap();
+
+        let unknown: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE Clip_Sha256 IS NULL AND Clip_Bytes IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            unknown, 50,
+            "no stored row is given a checksum it was never written with"
+        );
+    }
+
+    /// A clip checksum, once recorded, is not changed; recording one where
+    /// none was is allowed (that is how a write records it).
+    #[test]
+    fn migration_69_a_recorded_clip_checksum_is_permanent() {
+        let conn = memory_db_at_version(69);
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-05-01', '06:00:00', 'Strix aluco', 'Tawny Owl', 0.9, 'a.wav')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE detections SET Clip_Sha256 = 'aa', Clip_Bytes = 10",
+            [],
+        )
+        .unwrap();
+        assert!(
+            conn.execute("UPDATE detections SET Clip_Sha256 = 'bb'", [])
+                .is_err()
+        );
+        assert!(
+            conn.execute("UPDATE detections SET Clip_Bytes = 11", [])
+                .is_err()
+        );
+    }
+
+    fn is_uuid_v4(s: &str) -> bool {
+        let b = s.as_bytes();
+        s.len() == 36
+            && [8, 13, 18, 23].iter().all(|&i| b[i] == b'-')
+            && b[14] == b'4'
+            && matches!(b[19], b'8' | b'9' | b'a' | b'b')
+            && s.chars().enumerate().all(|(i, c)| {
+                [8, 13, 18, 23].contains(&i) || c.is_ascii_hexdigit() && !c.is_ascii_uppercase()
+            })
     }
 }

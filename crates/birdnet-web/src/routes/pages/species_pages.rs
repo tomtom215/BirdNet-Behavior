@@ -9,7 +9,7 @@ use axum::response::Html;
 use axum::{Router, routing::get};
 use serde::Deserialize;
 
-use super::atoms::{avatar, conf_bar, conf_pill, sparkline, species_code, species_color};
+use super::atoms::{avatar, conf_bar, conf_pill, species_code, species_color, species_sparkline};
 use super::charts::{render_daily_chart_pair, render_hourly_chart};
 use super::{SPECIES_DETAIL_HTML, escape_html, simple_url_encode};
 use crate::state::AppState;
@@ -375,7 +375,7 @@ fn list_view(
         let color = slots.colour(&s.com_name);
         let spark = sparks
             .get(&s.com_name)
-            .map_or_default(|d| sparkline(d, 84.0, 22.0, Some(&color)));
+            .map_or_default(|d| species_sparkline(d, 84.0, 22.0, Some(&color)));
         let enc = simple_url_encode(&s.com_name);
         let shown = state.names().name(&s.sci_name, &s.com_name);
         let _ = write!(
@@ -397,7 +397,10 @@ fn list_view(
     }
     let legend = super::confidence::legend(floor);
     format!(
-        r#"{chips}{count_line}<div class="bnb-card pad">{legend}<table class="sp-table" data-fits-phone><thead><tr><th class="sp-rank">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Avg confidence</th></tr></thead><tbody>{rows}</tbody></table></div>"#
+        r#"{chips}{count_line}<div class="bnb-card pad">{legend}<table class="sp-table" data-fits-phone><thead><tr><th class="sp-rank">#</th><th>Species</th><th>14-day</th><th>Detections</th><th>Avg confidence</th></tr></thead><tbody>{rows}</tbody></table>{counted}</div>"#,
+        counted = super::frame::counted(
+            "Avg confidence is the mean over a species' rows, each from whichever classifier wrote it."
+        ),
     )
 }
 
@@ -1659,5 +1662,41 @@ mod taxonomy_browsing_tests {
         );
         assert_eq!(taxonomy_line(&state, "Corvus corax"), "");
         assert_eq!(taxonomy_line(&state, ""), "");
+    }
+}
+
+/// UIR-30: a number says what it counts.
+#[cfg(test)]
+mod provenance_tests {
+    use super::*;
+
+    /// The species list's "Detections" and "Avg confidence" columns said nothing of what a
+    /// detection is: on a station with two microphones one call is two rows, and on one with two
+    /// classifiers each row's confidence is a different classifier's score. The table now ends
+    /// with the sentence that says so, and links the events, which group a call across sources.
+    #[test]
+    fn the_species_list_says_what_its_numbers_count() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence)
+             VALUES ('2026-06-14', '06:00:00', 'Turdus merula', 'Eurasian Blackbird', 0.9)",
+            [],
+        )
+        .unwrap();
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        let html = list_view(&state, "all", None, None);
+        assert!(html.contains("Eurasian Blackbird"), "the list drew: {html}");
+        let foot = html
+            .split(r"data-counts")
+            .nth(1)
+            .expect("the list must say what its numbers count");
+        assert!(foot.contains("rows"), "{foot}");
+        assert!(foot.contains("not birds"), "{foot}");
+        assert!(foot.contains("classifier"), "{foot}");
+        assert!(
+            foot.contains(r#"href="/help/reference/api#events-one-call-heard-by-several-sources""#),
+            "{foot}"
+        );
     }
 }

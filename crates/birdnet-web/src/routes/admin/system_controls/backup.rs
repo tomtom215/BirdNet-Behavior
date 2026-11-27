@@ -173,9 +173,16 @@ fn stage_backup_snapshot(
     Ok(target)
 }
 
+/// The full backup's query: `audio=all` (default), `kept` or `none`.
+#[derive(serde::Deserialize)]
+pub(super) struct FullBackupQuery {
+    audio: Option<String>,
+}
+
 pub(super) async fn full_backup(
     State(state): State<AppState>,
     headers: axum::http::HeaderMap,
+    axum::extract::Query(query): axum::extract::Query<FullBackupQuery>,
 ) -> axum::response::Response {
     // A GET, so the CSRF check does not see it; on a station with no password
     // another website's `<img src=…/backup/full>` started a full archive on
@@ -190,6 +197,9 @@ pub(super) async fn full_backup(
         )
             .into_response();
     }
+    let Some(scope) = super::backup_manifest::AudioScope::parse(query.audio.as_deref()) else {
+        return (StatusCode::BAD_REQUEST, "audio must be all, kept or none.").into_response();
+    };
     let Some(guard) = BackupGuard::claim() else {
         return (
             StatusCode::CONFLICT,
@@ -203,17 +213,31 @@ pub(super) async fn full_backup(
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
         .to_path_buf();
+    // The configuration the station reads (N26-01): `--config`, wherever the
+    // installer put it. A `birdnet.conf` beside the database is what the
+    // archive took before, and is still taken when no `--config` file exists.
+    // Resolved inside the blocking task: it stats the filesystem.
+    let config_arg = state.config_path().map(std::path::Path::to_path_buf);
 
     let result = tokio::task::spawn_blocking(move || {
         // Held while the archive is built. Once it is built the file is open
         // and unlinked, so streaming it costs no further disk.
         let _guard = guard;
+        let config_path = config_arg
+            .filter(|p| p.is_file())
+            .or_else(|| Some(base_dir.join("birdnet.conf")).filter(|p| p.is_file()));
         let staging = scratch_dir(&db_path);
         let cleanup = StagingDir(staging.clone());
         let tmp = staging.join("birdnet-backup.tar.gz");
 
         let mut args = vec!["czf".to_string(), tmp.to_string_lossy().to_string()];
 
+        let rec_name = rec_dir.file_name().map_or_else(
+            || "recordings".to_string(),
+            |n| n.to_string_lossy().into_owned(),
+        );
+        // The clips this archive takes; `None` is the whole folder.
+        let mut clip_list: Option<Vec<String>> = None;
         if db_path.exists() {
             let snapshot = stage_backup_snapshot(&db_path, &staging)?;
             let name = snapshot
@@ -222,27 +246,65 @@ pub(super) async fn full_backup(
             args.push("-C".to_string());
             args.push(staging.to_string_lossy().to_string());
             args.push(name.to_string_lossy().to_string());
-        }
 
-        let conf_path = base_dir.join("birdnet.conf");
-        if conf_path.exists() {
-            args.push("-C".to_string());
-            args.push(base_dir.to_string_lossy().to_string());
-            args.push("birdnet.conf".to_string());
-        }
-
-        if rec_dir.exists()
-            && let Some(name) = rec_dir.file_name()
-        {
-            args.push("-C".to_string());
-            args.push(
-                rec_dir
-                    .parent()
-                    .unwrap_or_else(|| std::path::Path::new("."))
-                    .to_string_lossy()
-                    .to_string(),
+            // What the archive holds, and the checksum of every clip in it
+            // that has one (RES-29), from the snapshot it ships with.
+            let (included, _counts) = super::backup_manifest::write_manifests(
+                &snapshot,
+                &rec_dir,
+                &rec_name,
+                &staging,
+                scope,
+                config_path.as_deref(),
+            )?;
+            args.extend(
+                super::backup_manifest::MANIFEST_MEMBERS
+                    .iter()
+                    .map(|m| (*m).to_string()),
             );
-            args.push(name.to_string_lossy().to_string());
+            if scope != super::backup_manifest::AudioScope::All {
+                clip_list = Some(included);
+            }
+        }
+
+        // The configuration, copied in so the archive member is always
+        // `birdnet.conf` whatever the file is called on the station.
+        if let Some(conf) = &config_path {
+            std::fs::copy(conf, staging.join(super::backup_manifest::CONFIG_MEMBER))
+                .map_err(|e| format!("could not copy the configuration file: {e}"))?;
+            args.push("-C".to_string());
+            args.push(staging.to_string_lossy().to_string());
+            args.push(super::backup_manifest::CONFIG_MEMBER.to_string());
+        }
+
+        if rec_dir.exists() {
+            let rec_parent = rec_dir
+                .parent()
+                .unwrap_or_else(|| std::path::Path::new("."))
+                .to_string_lossy()
+                .to_string();
+            match &clip_list {
+                None => {
+                    args.push("-C".to_string());
+                    args.push(rec_parent);
+                    args.push(rec_name);
+                }
+                Some(list) if !list.is_empty() => {
+                    let list_file = staging.join("clip-list");
+                    let body = list.iter().fold(String::new(), |mut out, n| {
+                        use std::fmt::Write as _;
+                        let _ = writeln!(out, "{rec_name}/{n}");
+                        out
+                    });
+                    std::fs::write(&list_file, body)
+                        .map_err(|e| format!("could not write the clip list: {e}"))?;
+                    args.push("-C".to_string());
+                    args.push(rec_parent);
+                    args.push("-T".to_string());
+                    args.push(list_file.to_string_lossy().to_string());
+                }
+                Some(_) => {}
+            }
         }
 
         match run_with_timeout(
@@ -496,6 +558,7 @@ pub(super) async fn restore_backup(
     }
 
     let db_path = state.db_path().to_path_buf();
+    let config_path = state.config_path().map(std::path::Path::to_path_buf);
     let halt = state.ingest_halt_flag();
 
     let result = tokio::task::spawn_blocking(move || {
@@ -514,7 +577,13 @@ pub(super) async fn restore_backup(
                     data_dir.display()
                 )
             })?;
-        restore_archive_into(&tmp_path, &db_path, available, &halt)
+        restore_archive_into(
+            &tmp_path,
+            &db_path,
+            config_path.as_deref(),
+            available,
+            &halt,
+        )
     })
     .await;
 
@@ -577,12 +646,42 @@ pub struct RestoreReport {
     pub bytes: u64,
     /// Top-level members placed.
     pub members: Vec<String>,
+    /// Where the archive's configuration file was put, when it had one and
+    /// the station names where it reads its configuration.
+    pub config_placed_at: Option<std::path::PathBuf>,
+    /// Where the configuration it replaced was kept.
+    pub config_kept_at: Option<std::path::PathBuf>,
+    /// Clips checked against the archive's `clips.sha256` before anything
+    /// was replaced; 0 for an archive made before backups carried one.
+    pub clips_verified: usize,
 }
 
 impl RestoreReport {
     /// The line the operator reads.
     fn message(&self, restarted: bool) -> String {
-        let placed = self.members.join(", ");
+        use std::fmt::Write as _;
+        let mut placed = self.members.join(", ");
+        if self.clips_verified > 0 {
+            let _ = write!(
+                placed,
+                "; {} clips matched their recorded checksums",
+                self.clips_verified
+            );
+        }
+        if let Some(at) = &self.config_placed_at {
+            let _ = write!(
+                placed,
+                "; the configuration file was put back at {}",
+                at.display()
+            );
+            if let Some(kept) = &self.config_kept_at {
+                let _ = write!(
+                    placed,
+                    ", and the one it replaced kept as {}",
+                    kept.display()
+                );
+            }
+        }
         if restarted {
             format!(
                 "Backup restored ({placed}); the station is restarting to load it. \
@@ -680,6 +779,14 @@ impl Drop for RestoreStaging {
 ///    stale `-wal`/`-shm` are removed and the result checked once more
 ///    ([`finalize_restore`]).
 ///
+/// Between 4 and 5, every clip the archive's `clips.sha256` lists must be in
+/// it and match (RES-29); an archive that fails is refused with nothing
+/// replaced. The manifest files are read, not placed. The archive's
+/// `birdnet.conf`, when it has one and `config_path` names where the station
+/// reads its configuration, is put there first, the file there now kept as
+/// `<config>.before-restore` (N26-01); with no `config_path` it goes beside
+/// the database, as before.
+///
 /// # Errors
 ///
 /// The reason the restore was refused or failed. Every refusal before step 5
@@ -687,6 +794,7 @@ impl Drop for RestoreStaging {
 pub fn restore_archive_into(
     archive: &std::path::Path,
     db_path: &std::path::Path,
+    config_path: Option<&std::path::Path>,
     available: u64,
     halt: &std::sync::atomic::AtomicBool,
 ) -> Result<RestoreReport, String> {
@@ -786,13 +894,35 @@ pub fn restore_archive_into(
         }
     }
 
-    // 5. Into place.
+    let clips_verified = super::backup_manifest::verify_checksums(&staging)?;
+
+    // 5. Into place. The configuration first: it is the member most likely to
+    // be refused (a read-only configuration directory), and refusing it
+    // before the database moves leaves the station as it was.
     let mut placed = Vec::new();
+    let mut config_placed_at = None;
+    let mut config_kept_at = None;
+    let staged_config = staging.join(super::backup_manifest::CONFIG_MEMBER);
+    if let Some(target) = config_path
+        && staged_config.is_file()
+    {
+        config_kept_at = super::backup_manifest::place_config(&staged_config, target)?;
+        std::fs::remove_file(&staged_config)
+            .map_err(|e| format!("could not clear the staged configuration: {e}"))?;
+        config_placed_at = Some(target.to_path_buf());
+        placed.push(super::backup_manifest::CONFIG_MEMBER.to_string());
+    }
     let entries = std::fs::read_dir(&staging)
         .map_err(|e| format!("could not read {}: {e}", staging.display()))?;
     for entry in entries {
         let entry = entry.map_err(|e| format!("could not read staging entry: {e}"))?;
         let name = entry.file_name();
+        if super::backup_manifest::MANIFEST_MEMBERS
+            .iter()
+            .any(|m| name == std::ffi::OsStr::new(m))
+        {
+            continue;
+        }
         let from = entry.path();
         let to = data_dir.join(&name);
         let is_dir = entry
@@ -813,6 +943,9 @@ pub fn restore_archive_into(
     Ok(RestoreReport {
         bytes,
         members: placed,
+        config_placed_at,
+        config_kept_at,
+        clips_verified,
     })
 }
 
@@ -1134,7 +1267,7 @@ mod tests {
         let archive = archive_with(dir.path(), &["x", "y", "z"], "new-clip.wav");
         let halt = AtomicBool::new(false);
         let report =
-            restore_archive_into(&archive, &live, u64::MAX, &halt).expect("restore succeeds");
+            restore_archive_into(&archive, &live, None, u64::MAX, &halt).expect("restore succeeds");
 
         assert_eq!(
             row_count(&live),
@@ -1183,6 +1316,94 @@ mod tests {
         assert!(report.bytes > 0);
     }
 
+    /// `archive_with`, plus a `birdnet.conf` and a `clips.sha256` naming the
+    /// clip with `sha`.
+    fn archive_with_config(dir: &std::path::Path, sha: &str) -> std::path::PathBuf {
+        let archive = archive_with(dir, &["x"], "new-clip.wav");
+        let src = dir.join("src");
+        std::fs::write(src.join("birdnet.conf"), "LATITUDE=51.5\nCADDY_PWD=old\n").unwrap();
+        std::fs::write(
+            src.join("clips.sha256"),
+            format!("{sha}  recordings/new-clip.wav\n"),
+        )
+        .unwrap();
+        std::fs::remove_file(&archive).unwrap();
+        let out = std::process::Command::new("tar")
+            .args(["czf"])
+            .arg(&archive)
+            .arg("-C")
+            .arg(&src)
+            .args(["birds.db", "recordings", "birdnet.conf", "clips.sha256"])
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        archive
+    }
+
+    /// N26-01: a restore puts the archive's configuration where the station
+    /// reads it, not beside the database, keeping the file it replaces and
+    /// that file's permissions; and the clips the archive's checksum list
+    /// names are checked before anything moves (RES-29).
+    #[test]
+    fn a_restore_puts_the_configuration_back_where_the_station_reads_it() {
+        use std::os::unix::fs::PermissionsExt as _;
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let live = wal_dirty_db(&data, 2);
+        let etc = dir.path().join("etc");
+        std::fs::create_dir_all(&etc).unwrap();
+        let conf = etc.join("birdnet.conf");
+        std::fs::write(&conf, "LATITUDE=0\n").unwrap();
+        std::fs::set_permissions(&conf, std::fs::Permissions::from_mode(0o640)).unwrap();
+        // SHA-256 of the fixture clip's bytes, "RIFF....".
+        let clip_sha = {
+            let p = dir.path().join("probe.wav");
+            std::fs::write(&p, b"RIFF....").unwrap();
+            birdnet_db::sqlite::digest_file(&p).unwrap().sha256
+        };
+        let archive = archive_with_config(dir.path(), &clip_sha);
+        let halt = AtomicBool::new(false);
+        let report = restore_archive_into(&archive, &live, Some(&conf), u64::MAX, &halt)
+            .expect("restore succeeds");
+        assert_eq!(
+            std::fs::read_to_string(&conf).unwrap(),
+            "LATITUDE=51.5\nCADDY_PWD=old\n",
+            "the archive's configuration is where the station reads it"
+        );
+        assert_eq!(
+            std::fs::metadata(&conf).unwrap().permissions().mode() & 0o777,
+            0o640
+        );
+        let kept = etc.join("birdnet.conf.before-restore");
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), "LATITUDE=0\n");
+        assert_eq!(report.config_kept_at.as_deref(), Some(kept.as_path()));
+        assert_eq!(report.clips_verified, 1);
+        assert!(
+            !data.join("birdnet.conf").exists() && !data.join("clips.sha256").exists(),
+            "neither the configuration nor the manifest is dropped beside the database"
+        );
+    }
+
+    /// The counterpart: an archive whose clip is not the one its checksum
+    /// list names is refused, and neither the configuration nor the database
+    /// is touched.
+    #[test]
+    fn an_archive_whose_clip_fails_its_checksum_replaces_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let live = wal_dirty_db(&data, 2);
+        let conf = dir.path().join("birdnet.conf.live");
+        std::fs::write(&conf, "LATITUDE=0\n").unwrap();
+        let archive = archive_with_config(dir.path(), &"0".repeat(64));
+        let halt = AtomicBool::new(false);
+        let err = restore_archive_into(&archive, &live, Some(&conf), u64::MAX, &halt).unwrap_err();
+        assert!(err.contains("nothing was replaced"), "{err}");
+        assert_eq!(std::fs::read_to_string(&conf).unwrap(), "LATITUDE=0\n");
+        assert_eq!(row_count(&live), 2);
+    }
+
     /// An archive whose database is not one leaves the live files untouched
     /// and detections running: it is refused where it is checked, in staging.
     #[test]
@@ -1206,7 +1427,7 @@ mod tests {
         assert!(out.status.success());
 
         let halt = AtomicBool::new(false);
-        let err = restore_archive_into(&archive, &live, u64::MAX, &halt).unwrap_err();
+        let err = restore_archive_into(&archive, &live, None, u64::MAX, &halt).unwrap_err();
         assert!(err.contains("nothing was replaced"), "{err}");
         assert_eq!(
             row_count(&live),
@@ -1224,7 +1445,7 @@ mod tests {
         let live = wal_dirty_db(&data, 2);
         let archive = archive_with(dir.path(), &["x"], "clip.wav");
         let halt = AtomicBool::new(false);
-        let err = restore_archive_into(&archive, &live, 1024, &halt).unwrap_err();
+        let err = restore_archive_into(&archive, &live, None, 1024, &halt).unwrap_err();
         assert!(err.contains("free space"), "{err}");
         assert!(
             !halt.load(Ordering::SeqCst),
@@ -1248,7 +1469,7 @@ mod tests {
         std::fs::rename(data.join("birds.db-wal"), data.join("station-b.db-wal")).unwrap();
         let archive = archive_with(dir.path(), &["x"], "clip.wav");
         let halt = AtomicBool::new(false);
-        let err = restore_archive_into(&archive, &other, u64::MAX, &halt).unwrap_err();
+        let err = restore_archive_into(&archive, &other, None, u64::MAX, &halt).unwrap_err();
         assert!(err.contains("different station"), "{err}");
     }
 

@@ -37,8 +37,11 @@
 //! # Species are matched by scientific name as the labels write it
 //!
 //! Classifiers' label sets are operator-supplied and may follow different
-//! taxonomies. A species one model names differently is a different species to
-//! the merge and to this module alike; synonyms are not reconciled here.
+//! taxonomies. The two names of a pair in the registry's synonym table
+//! ([`crate::inference::synonyms`], MMP-09) are one species to the merge, and
+//! the daemon asks a classifier that lacks the detection's name under the
+//! pair's other name before answering "no class". Any other difference of name
+//! is a different species to the merge and to this module alike.
 
 use super::types::{AnswerState, ModelAnswer};
 
@@ -61,8 +64,11 @@ pub struct WindowOutcome<'a> {
     pub bar: f32,
     /// Where its window began, seconds into the recording.
     pub window_start_secs: f32,
-    /// Where its window ended.
+    /// Where the recorded audio in its window ended: the window's nominal end,
+    /// or the recording's end when that comes first (see [`window_support`]).
     pub window_end_secs: f32,
+    /// How much of its window was zero padding past the recording's end.
+    pub padded_secs: f32,
     /// Looks a species up in the window's scores. `None` when the window failed,
     /// so there is nothing to look up and a stale answer from an earlier window
     /// can never be mistaken for this one's.
@@ -76,9 +82,45 @@ impl std::fmt::Debug for WindowOutcome<'_> {
             .field("bar", &self.bar)
             .field("window_start_secs", &self.window_start_secs)
             .field("window_end_secs", &self.window_end_secs)
+            .field("padded_secs", &self.padded_secs)
             .field("answered", &self.scores.is_some())
             .finish()
     }
+}
+
+/// The recorded audio a classifier's window covers, as `(end, padded)`.
+///
+/// `start` is where the window begins, `window_secs` how long the classifier's
+/// window is, and `audio_end` where the recording's audio ends within the chunk
+/// (the chunk's own `end_secs`, which the pipeline clamps to the recording).
+///
+/// The pipeline zero-pads the last chunk of a recording to the chunk's length,
+/// so a classifier handed it scores a window part of which is silence nobody
+/// recorded. Its answer used to claim the whole nominal window as heard audio,
+/// running past the end of the recording, while the detection row beside it
+/// stopped at that end (review F09). The support is clamped to the audio that
+/// exists and the rest is reported as padding. Audio that ends before the
+/// window starts leaves no support at all.
+#[must_use]
+pub fn window_support(start: f32, window_secs: f32, audio_end: f32) -> (f32, f32) {
+    let nominal_end = start + window_secs;
+    let end = nominal_end.min(audio_end.max(start));
+    (end, (nominal_end - end).max(0.0))
+}
+
+/// How many seconds of recorded audio two answers' windows share.
+///
+/// Classifiers' windows over one chunk all start at the chunk's start and
+/// differ in length, so two classifiers that "agree" on a species heard
+/// overlapping, not identical, audio, and on a padded tail less of it than
+/// their nominal windows suggest. This is the overlap of their supported spans
+/// ([`ModelAnswer::window_start_secs`] to [`ModelAnswer::window_end_secs`]),
+/// padding excluded; `0.0` when they do not overlap.
+#[must_use]
+pub fn shared_support_secs(a: &ModelAnswer, b: &ModelAnswer) -> f32 {
+    let start = a.window_start_secs.max(b.window_start_secs);
+    let end = a.window_end_secs.min(b.window_end_secs);
+    (end - start).max(0.0)
 }
 
 /// Every listening classifier's answer about one species, in the order given.
@@ -103,6 +145,7 @@ pub fn answers_for(outcomes: &[WindowOutcome<'_>], scientific_name: &str) -> Vec
                 bar: judged_against,
                 window_start_secs: w.window_start_secs,
                 window_end_secs: w.window_end_secs,
+                padded_secs: w.padded_secs,
             }
         })
         .collect()
@@ -122,6 +165,7 @@ mod tests {
             bar,
             window_start_secs: 3.0,
             window_end_secs: 7.5,
+            padded_secs: 0.0,
             scores,
         }
     }
@@ -219,6 +263,61 @@ mod tests {
         assert!((got[0].window_end_secs - 7.5).abs() < f32::EPSILON);
         assert!((got[1].window_end_secs - 8.0).abs() < f32::EPSILON);
         assert!((got[0].window_start_secs - 3.0).abs() < f32::EPSILON);
+    }
+
+    /// Review F09: the window's recorded support stops at the recording's end,
+    /// and the rest is counted as padding. Counterparts: a window inside the
+    /// audio is untouched, and one ending exactly at the audio's end has none.
+    #[test]
+    fn a_window_past_the_recording_s_end_is_clamped_and_its_padding_counted() {
+        let close =
+            |(a, b): (f32, f32), (c, d): (f32, f32)| (a - c).abs() < 1e-6 && (b - d).abs() < 1e-6;
+        assert!(
+            close(window_support(6.0, 3.0, 7.0), (7.0, 2.0)),
+            "{:?}",
+            window_support(6.0, 3.0, 7.0)
+        );
+        assert!(close(window_support(6.0, 3.0, 9.5), (9.0, 0.0)));
+        assert!(close(window_support(6.0, 3.0, 9.0), (9.0, 0.0)));
+        // Audio that ends before the window starts gives no support, all padding.
+        assert!(close(window_support(6.0, 3.0, 5.0), (6.0, 3.0)));
+    }
+
+    /// Review F09: agreement is over overlapping windows. BirdNET's 3 s and
+    /// v3's 2 s from one chunk's start share 2 s; on a tail that ends after
+    /// one second they share one; answers from different chunks that do not
+    /// meet share nothing.
+    #[test]
+    fn two_answers_share_the_recorded_audio_their_windows_overlap() {
+        let answer = |start: f32, end: f32| ModelAnswer {
+            model_id: "m".into(),
+            state: AnswerState::Heard,
+            score: Some(0.9),
+            bar: Some(0.5),
+            window_start_secs: start,
+            window_end_secs: end,
+            padded_secs: 0.0,
+        };
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-6;
+        assert!(close(
+            shared_support_secs(&answer(6.0, 9.0), &answer(6.0, 8.0)),
+            2.0
+        ));
+        assert!(
+            close(
+                shared_support_secs(&answer(6.0, 8.0), &answer(6.0, 9.0)),
+                2.0
+            ),
+            "symmetric"
+        );
+        assert!(close(
+            shared_support_secs(&answer(6.0, 7.0), &answer(6.0, 7.0)),
+            1.0
+        ));
+        assert!(close(
+            shared_support_secs(&answer(0.0, 3.0), &answer(4.5, 9.5)),
+            0.0
+        ));
     }
 
     #[test]

@@ -19,6 +19,15 @@
 //! 2026-01-15;06:23:11;Turdus merula;Eurasian Blackbird;0.921;51.5;-0.1;0.7;3;1.0;0.0;rec.wav
 //! ```
 //!
+//! Of this station's extra columns one is read: `Detection_Id`, the
+//! detection's permanent identifier (RES-25). A row that carries one is stored
+//! under it, so a detection exported and read back is the same detection, and
+//! a row whose identifier the database already holds is that detection and is
+//! skipped, whatever it is now called: a detection relabelled since the export
+//! is not imported a second time under its old name. A value that is not a
+//! UUID is ignored and the row is given a new identifier, as a row from a file
+//! without the column is.
+//!
 //! A first line is a header when its first field is `Date`; otherwise it is
 //! data. Missing optional fields become `NULL`; Windows line endings are
 //! accepted. A file in which not one line could be read is an error, not an
@@ -63,6 +72,8 @@ struct CsvRow {
     sens: Option<f64>,
     overlap: Option<f64>,
     file_name: Option<String>,
+    /// The `Detection_Id` column of this station's export, when it is a UUID.
+    detection_uuid: Option<String>,
 }
 
 /// Importer for BirdNET-Pi TSV/CSV detection log files.
@@ -333,6 +344,8 @@ pub(crate) struct Layout {
     /// `positions[i]` is the field index of `COLUMNS[i]`; `None` when the file
     /// has no header, in which case the fields are in `COLUMNS` order.
     positions: Option<[Option<usize>; 12]>,
+    /// The field index of `Detection_Id`, when the header names one.
+    detection_id: Option<usize>,
 }
 
 impl Layout {
@@ -356,14 +369,21 @@ impl Layout {
         let is_header = fields
             .first()
             .is_some_and(|f| f.trim().eq_ignore_ascii_case("date"));
-        let positions = is_header.then(|| {
-            let names: Vec<String> = fields
-                .iter()
-                .map(|f| f.trim().to_ascii_lowercase())
-                .collect();
-            COLUMNS.map(|col| names.iter().position(|n| n == col))
-        });
-        Self { delim, positions }
+        let names: Vec<String> = fields
+            .iter()
+            .map(|f| f.trim().to_ascii_lowercase())
+            .collect();
+        let positions = is_header.then(|| COLUMNS.map(|col| names.iter().position(|n| n == col)));
+        let detection_id = if is_header {
+            names.iter().position(|n| n == "detection_id")
+        } else {
+            None
+        };
+        Self {
+            delim,
+            positions,
+            detection_id,
+        }
     }
 
     /// Whether the first line is a header rather than a detection.
@@ -590,7 +610,24 @@ fn parse_line(line: &str, layout: &Layout) -> Result<CsvRow, MigrateError> {
         sens: opt_f64(9),
         overlap: opt_f64(10),
         file_name: field(11).filter(|s| !absent(s)).map(str::to_string),
+        detection_uuid: layout
+            .detection_id
+            .and_then(|i| fields.get(i))
+            .map(|f| unguard(f.trim()).to_ascii_lowercase())
+            .filter(|s| is_uuid(s)),
     })
+}
+
+/// Whether `s` is a UUID in its canonical hyphenated form.
+fn is_uuid(s: &str) -> bool {
+    s.len() == 36
+        && s.char_indices().all(|(i, c)| {
+            if matches!(i, 8 | 13 | 18 | 23) {
+                c == '-'
+            } else {
+                c.is_ascii_hexdigit()
+            }
+        })
 }
 
 /// Apply the operator's clock reconciliation to `row` and count its site.
@@ -654,18 +691,29 @@ fn flush_batch(
     // them, on a station with several chunks a clip. `(Date, Time, Sci_Name,
     // File_Name)` names one detection since migration 24 put each chunk on
     // its own second, so matching on it regardless of the offset is exact.
+    //
+    // A row carrying the detection's identifier is held when that identifier
+    // is (RES-25): it is the same detection, even if it has been relabelled
+    // since the export, so its old name no longer matches.
     let mut held = tx
         .prepare_cached(
             "SELECT EXISTS(SELECT 1 FROM detections
-                WHERE Date = ?1 AND Time = ?2 AND Sci_Name = ?3
-                  AND COALESCE(File_Name, '') = COALESCE(?4, ''))",
+                WHERE (Date = ?1 AND Time = ?2 AND Sci_Name = ?3
+                       AND COALESCE(File_Name, '') = COALESCE(?4, ''))
+                   OR (?5 IS NOT NULL AND detection_uuid = ?5))",
         )
         .map_err(MigrateError::DataTransfer)?;
 
     for row in batch {
         let exists: bool = held
             .query_row(
-                rusqlite::params![row.date, row.time, row.sci_name, row.file_name],
+                rusqlite::params![
+                    row.date,
+                    row.time,
+                    row.sci_name,
+                    row.file_name,
+                    row.detection_uuid
+                ],
                 |r| r.get(0),
             )
             .map_err(MigrateError::DataTransfer)?;
@@ -677,13 +725,14 @@ fn flush_batch(
             .execute(
                 "INSERT INTO detections
                  (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff, Week, Sens, Overlap, File_Name,
-                  import_batch_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+                  import_batch_id, detection_uuid)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
                  ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs) DO NOTHING",
                 rusqlite::params![
                     row.date, row.time, row.sci_name, row.com_name,
                     row.confidence, row.lat, row.lon, row.cutoff,
                     row.week, row.sens, row.overlap, row.file_name, batch_id,
+                    row.detection_uuid,
                 ],
             )
             .map_err(MigrateError::DataTransfer)?;
@@ -950,6 +999,54 @@ Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256\n\
         assert_eq!(
             again.imported_rows, 0,
             "a re-import duplicated the station's history"
+        );
+    }
+
+    /// RES-25: an exported detection read back keeps its identifier, and one
+    /// the station has relabelled since the export is recognised by it and
+    /// not imported again under its old name. A `Detection_Id` that is not a
+    /// UUID is not stored; the row is given an identifier of its own.
+    #[test]
+    fn an_exported_detection_read_back_is_the_same_detection() {
+        const ID: &str = "6f1c2a52-0e4b-4c1e-9a77-0d6f3b8e2c11";
+        let export = format!(
+            "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name,\
+Event_Date,Detection_Id\n\
+2026-04-01,03:30:00,Strix aluco,Tawny Owl,0.9100,,,,,,,a.wav,,{}\n\
+2026-04-01,03:31:00,Strix aluco,Tawny Owl,0.8000,,,,,,,b.wav,,not-a-uuid\n",
+            ID.to_ascii_uppercase()
+        );
+        let (summary, dst) = import(&export).expect("own export");
+        assert_eq!(summary.imported_rows, 2);
+        let conn = rusqlite::Connection::open(dst.path()).unwrap();
+        let id_of = |file: &str| -> Option<String> {
+            conn.query_row(
+                "SELECT detection_uuid FROM detections WHERE File_Name = ?1",
+                [file],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            id_of("a.wav").as_deref(),
+            Some(ID),
+            "the identifier is kept"
+        );
+        let other = id_of("b.wav").expect("a row without a usable id gets its own");
+        assert_ne!(other, "not-a-uuid");
+        assert_eq!(other.len(), 36);
+
+        conn.execute(
+            "UPDATE detections SET Sci_Name = 'Asio otus', Com_Name = 'Long-eared Owl'
+              WHERE File_Name = 'a.wav'",
+            [],
+        )
+        .unwrap();
+        drop(conn);
+        let again = import_into(&export, &dst);
+        assert_eq!(
+            again.imported_rows, 0,
+            "the relabelled detection is the one its identifier names, not a new one"
         );
     }
 

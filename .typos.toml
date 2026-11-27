@@ -44,6 +44,9 @@ extend-exclude = [
     "tools/perch-bar/results/**",
     # Scientific names and eBird codes (`agular1`), byte for byte, one row per name.
     "docs/data/**",
+    # The synonym pairs the merge reads, copied from docs/data/taxonomy and held
+    # to it by a test: scientific names only (`collaris`).
+    "crates/birdnet-core/data/taxonomy/**",
     "tools/perch-bar/meta/**",
     # The extended parity manifest: titles, creators and notes copied from the
     # upstream recording pages (a German "vor"/"unter" in a title, a creator

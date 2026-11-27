@@ -8,6 +8,7 @@ pub mod audio;
 pub mod civil;
 pub mod config;
 pub mod detection;
+pub mod evaluation;
 mod file_settle;
 pub mod i18n;
 pub mod inference;

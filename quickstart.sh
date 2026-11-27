@@ -7,6 +7,7 @@
 #
 # Usage:
 #   bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/quickstart.sh)
+#   BIRDNET_VERSION=0.19.0 bash <(curl ...)   # pin a release (default: the newest)
 #
 # What this script does — you answer 2-3 questions, it does the rest:
 #   1. Verifies Docker Engine + Compose plugin are installed and usable,
@@ -16,7 +17,7 @@
 #      live in a Docker-managed volume, not here.
 #   3. Downloads the canonical compose files from GitHub.
 #   4. Auto-detects your audio source:
-#        • USB/ALSA capture card  → plughw:<card>,<device>
+#        • USB/ALSA capture card  → plughw:CARD=<id>,DEV=<device>
 #        • PulseAudio / PipeWire socket  → default source
 #        • Otherwise prompts you for an RTSP stream URL
 #   5. Asks for your station coordinates (or auto-detects via opt-in IP
@@ -35,7 +36,11 @@
 set -euo pipefail
 
 REPO="tomtom215/BirdNet-Behavior"
-RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
+# The compose files and the image come from ONE published release (OOB-22):
+# BIRDNET_VERSION if set (e.g. 0.19.0), else the newest release. They used to
+# come from `main` and `:latest`, so a station ran whatever the development
+# branch held that minute. RAW_BASE and IMAGE_TAG are set from it below.
+RELEASE=""
 COMPOSE_FILES="docker-compose.yml docker-compose.alsa.yml docker-compose.pulse.yml"
 DEFAULT_DIR="${HOME}/birdnet-behavior"
 WEB_PORT=8502
@@ -49,6 +54,24 @@ case "${CLASSIFIER_CHOICE}" in
     birdnet-v3) MODEL_SIZE_HINT="about 560 MB"; CLASSIFIER_LABEL="the BirdNET+ V3.0 preview" ;;
     *)          MODEL_SIZE_HINT="about 85 MB";  CLASSIFIER_LABEL="BirdNET V2.4" ;;
 esac
+
+# The release to install: BIRDNET_VERSION (a leading v is dropped), else the
+# newest published release, read from the GitHub API. Prints X.Y.Z, or fails
+# when there is no answer that is a version. The answer is read whole before it
+# is parsed: a parser that stops early would leave curl writing into a closed
+# pipe, which under pipefail is a failure of its own.
+resolve_release() {
+    local v="${BIRDNET_VERSION:-}" answer=""
+    if [ -z "$v" ]; then
+        answer="$(curl -fsSL --retry 2 -H 'Accept: application/vnd.github+json' \
+            "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null)" || return 1
+        v="$(printf '%s\n' "$answer" | sed -n 's/^[[:space:]]*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p')"
+        v="${v%%$'\n'*}"
+    fi
+    v="${v#v}"
+    [[ "$v" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+    printf '%s' "$v"
+}
 
 # ---------------------------------------------------------------------------
 # Presentation helpers
@@ -313,6 +336,17 @@ fi
 # ---------------------------------------------------------------------------
 hdr "Downloading compose files"
 
+if RELEASE="$(resolve_release)"; then
+    RAW_BASE="https://raw.githubusercontent.com/${REPO}/v${RELEASE}"
+    info "Installing release ${RELEASE} (set BIRDNET_VERSION=X.Y.Z to choose another)."
+else
+    [ -z "${BIRDNET_VERSION:-}" ] || fail "BIRDNET_VERSION=${BIRDNET_VERSION} is not a version like 0.19.0."
+    RELEASE=""
+    RAW_BASE="https://raw.githubusercontent.com/${REPO}/main"
+    warn "Could not find the newest release (GitHub's API did not answer); using the development"
+    warn "branch's compose files and the :latest image. Run again with BIRDNET_VERSION=X.Y.Z to pin one."
+fi
+
 for f in $COMPOSE_FILES; do
     info "Fetching $f"
     if ! curl -fsSL --retry 3 --retry-delay 2 -o "$f" "$RAW_BASE/$f"; then
@@ -330,15 +364,43 @@ hdr "Audio source"
 AUDIO_KIND=""    # alsa | pulse | rtsp | none
 AUDIO_VALUE=""
 
+# >>> qs_detect_alsa_device (kept equal to installer/lib/70-station.sh's
+# detect_first_audio_device by installer/test/alsa-device-detect.sh)
+#
+# The first ALSA capture device, addressed by the card's id rather than its
+# index: `plughw:CARD=<id>,DEV=<n>`. The index is assigned in detection order
+# and moves when USB re-enumerates, which a reboot may do; on a Raspberry Pi 4
+# the same microphone was card 1 before a cold reboot and card 3 after it, and
+# a station configured by index came back serving a dashboard and recording
+# nothing. The index is used only when the id cannot name one card (two cards
+# share it) or is not safe to write unquoted. Empty when there is no card.
+qs_detect_alsa_device() {
+    local listing first_card first_id first_device id_count=0
+    listing="$(arecord -l 2>/dev/null)"
+    [ -n "${listing}" ] || return 0
+    first_card="$(printf '%s\n' "${listing}" | awk '/^card /{ print $2; exit }' | tr -d ':')"
+    [ -n "${first_card}" ] || return 0
+    first_id="$(printf '%s\n' "${listing}" | awk '/^card /{ print $3; exit }')"
+    first_device="$(printf '%s\n' "${listing}" \
+        | awk '/^card /{ if (match($0, /device [0-9]+/)) print substr($0, RSTART + 7, RLENGTH - 7); exit }')"
+    if [ -n "${first_id}" ]; then
+        id_count="$(printf '%s\n' "${listing}" \
+            | awk -v id="${first_id}" '$1 == "card" && $3 == id { n++ } END { print n+0 }')"
+    fi
+    if [ -n "${first_id}" ] \
+        && grep -qE '^[A-Za-z0-9_-]+$' <<<"${first_id}" \
+        && [ "${id_count}" = "1" ]; then
+        echo "plughw:CARD=${first_id},DEV=${first_device:-0}"
+    else
+        echo "plughw:${first_card},${first_device:-0}"
+    fi
+}
+# <<< qs_detect_alsa_device
+
 # Try ALSA first (most Raspberry Pi USB mic setups).
 if command -v arecord >/dev/null 2>&1; then
-    first_card=$(arecord -l 2>/dev/null | awk '/^card/{print $2; exit}' | tr -d ':')
-    first_dev=$(arecord -l 2>/dev/null \
-        | awk '/^card/ {
-               for (i=1; i<=NF; i++) if ($i=="device") { v=$(i+1); gsub(":","",v); print v; exit }
-           }')
-    if [ -n "${first_card:-}" ]; then
-        candidate="plughw:${first_card},${first_dev:-0}"
+    candidate="$(qs_detect_alsa_device)"
+    if [ -n "${candidate:-}" ]; then
         say "Found a USB/ALSA capture device:"
         arecord -l 2>/dev/null | grep '^card' | sed 's/^/    /'
         say ""
@@ -463,8 +525,13 @@ fi
 # Every image includes DuckDB behavioral analytics (activity sessions,
 # resident-vs-migrant classification, dawn-chorus validation, species
 # co-occurrence), enabled by default via BIRDNET_ANALYTICS_DB in the compose
-# file. Pin a specific release later by editing BIRDNET_IMAGE_TAG (e.g. 0.2.0).
-IMAGE_TAG="latest"
+# file. The image is the release the compose files came from; change
+# BIRDNET_IMAGE_TAG in .env later to move to another one.
+if [ -n "${RELEASE}" ]; then
+    IMAGE_TAG="${RELEASE}"
+else
+    IMAGE_TAG="latest"
+fi
 
 # ---------------------------------------------------------------------------
 # Write the minimal .env

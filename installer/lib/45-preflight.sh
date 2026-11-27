@@ -219,6 +219,80 @@ detect_existing_install() {
     fi
 }
 
+# BirdNET-Pi on this machine (OOB-03).
+#
+# BirdNET-Pi makes /etc/birdnet/birdnet.conf a link to ~/BirdNET-Pi/birdnet.conf
+# — this installer's CONFIG_FILE. Taken as "a kept config", that file decided
+# the classifier, skipped every station question and the admin password, and
+# write_config then ran chmod (which follows a link), `sed -i` (which replaces
+# the link with a copy) and `>>` (which appends to the target) on it: BirdNET-Pi's
+# own settings file was changed by an install that never meant to touch it. And
+# with BirdNET-Pi's recorder still enabled, both stations open one microphone.
+#
+# So the installer stops, before anything is downloaded or written, when
+#   * the config file is a link (it is never written through one), or
+#   * a BirdNET-Pi recorder or analyser is enabled to start at boot,
+# and says what to do instead. Unit files left behind by a BirdNET-Pi whose
+# services are disabled are only mentioned: the owner has already stopped it.
+# Uninstall is never refused.
+BIRDNET_PI_UNITS="birdnet_recording.service birdnet_analysis.service"
+# Where enabled units' links live. One variable so the tests can point it at a
+# sandbox.
+SYSTEMD_UNIT_DIRS="${SYSTEMD_UNIT_DIRS:-/etc/systemd/system /usr/lib/systemd/system /lib/systemd/system}"
+
+# Prints one line per piece of evidence; status 0 when there is something that
+# must stop the install, 1 when there is nothing (a leftover unit file is
+# printed with a "leftover:" prefix and does not, alone, stop it).
+birdnet_pi_evidence() {
+    local stop=1 unit dir target
+    if [ -L "${CONFIG_FILE}" ]; then
+        target="$(readlink -f "${CONFIG_FILE}" 2>/dev/null || readlink "${CONFIG_FILE}" 2>/dev/null || true)"
+        echo "${CONFIG_FILE} is a link to ${target:-a missing file}"
+        stop=0
+    fi
+    for unit in ${BIRDNET_PI_UNITS}; do
+        for dir in ${SYSTEMD_UNIT_DIRS}; do
+            if [ -e "${dir}/multi-user.target.wants/${unit}" ] || [ -L "${dir}/multi-user.target.wants/${unit}" ]; then
+                echo "BirdNET-Pi's ${unit} is enabled (${dir}/multi-user.target.wants/${unit})"
+                stop=0
+            elif [ -e "${dir}/${unit}" ]; then
+                echo "leftover: ${dir}/${unit} (not enabled)"
+            fi
+        done
+    done
+    return "${stop}"
+}
+
+refuse_birdnet_pi_host() {
+    [ "${SUBCOMMAND:-}" = "uninstall" ] && return 0
+    local evidence line
+    if evidence="$(birdnet_pi_evidence)"; then
+        error "This machine has BirdNET-Pi on it, and installing over it would change BirdNET-Pi's files."
+        while IFS= read -r line; do
+            [ -n "${line}" ] && error "  - ${line#leftover: }"
+        done <<<"${evidence}"
+        error "Nothing has been downloaded or changed. To install BirdNet-Behavior here:"
+        error "  1. Stop BirdNET-Pi and keep it from starting at boot:"
+        error "       sudo systemctl disable --now ${BIRDNET_PI_UNITS}"
+        if [ -L "${CONFIG_FILE}" ]; then
+            error "  2. Move the link out of the way (BirdNET-Pi's own file stays where it is):"
+            error "       sudo mv ${CONFIG_FILE} ${CONFIG_FILE}.birdnet-pi"
+            error "  3. Run this installer again. To bring your BirdNET-Pi settings, history and"
+        else
+            error "  2. Run this installer again. To bring your BirdNET-Pi settings, history and"
+        fi
+        error "     recordings across afterwards, use Settings -> Data -> Import in the browser,"
+        error "     which only reads BirdNET-Pi's files (docs: Migrating from BirdNET-Pi)."
+        exit 1
+    fi
+    while IFS= read -r line; do
+        case "${line}" in
+            leftover:*) warn "BirdNET-Pi was installed here and is disabled: ${line#leftover: }." ;;
+        esac
+    done <<<"${evidence}"
+    return 0
+}
+
 # One-line human summary of the detected install (for the menu / messages).
 describe_existing_install() {
     local parts=()

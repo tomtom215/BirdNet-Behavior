@@ -77,11 +77,21 @@ download_classifier() {
         install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
         local filter_files="${V24_RANGE_FILE}"
         [ "${FILTER_ID}" = "${V3_GEOMODEL_ID}" ] && filter_files="${GEOMODEL_FILE} and ${GEOMODEL_LABELS_FILE}"
-        loud_warn "BIRDNET_SKIP_MODEL=1 — the ML model was NOT installed." \
-                  "The service will start but will detect NOTHING until you stage it:" \
+        # MDL-27: the station looks after the files its configuration names, so
+        # it fetches these itself when it starts, and once an hour while they
+        # are missing. Saying "detects nothing until you stage it" was untrue;
+        # the opt-out is the station's offline mode, which turns off every
+        # connection it makes on its own, not just this one.
+        loud_warn "BIRDNET_SKIP_MODEL=1 — the installer did NOT install the ML model." \
+                  "The station fetches it itself when it starts, and once an hour while it is" \
+                  "  missing (sha256 and size checked, as here). To stage the files yourself:" \
                   "  put ${MODEL_FILE} and ${LABELS_FILE} (and ${filter_files} to filter by location)" \
                   "  in ${MODEL_DIR}, then restart the service. They are what" \
-                  "  ${BINARY_NAME} --install-model ${CLASSIFIER} and ${FILTER_ID} write."
+                  "  ${BINARY_NAME} --install-model ${CLASSIFIER} and ${FILTER_ID} write." \
+                  "To stop the station fetching anything on its own (models included), run it" \
+                  "  offline: sudo systemctl edit ${SERVICE_NAME}, add [Service] and" \
+                  "  Environment=BIRDNET_OFFLINE=1, then restart. BIRDNET_MODEL_MIRROR names a" \
+                  "  mirror on your own network that an offline station still uses."
         return
     fi
 

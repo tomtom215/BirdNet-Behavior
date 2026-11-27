@@ -115,7 +115,7 @@ for (const theme of ['light', 'dark']) {
     host.innerHTML = ['high', 'mid', 'low'].map((t) =>
       `<div><span class="bnb-conf ${t}"><span class="track"><span class="fill"></span></span><span class="val">80%</span></span>` +
       `<span class="bnb-conf-pill ${t}">80%</span></div>`).join('') +
-      `<p class="bnb-conf-legend"><span class="bnb-conf-key high"><i></i>90% and up very sure</span></p>`;
+      `<p class="bnb-conf-legend"><span class="bnb-conf-key high"><i></i>90% and up high score</span></p>`;
     document.body.appendChild(host);
     const css = (el, prop) => getComputedStyle(el)[prop];
     const out = { card: css(host, 'backgroundColor'), tiers: {} };

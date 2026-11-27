@@ -16,11 +16,35 @@
 //!
 //! # Agreement is counted, never folded into the confidence
 //!
-//! When two classifiers independently report the same species in the same
-//! chunk, that is much stronger evidence than one being confident — it is the
-//! honest attack on the false-positive problem that `corroboration.rs` can
-//! only approach through repetition. So it is recorded, as a count, on the
-//! detection.
+//! When two classifiers report the same species in the same chunk, that is
+//! recorded, as a count, on the detection.
+//!
+//! # Agreement is association, not independent corroboration (review F09)
+//!
+//! The count says that several classifiers reported the species over
+//! **overlapping windows of the same audio** — each from the chunk's start,
+//! for its own window length ([`crate::detection::answers::shared_support_secs`]
+//! says how much they share). It is an association between their outputs and
+//! not two independent observations: the classifiers heard the same
+//! microphone, the same noise and the same overlapping seconds, and two
+//! models trained on overlapping data (Perch and BirdNET share Xeno-canto)
+//! can share an error as readily as a truth. Whether agreement predicts a
+//! correct identification is an empirical question this station's per-model
+//! answers exist to let someone test; nothing here assumes the answer.
+//!
+//! # No decision reads a blend of classifiers' scores
+//!
+//! No score is averaged, summed or maxed across classifiers to decide
+//! anything: each classifier's detections are judged against its own bar, the
+//! privacy and noise filters judge each classifier's own evidence against its
+//! own rule ([`crate::detection::types::ChunkPrediction::by_classifier`]), and
+//! the per-model answers keep every score on its own scale. One comparison
+//! across scales remains, and is named here so it is not mistaken for none:
+//! among classifiers that each cleared their own bar, the one with the higher
+//! raw confidence is the one whose detection the row carries, and that
+//! confidence then meets the station's per-species bar downstream. Changing
+//! that choice changes which detections a multi-classifier station stores, and
+//! is a maintainer's decision, not a refactor.
 //!
 //! It is **not** used to adjust the confidence, and the temptation to is worth
 //! naming. A combined confidence — an average, a maximum with a bonus, a
@@ -42,6 +66,7 @@
 use std::collections::HashMap;
 
 use crate::detection::types::Detection;
+use crate::inference::synonyms::SynonymTable;
 
 /// What one classifier said about one chunk.
 #[derive(Debug, Clone)]
@@ -84,6 +109,19 @@ pub struct ModelVerdict {
 /// not reorder a station's detections.
 #[must_use]
 pub fn merge_verdicts(verdicts: &[ModelVerdict]) -> Vec<Detection> {
+    merge_verdicts_with(verdicts, &SynonymTable::empty())
+}
+
+/// [`merge_verdicts`], with the two names of each pair in `synonyms` taken as
+/// one species (MMP-09).
+///
+/// Two classifiers that report one bird under two names of a pair are one
+/// detection with an agreement of two, as if they had spelled it alike. The
+/// detection kept is the winner's, under the winner's spelling; the caller
+/// names it as the station does with [`name_synonyms_as_primary`]. With an
+/// empty table this is [`merge_verdicts`] exactly.
+#[must_use]
+pub fn merge_verdicts_with(verdicts: &[ModelVerdict], synonyms: &SynonymTable) -> Vec<Detection> {
     /// Per species: the best detection so far, which model gave it, whether
     /// it cleared its model's own bar, and how many distinct models reported
     /// the species at all / above their own bar.
@@ -99,21 +137,21 @@ pub fn merge_verdicts(verdicts: &[ModelVerdict]) -> Vec<Detection> {
     for verdict in verdicts {
         // One classifier reporting the same species twice in a chunk — a
         // label file with a duplicate row, say — must not count as agreement
-        // with itself. Agreement means *independent* classifiers.
+        // with itself. Agreement means *distinct* classifiers.
         let mut seen_here: Vec<&str> = Vec::new();
         let mut cleared_here: Vec<&str> = Vec::new();
 
         for detection in &verdict.detections {
-            let key = detection.scientific_name.clone();
+            let key_str = synonyms.merge_key(&detection.scientific_name);
+            let key = key_str.to_owned();
             let cleared = detection.confidence >= verdict.threshold;
-            let first_from_this_model = !seen_here.contains(&detection.scientific_name.as_str());
+            let first_from_this_model = !seen_here.contains(&key_str);
             if first_from_this_model {
-                seen_here.push(&detection.scientific_name);
+                seen_here.push(key_str);
             }
-            let first_clearing_from_this_model =
-                cleared && !cleared_here.contains(&detection.scientific_name.as_str());
+            let first_clearing_from_this_model = cleared && !cleared_here.contains(&key_str);
             if first_clearing_from_this_model {
-                cleared_here.push(&detection.scientific_name);
+                cleared_here.push(key_str);
             }
 
             match best.get_mut(&key) {
@@ -203,10 +241,38 @@ pub fn name_as_primary<'a>(
     }
 }
 
+/// Store every merged detection of a species with two names under the name
+/// the station uses for it (MMP-09).
+///
+/// That is the primary classifier's spelling where
+/// the primary has either name, else the pair's key
+/// ([`SynonymTable::station_name`]). A detection whose name is in no pair is
+/// left as it is. Run before [`name_as_primary`], so the common name then
+/// follows the scientific name the detection carries.
+pub fn name_synonyms_as_primary(
+    detections: &mut [Detection],
+    synonyms: &SynonymTable,
+    primary_has: impl Fn(&str) -> bool,
+) {
+    if synonyms.is_empty() {
+        return;
+    }
+    for detection in detections {
+        let name = synonyms.station_name(&detection.scientific_name, &primary_has);
+        if name != detection.scientific_name {
+            detection.scientific_name = name.to_owned();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ModelVerdict, merge_verdicts, name_as_primary};
+    use super::{
+        ModelVerdict, merge_verdicts, merge_verdicts_with, name_as_primary,
+        name_synonyms_as_primary,
+    };
     use crate::detection::types::Detection;
+    use crate::inference::synonyms::SynonymTable;
 
     fn det(sci: &str, confidence: f32) -> Detection {
         Detection {
@@ -288,8 +354,9 @@ mod tests {
     }
 
     /// **The point of the whole stage.** Two classifiers reporting the same
-    /// species in the same chunk is independent corroboration, and it is
-    /// counted.
+    /// species in the same chunk is counted, as an association over
+    /// overlapping windows (see the module's documentation), not as
+    /// independent corroboration.
     ///
     /// Observed failing with the `*count` increment removed: agreement stayed
     /// at 1 and the corroboration was indistinguishable from one model
@@ -416,7 +483,7 @@ mod tests {
     ///
     /// Observed failing with the `seen_here` guard removed: a single model
     /// listing the species twice reported an agreement of 2, which would read
-    /// downstream as two independent models concurring.
+    /// downstream as two models concurring.
     #[test]
     fn one_classifier_repeating_itself_is_not_corroboration() {
         let out = merge_verdicts(&[verdict(
@@ -473,5 +540,62 @@ mod tests {
         };
         assert_eq!(names(&forward), names(&backward));
         assert_eq!(names(&forward), vec!["Aaa aaa", "Bbb bbb"]);
+    }
+
+    /// MMP-09: two classifiers naming one bird by the two names of a pair are
+    /// one detection that both agree on, not two detections each agreed by one.
+    #[test]
+    fn two_names_of_one_species_merge_into_one_agreed_detection() {
+        let synonyms = SynonymTable::parse("Anthus lutescens\tAnthus chii\n");
+        let verdicts = [
+            judged("v3", 0.5, vec![det("Anthus lutescens", 0.80)]),
+            judged("perch", 0.5, vec![det("Anthus chii", 0.70)]),
+        ];
+        let out = merge_verdicts_with(&verdicts, &synonyms);
+        assert_eq!(out.len(), 1, "one species, one detection: {out:?}");
+        assert_eq!(out[0].agreeing_models, Some(2));
+        assert_eq!(out[0].model_id.as_deref(), Some("v3"));
+        assert!((out[0].confidence - 0.80).abs() < f32::EPSILON);
+
+        // The counterpart: without the pair, the two names stay two species,
+        // so the merge above is the table's doing.
+        let apart = merge_verdicts(&verdicts);
+        assert_eq!(apart.len(), 2);
+        assert!(apart.iter().all(|d| d.agreeing_models == Some(1)));
+    }
+
+    /// One classifier reporting both names of a pair (it cannot once the table
+    /// is restricted to the loaded label sets, but the merge must not rely on
+    /// that) is not agreement with itself.
+    #[test]
+    fn one_classifier_under_both_names_is_not_agreement() {
+        let synonyms = SynonymTable::parse("A a\tB b\n");
+        let out = merge_verdicts_with(
+            &[verdict("one", vec![det("A a", 0.6), det("B b", 0.5)])],
+            &synonyms,
+        );
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].agreeing_models, Some(1));
+    }
+
+    /// The name stored is the primary's spelling whichever classifier won.
+    #[test]
+    fn the_merged_pair_is_stored_under_the_primary_s_name() {
+        let synonyms = SynonymTable::parse("Anthus lutescens\tAnthus chii\n");
+        let verdicts = [
+            judged("v3", 0.5, vec![det("Anthus lutescens", 0.60)]),
+            judged("perch", 0.5, vec![det("Anthus chii", 0.90)]),
+        ];
+        let mut out = merge_verdicts_with(&verdicts, &synonyms);
+        assert_eq!(
+            out[0].scientific_name, "Anthus chii",
+            "precondition: perch won"
+        );
+        name_synonyms_as_primary(&mut out, &synonyms, |n| n == "Anthus lutescens");
+        assert_eq!(out[0].scientific_name, "Anthus lutescens");
+        // A name in no pair is left alone.
+        let mut other = vec![det("Turdus merula", 0.9)];
+        name_synonyms_as_primary(&mut other, &synonyms, |_| false);
+        assert_eq!(other[0].scientific_name, "Turdus merula");
     }
 }

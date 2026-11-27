@@ -111,6 +111,7 @@ fn store_for(
                 bar: own_bar,
                 window_start_secs: Some(0.0),
                 window_end_secs: Some(3.0),
+                padded_secs: Some(0.0),
             },
         )
         .expect("store score");
@@ -302,7 +303,7 @@ async fn the_model_scores_export_has_one_row_per_classifier_and_empty_cells_for_
     let lines: Vec<&str> = csv.lines().collect();
     assert_eq!(
         lines[0],
-        "Date,Time,Sci_Name,File_Name,Model_Id,State,Score,Bar,Window_Start_Secs,Window_End_Secs"
+        "Date,Time,Sci_Name,File_Name,Model_Id,State,Score,Bar,Window_Start_Secs,Window_End_Secs,Padded_Secs"
     );
     assert_eq!(lines.len(), 4, "{csv}");
     assert!(

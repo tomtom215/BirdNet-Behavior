@@ -3,6 +3,7 @@
 //! Defines the core detection data structures and the watch -> analyze -> report pipeline.
 
 pub mod answers;
+pub mod conditioning;
 pub mod corroboration;
 pub mod daemon;
 pub mod dynamic_threshold;
@@ -13,6 +14,7 @@ pub mod pipeline;
 pub mod privacy;
 pub mod sound_class;
 pub mod types;
+pub mod window_slots;
 
 /// The two filters that judge a whole chunk rather than one detection.
 ///
@@ -72,6 +74,14 @@ pub struct FilterTally {
     pub occurrence_detections: u64,
     /// Species detections the operator's include or exclude list removed.
     pub species_list_detections: u64,
+    /// Windows no routed classifier answered (review F18): not listening, and
+    /// not counted as effort.
+    pub failed_windows: u64,
+    /// Milliseconds of audio that decoded, to the end of the last window
+    /// (review F10); `0` when not known. A truncated file's header can claim
+    /// more: a WAV cut short by a crash says 15 s and holds 1 s, and ffmpeg's
+    /// placeholder header says nothing at all.
+    pub decoded_ms: u64,
 }
 
 impl FilterTally {
@@ -123,19 +133,32 @@ impl ChunkFilters {
             chunks.iter().map(|c| c.detections.clone()).collect();
         let after_privacy = self.privacy.filter_timed(starts, chunks);
         let privacy_masked = self.privacy.masked_windows(chunks);
-        let loudest: Vec<Option<types::Detection>> =
-            chunks.iter().map(|c| c.loudest_noise.clone()).collect();
+        // Each classifier's own loudest noise where the chunk carries them,
+        // so each is judged on its own scale (review F09); else the summary.
+        let loudest: Vec<Vec<types::Detection>> = chunks
+            .iter()
+            .map(|c| {
+                if c.by_classifier.is_empty() {
+                    c.loudest_noise.iter().cloned().collect()
+                } else {
+                    c.by_classifier
+                        .iter()
+                        .filter_map(|e| e.loudest_noise.clone())
+                        .collect()
+                }
+            })
+            .collect();
         let noise_windows = after_privacy
             .iter()
             .zip(&loudest)
             .zip(&privacy_masked)
             .filter(|((list, loud), masked)| {
-                !**masked && self.noise.firing(list, loud.as_ref()).is_some()
+                !**masked && self.noise.firing_any(list, loud).is_some()
             })
             .count() as u64;
-        let after_noise = self
-            .noise
-            .filter_with_evidence(starts, &after_privacy, &loudest);
+        let after_noise =
+            self.noise
+                .filter_with_classifier_evidence(starts, &after_privacy, &loudest);
         let kept = corroboration::corroborate(self.confirmation, starts, &after_noise);
 
         let (n0, n1, n2, n3) = (
@@ -196,7 +219,9 @@ mod chunk_filter_tests {
             detections,
             human_score: 0.0,
             human_rank: None,
+            privacy_unassessed: false,
             loudest_noise: None,
+            by_classifier: Vec::new(),
         }
     }
 
@@ -206,7 +231,9 @@ mod chunk_filter_tests {
             detections,
             human_score: 0.8,
             human_rank: None,
+            privacy_unassessed: false,
             loudest_noise: None,
+            by_classifier: Vec::new(),
         }
     }
 

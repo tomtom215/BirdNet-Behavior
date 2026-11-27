@@ -38,6 +38,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use birdnet_core::config::Config;
+use birdnet_core::detection::privacy::ClassifierPrivacyRule;
 use birdnet_core::inference::model::OutputScale;
 use birdnet_core::inference::model_state::{ClassifierFault, ClassifierState, ClassifierStatus};
 use birdnet_core::inference::registry::{MAX_MODELS, ModelSpec, model_size_mib, parse_routes};
@@ -58,7 +59,27 @@ struct ExtraModelKeys {
     output_scale_key: &'static str,
     /// The name used when `id` is not given.
     default_id: &'static str,
+    /// Its own privacy and noise rules.
+    filter: FilterKeys,
 }
+
+/// The settings for one classifier's own privacy and noise rules (review
+/// F09), as literal key names for the same reason as [`EXTRA_MODEL_KEYS`].
+struct FilterKeys {
+    /// Its own privacy score threshold.
+    privacy_score: &'static str,
+    /// Its own privacy rank cutoff.
+    privacy_rank: &'static str,
+    /// Its own noise threshold.
+    noise_score: &'static str,
+}
+
+/// The primary classifier's own privacy and noise keys.
+const PRIMARY_FILTER_KEYS: FilterKeys = FilterKeys {
+    privacy_score: "MODEL_PRIVACY_THRESHOLD",
+    privacy_rank: "MODEL_PRIVACY_RANK",
+    noise_score: "MODEL_NOISE_THRESHOLD",
+};
 
 /// Every extra classifier a station may declare, as **literal** key names.
 ///
@@ -77,6 +98,11 @@ const EXTRA_MODEL_KEYS: &[ExtraModelKeys] = &[
         sample_rate_key: "MODEL_2_SAMPLE_RATE",
         output_scale_key: "MODEL_2_OUTPUT_SCALE",
         default_id: "model2",
+        filter: FilterKeys {
+            privacy_score: "MODEL_2_PRIVACY_THRESHOLD",
+            privacy_rank: "MODEL_2_PRIVACY_RANK",
+            noise_score: "MODEL_2_NOISE_THRESHOLD",
+        },
     },
     ExtraModelKeys {
         path_key: "MODEL_3_PATH",
@@ -86,6 +112,11 @@ const EXTRA_MODEL_KEYS: &[ExtraModelKeys] = &[
         sample_rate_key: "MODEL_3_SAMPLE_RATE",
         output_scale_key: "MODEL_3_OUTPUT_SCALE",
         default_id: "model3",
+        filter: FilterKeys {
+            privacy_score: "MODEL_3_PRIVACY_THRESHOLD",
+            privacy_rank: "MODEL_3_PRIVACY_RANK",
+            noise_score: "MODEL_3_NOISE_THRESHOLD",
+        },
     },
 ];
 
@@ -104,18 +135,27 @@ const _: () = assert!(EXTRA_MODEL_KEYS.len() + 1 == MAX_MODELS);
 pub const MODEL_ENV_KEYS: &[&str] = &[
     "BIRDNET_MODEL_2_ID",
     "BIRDNET_MODEL_2_LABELS",
+    "BIRDNET_MODEL_2_NOISE_THRESHOLD",
     "BIRDNET_MODEL_2_OUTPUT_SCALE",
     "BIRDNET_MODEL_2_PATH",
+    "BIRDNET_MODEL_2_PRIVACY_RANK",
+    "BIRDNET_MODEL_2_PRIVACY_THRESHOLD",
     "BIRDNET_MODEL_2_SAMPLE_RATE",
     "BIRDNET_MODEL_2_THRESHOLD",
     "BIRDNET_MODEL_3_ID",
     "BIRDNET_MODEL_3_LABELS",
+    "BIRDNET_MODEL_3_NOISE_THRESHOLD",
     "BIRDNET_MODEL_3_OUTPUT_SCALE",
     "BIRDNET_MODEL_3_PATH",
+    "BIRDNET_MODEL_3_PRIVACY_RANK",
+    "BIRDNET_MODEL_3_PRIVACY_THRESHOLD",
     "BIRDNET_MODEL_3_SAMPLE_RATE",
     "BIRDNET_MODEL_3_THRESHOLD",
     "BIRDNET_MODEL_ID",
+    "BIRDNET_MODEL_NOISE_THRESHOLD",
     "BIRDNET_MODEL_OUTPUT_SCALE",
+    "BIRDNET_MODEL_PRIVACY_RANK",
+    "BIRDNET_MODEL_PRIVACY_THRESHOLD",
     "BIRDNET_MODEL_ROUTES",
     "BIRDNET_MODEL_SAMPLE_RATE",
     "BIRDNET_MODEL_THRESHOLD",
@@ -157,6 +197,11 @@ pub struct ModelPlan {
     /// Every classifier id the configuration declares, the primary first, in
     /// declaration order — the order the published states are listed in.
     pub declared: Vec<String>,
+    /// Each loaded classifier's own privacy rule, where its configuration
+    /// sets one (review F09): its scores are not on another's scale.
+    pub privacy_rules: Vec<(String, ClassifierPrivacyRule)>,
+    /// Each loaded classifier's own noise threshold, where one is set.
+    pub noise_rules: Vec<(String, f32)>,
 }
 
 /// Read the classifier configuration and decide what this machine can run.
@@ -262,8 +307,19 @@ pub fn plan_with(
     ceiling_mib: Option<u64>,
 ) -> ModelPlan {
     let mut notes = Vec::new();
+    let mut privacy_rules = Vec::new();
+    let mut noise_rules = Vec::new();
+    let primary_id = get("MODEL_ID").unwrap_or_else(|| "birdnet".to_owned());
+    filter_rules(
+        get,
+        &primary_id,
+        &PRIMARY_FILTER_KEYS,
+        &mut privacy_rules,
+        &mut noise_rules,
+        &mut notes,
+    );
     let mut specs = vec![ModelSpec {
-        id: get("MODEL_ID").unwrap_or_else(|| "birdnet".to_owned()),
+        id: primary_id,
         model_path: primary_model,
         labels_path: primary_labels,
         threshold: model_threshold(get, "MODEL_THRESHOLD", &mut notes),
@@ -375,6 +431,14 @@ pub fn plan_with(
                 notes.push(format!(
                     "classifier `{id}` admitted: about {want} MiB, {used} MiB committed"
                 ));
+                filter_rules(
+                    get,
+                    &id,
+                    &keys.filter,
+                    &mut privacy_rules,
+                    &mut noise_rules,
+                    &mut notes,
+                );
                 specs.push(ModelSpec {
                     id,
                     model_path: path,
@@ -429,6 +493,73 @@ pub fn plan_with(
         notes,
         left_out,
         declared,
+        privacy_rules,
+        noise_rules,
+    }
+}
+
+/// Read one classifier's own privacy and noise settings (review F09).
+///
+/// A value that cannot be one is noted and ignored, so that classifier is
+/// judged by the station's rule: as with a per-model threshold, one mistyped
+/// value is not worth refusing the whole configuration.
+fn filter_rules(
+    get: &dyn Fn(&str) -> Option<String>,
+    id: &str,
+    keys: &FilterKeys,
+    privacy_rules: &mut Vec<(String, ClassifierPrivacyRule)>,
+    noise_rules: &mut Vec<(String, f32)>,
+    notes: &mut Vec<String>,
+) {
+    let rank_key = keys.privacy_rank;
+    let threshold = filter_threshold(get, keys.privacy_score, "privacy", notes);
+    let rank_cutoff = get(rank_key).and_then(|raw| {
+        let parsed = raw.parse::<usize>().ok();
+        if parsed.is_none() {
+            notes.push(format!(
+                "{rank_key}={raw} is not a whole number of classes (0 turns the rank rule off); \
+                 ignoring it, so classifier `{id}` is judged by the station's privacy rank"
+            ));
+        }
+        parsed
+    });
+    if threshold.is_some() || rank_cutoff.is_some() {
+        privacy_rules.push((
+            id.to_owned(),
+            ClassifierPrivacyRule {
+                threshold,
+                rank_cutoff,
+            },
+        ));
+    }
+    if let Some(t) = filter_threshold(get, keys.noise_score, "noise", notes) {
+        noise_rules.push((id.to_owned(), t));
+    }
+}
+
+/// A per-classifier filter threshold between 0 and 1 (`0` turns that rule
+/// off for that classifier), or `None` with a note.
+fn filter_threshold(
+    get: &dyn Fn(&str) -> Option<String>,
+    key: &str,
+    filter: &str,
+    notes: &mut Vec<String>,
+) -> Option<f32> {
+    let raw = get(key)?;
+    let parsed = raw.parse::<f32>().ok().or_else(|| {
+        birdnet_core::config::locale::normalize_decimal(&raw)
+            .parse()
+            .ok()
+    });
+    match parsed {
+        Some(t) if t.is_finite() && (0.0..=1.0).contains(&t) => Some(t),
+        _ => {
+            notes.push(format!(
+                "{key}={raw} is not a score between 0 and 1; ignoring it, so that classifier \
+                 is judged by the station's {filter} threshold"
+            ));
+            None
+        }
     }
 }
 
@@ -858,6 +989,48 @@ mod tests {
         )
     }
 
+    /// Review F09: each classifier's own privacy and noise settings are read
+    /// under its id, and a value that cannot be one is noted and left out.
+    #[test]
+    fn each_classifier_s_own_filter_settings_are_read_under_its_id() {
+        use birdnet_core::detection::privacy::ClassifierPrivacyRule;
+        let p = primary_plan(&[
+            ("MODEL_ID", "v24"),
+            ("MODEL_PRIVACY_THRESHOLD", "0.2"),
+            ("MODEL_PRIVACY_RANK", "5"),
+            ("MODEL_NOISE_THRESHOLD", "0,7"),
+        ]);
+        assert_eq!(
+            p.privacy_rules,
+            [(
+                "v24".to_owned(),
+                ClassifierPrivacyRule {
+                    threshold: Some(0.2),
+                    rank_cutoff: Some(5),
+                }
+            )]
+        );
+        assert_eq!(p.noise_rules, [("v24".to_owned(), 0.7)]);
+        let bad = primary_plan(&[
+            ("MODEL_PRIVACY_THRESHOLD", "20"),
+            ("MODEL_PRIVACY_RANK", "-1"),
+        ]);
+        assert!(bad.privacy_rules.is_empty(), "{:?}", bad.privacy_rules);
+        assert!(
+            bad.notes
+                .iter()
+                .any(|n| n.contains("MODEL_PRIVACY_THRESHOLD=20"))
+                && bad
+                    .notes
+                    .iter()
+                    .any(|n| n.contains("MODEL_PRIVACY_RANK=-1")),
+            "{:?}",
+            bad.notes
+        );
+        assert!(primary_plan(&[]).privacy_rules.is_empty());
+        assert!(primary_plan(&[]).noise_rules.is_empty());
+    }
+
     /// `MODEL_THRESHOLD=75` — the percentage slip in a 0–1 field — put the
     /// classifier's bar above anything it can score, and the station stopped
     /// detecting with no word anywhere. Refused, named, and the station
@@ -1281,6 +1454,13 @@ mod tests {
             "BIRDNET_MODEL_SAMPLE_RATE".to_owned(),
             "BIRDNET_MODEL_OUTPUT_SCALE".to_owned(),
         ];
+        let filters = std::iter::once(&super::PRIMARY_FILTER_KEYS)
+            .chain(EXTRA_MODEL_KEYS.iter().map(|k| &k.filter));
+        for f in filters {
+            for name in [f.privacy_score, f.privacy_rank, f.noise_score] {
+                expected.push(format!("BIRDNET_{name}"));
+            }
+        }
         for k in EXTRA_MODEL_KEYS {
             for name in [
                 k.path_key,

@@ -497,7 +497,9 @@ async fn terrain_table(
         &state,
         format!("terrain-table:{days}"),
         FRAGMENT_ERR,
-        move |s| compute_terrain(s, days).map(|t| render_table(&t)),
+        move |s| {
+            compute_terrain(s, days).map(|t| crate::analytics_cache::stamped(render_table(&t)))
+        },
     )
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -513,13 +515,61 @@ static CARD: crate::seal::Sealed =
 /// The card the "When active" tab leads with. The page holds no data: `static/terrain.js` reads
 /// `data-src`, fetches it, and draws the grid; the 3D view (and three.js with it) is loaded when,
 /// and only when, the reader asks for it.
-pub(super) fn content() -> String {
+/// The card, opening at the terrain range for the page's `days`: the shortest it draws that is
+/// not shorter than the choice, as `terrain.js` picks when the range changes (UIC-08).
+pub(super) fn content(days: u32) -> String {
+    let opens = RANGES
+        .iter()
+        .copied()
+        .find(|&r| r >= days)
+        .unwrap_or(RANGES[RANGES.len() - 1]);
+    // The range line is written for that range too, so a reader without the script (and the
+    // first paint with it) is told what the picture covers.
+    let says = if opens == 365 {
+        "Last year".to_owned()
+    } else {
+        format!("Last {opens} days")
+    };
     CARD.replace("{{version}}", env!("CARGO_PKG_VERSION"))
+        .replacen(
+            r#"data-tr-days="30""#,
+            &format!(r#"data-tr-days="{opens}""#),
+            1,
+        )
+        .replacen(
+            r#"role="status">Last 30 days</span>"#,
+            &format!(r#"role="status">{says}</span>"#),
+            1,
+        )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// UIR-30. The card's range line is the figure's own statement of what it covers. It is
+    /// written by the server for the range it opens at: it said "Last 30 days" over a year's
+    /// terrain, and terrain.js never corrected it (its range `say()` was shadowed by a second
+    /// method of the same name).
+    #[test]
+    fn the_card_says_the_range_it_draws() {
+        for (days, opens, says) in [
+            (7, 30, "Last 30 days"),
+            (30, 30, "Last 30 days"),
+            (90, 90, "Last 90 days"),
+            (365, 365, "Last year"),
+        ] {
+            let html = content(days);
+            assert!(
+                html.contains(&format!(r#"data-tr-days="{opens}""#)),
+                "{days}"
+            );
+            assert!(
+                html.contains(&format!(r#"role="status">{says}</span>"#)),
+                "the card at {days} days must say {says}"
+            );
+        }
+    }
 
     fn row(date: &str, hour: u32, sp: &str, n: u32) -> Row {
         (date.to_owned(), hour, sp.to_owned(), n)

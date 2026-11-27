@@ -117,6 +117,7 @@ use std::time::Duration;
 /// after it, for ever.
 const TIMEDATECTL_TIMEOUT: Duration = Duration::from_secs(10);
 
+use birdnet_db::capture_ledger::ClockReading;
 use birdnet_web::state::AppState;
 
 use super::AppriseHandle;
@@ -467,7 +468,14 @@ pub(super) enum NtpState {
 ///
 /// One subprocess per five-minute poll. On a Pi that is a few seconds of CPU a
 /// day, which is not worth caching state to avoid.
+#[cfg(test)]
 fn probe_ntp_state() -> NtpState {
+    probe_ntp().0
+}
+
+/// `probe_ntp_state`, with the name of what answered: `timedatectl`,
+/// `timesync-file`, or `none` when nothing could.
+fn probe_ntp() -> (NtpState, &'static str) {
     match birdnet_core::process::run_with_timeout(
         std::process::Command::new("timedatectl").args([
             "show",
@@ -478,11 +486,12 @@ fn probe_ntp_state() -> NtpState {
         TIMEDATECTL_TIMEOUT,
     ) {
         Ok(out) if out.status.success() => {
-            return match String::from_utf8_lossy(&out.stdout).trim() {
+            let state = match String::from_utf8_lossy(&out.stdout).trim() {
                 "yes" => NtpState::Synced,
                 "no" => NtpState::Unsynced,
                 _ => NtpState::Unknown,
             };
+            return (state, "timedatectl");
         }
         // A non-zero exit is the container case: the binary is present but
         // there is no bus to ask. Fall through to the file, which will also be
@@ -490,9 +499,9 @@ fn probe_ntp_state() -> NtpState {
         Ok(_) | Err(_) => {}
     }
     if std::path::Path::new("/run/systemd/timesync/synchronized").exists() {
-        NtpState::Synced
+        (NtpState::Synced, "timesync-file")
     } else {
-        NtpState::Unknown
+        (NtpState::Unknown, "none")
     }
 }
 
@@ -508,13 +517,67 @@ fn check_clock(state: &AppState, out: &mut Findings) {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
-    let ntp = probe_ntp_state();
+    let (ntp, authority) = probe_ntp();
     state.metrics().set_clock_synced(match ntp {
         NtpState::Synced => Some(true),
         NtpState::Unsynced => Some(false),
         NtpState::Unknown => None,
     });
+    record_clock(state, &clock_reading(now, ntp, authority));
     out.extend(clock_condition(now, ntp));
+}
+
+/// What this poll saw of the clock, as the clock record keeps it (RES-12).
+///
+/// A clock below the plausibility floor is `unset` whatever NTP says, as
+/// [`clock_condition`] judges it. The boot id and uptime are read from
+/// `/proc`; where they cannot be, they are `None` and no step can be measured,
+/// which is said by their absence rather than by a step of zero.
+fn clock_reading(now: u64, ntp: NtpState, authority: &'static str) -> ClockReading {
+    use birdnet_db::capture_ledger::ClockState;
+    let state = if crate::capture::schedule::secs_look_synced(now) {
+        match ntp {
+            NtpState::Synced => ClockState::Synced,
+            NtpState::Unsynced => ClockState::Unsynced,
+            NtpState::Unknown => ClockState::Unknown,
+        }
+    } else {
+        ClockState::Unset
+    };
+    ClockReading {
+        at_utc: i64::try_from(now).unwrap_or(i64::MAX),
+        state,
+        authority,
+        boot_id: std::fs::read_to_string("/proc/sys/kernel/random/boot_id")
+            .ok()
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty()),
+        uptime_secs: std::fs::read_to_string("/proc/uptime")
+            .ok()
+            .and_then(|s| s.split_whitespace().next().and_then(|v| v.parse().ok())),
+    }
+}
+
+/// Write the reading to the clock record when it says something new, and say
+/// so in the journal when the clock stepped. A failed write is logged and
+/// costs nothing else: the next poll compares against the last row that was
+/// written.
+fn record_clock(state: &AppState, reading: &ClockReading) {
+    match state.with_db(|conn| birdnet_db::capture_ledger::observe(conn, reading)) {
+        Ok(Some("step")) => tracing::warn!(
+            at_utc = reading.at_utc,
+            "the system clock stepped against elapsed time; detections either side of the \
+             step were stamped by different clocks (see /api/v2/station/record)"
+        ),
+        Ok(Some(reason)) => tracing::info!(
+            reason,
+            state = reading.state.as_str(),
+            authority = reading.authority,
+            "clock state recorded"
+        ),
+        Ok(None) => {}
+        Err(e) => tracing::warn!(error = %e, "the clock's state could not be recorded"),
+    }
 }
 
 /// The clock policy, separated from the probes so it can be tested.
@@ -2359,6 +2422,58 @@ mod tests {
     fn a_backwards_clock_does_not_manufacture_staleness() {
         let now = 1_000_000_i64;
         assert!(maintenance_condition("j", "backup", Some((now + 86_400, None)), now).is_none());
+    }
+
+    /// RES-12: the poll writes the clock's state down, once per change, so a
+    /// study can tell which hours were stamped by an unsynchronised clock.
+    /// Through `evaluate`, so the check's place in `CHECKS` is part of it.
+    #[test]
+    fn the_poll_writes_the_clocks_state_down_once_per_change() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        let state = AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+        let rows = |state: &AppState| -> Vec<(String, String)> {
+            state
+                .with_db(|c| {
+                    let mut st =
+                        c.prepare("SELECT state, reason FROM clock_observations ORDER BY id")?;
+                    let v = st
+                        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok::<_, rusqlite::Error>(v)
+                })
+                .unwrap()
+        };
+        let _ = evaluate(&state);
+        let first = rows(&state);
+        assert_eq!(
+            first.len(),
+            1,
+            "the first poll records the clock: {first:?}"
+        );
+        assert_eq!(first[0].1, "first");
+        let _ = evaluate(&state);
+        assert_eq!(
+            rows(&state),
+            first,
+            "an unchanged clock is not written again"
+        );
+    }
+
+    #[test]
+    fn a_clock_before_the_floor_is_unset_whatever_ntp_says() {
+        use birdnet_db::capture_ledger::ClockState;
+        assert_eq!(
+            clock_reading(0, NtpState::Synced, "timedatectl").state,
+            ClockState::Unset
+        );
+        for (ntp, want) in [
+            (NtpState::Synced, ClockState::Synced),
+            (NtpState::Unsynced, ClockState::Unsynced),
+            (NtpState::Unknown, ClockState::Unknown),
+        ] {
+            assert_eq!(clock_reading(PLAUSIBLE_NOW, ntp, "x").state, want);
+        }
     }
 
     /// The debounce copy must not outrun the debounce.

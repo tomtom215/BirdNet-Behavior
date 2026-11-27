@@ -423,12 +423,13 @@ rusqlite.workspace = true
 # the mapping table and plan the clip import with the same code the admin
 # page runs.
 birdnet-migrate.workspace = true
+# The stop queue writes the audio it keeps as WAV (src/daemon/spool.rs).
+hound.workspace = true
 
 [dev-dependencies]
 # `test-util` for `#[tokio::test(start_paused = true)]` (the liveness mirror's
 # tests in src/daemon/mod.rs): a paused clock instead of wall-clock sleeps.
 tokio = { workspace = true, features = ["test-util"] }
-hound.workspace = true
 tempfile.workspace = true
 # The V2.4 range-filter parity test hashes the species list it gets, as
 # tools/parity does for BirdNET-Pi's.

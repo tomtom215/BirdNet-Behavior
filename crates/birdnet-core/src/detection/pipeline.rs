@@ -32,6 +32,11 @@ pub enum PipelineError {
     Spectrogram(spectrogram::SpectrogramError),
     /// Channel communication error.
     Channel(String),
+    /// The configuration asks for something this call cannot give.
+    Config(String),
+    /// The file is not one the detection path decodes (review F11): too long
+    /// for a live segment, or its header cannot be read.
+    Refused(crate::audio::admission::AdmissionError),
 }
 
 impl fmt::Display for PipelineError {
@@ -42,6 +47,8 @@ impl fmt::Display for PipelineError {
             Self::Resample(e) => write!(f, "resample error: {e}"),
             Self::Spectrogram(e) => write!(f, "spectrogram error: {e}"),
             Self::Channel(msg) => write!(f, "channel error: {msg}"),
+            Self::Config(msg) => write!(f, "pipeline configuration: {msg}"),
+            Self::Refused(e) => write!(f, "not analysed: {e}"),
         }
     }
 }
@@ -52,7 +59,8 @@ impl std::error::Error for PipelineError {
             Self::Decode(e) => Some(e),
             Self::Resample(e) => Some(e),
             Self::Spectrogram(e) => Some(e),
-            Self::Watch(_) | Self::Channel(_) => None,
+            Self::Refused(e) => Some(e),
+            Self::Watch(_) | Self::Channel(_) | Self::Config(_) => None,
         }
     }
 }
@@ -144,6 +152,68 @@ pub struct PipelineConfig {
     /// are in [`PreparedChunk::at_rates`]. Empty, the default, is the
     /// single-rate pipeline unchanged.
     pub extra_sample_rates: Vec<u32>,
+    /// Which date the occurrence filter's week is taken from (review F13).
+    /// [`OccurrenceWeek::PerFile`], the default, is BirdNET-Pi's rule.
+    pub occurrence_week: OccurrenceWeek,
+    /// How a multichannel recording's channels are analysed (review F12).
+    /// [`ChannelAnalysis::Mean`], the default, is what the pipeline has
+    /// always done.
+    pub channels: ChannelAnalysis,
+}
+
+/// How a multichannel recording's channels are analysed (review F12).
+///
+/// This is the decoder's half of a choice the capture path already offers per
+/// source (Mono, Left, Right, "Both, averaged"), for a file that reaches the
+/// pipeline with its channels intact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChannelAnalysis {
+    /// The mean of every channel, as one recording: the default, and what
+    /// the pipeline has always done. Antiphase content cancels in it, and the
+    /// decoder warns when it does ([`decode::ChannelProvenance`]).
+    #[default]
+    Mean,
+    /// One channel, counted from `0`, as the recording. A channel the file
+    /// does not have fails the file.
+    Only(u16),
+    /// Every channel analysed on its own, each giving its own chunks tagged
+    /// with its index ([`PreparedChunk::channel`]). Only
+    /// [`process_file_channels`] gives this; a call that returns one set of
+    /// chunks refuses it. Two channels of one recorder are two microphones of
+    /// **one station**, heard through one clock and usually a few centimetres
+    /// apart: never two stations, and never two independent observations.
+    Each,
+}
+
+/// One channel's chunks, or the mix's (review F12).
+#[derive(Debug, Clone)]
+pub struct ChannelChunks {
+    /// The channel these chunks are of, counted from `0`; `None` for the mean
+    /// of every channel (or the one channel of a mono file).
+    pub channel: Option<u16>,
+    /// Its chunks, in time order.
+    pub chunks: Vec<PreparedChunk>,
+}
+
+/// Which date the species-occurrence filter's week is computed from
+/// (review F13).
+///
+/// The geomodel is asked about one of 48 week bins (days 1-7, 8-14, 15-21 and
+/// 22 to the end of each month: [`crate::civil::birdnet_week`]). A recording
+/// that crosses midnight at the end of a bin holds windows from two bins.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OccurrenceWeek {
+    /// One week per file, from the date in the recording's filename, for every
+    /// window: what BirdNET-Pi does, and the default, so a station's
+    /// occurrence verdicts stay comparable with BirdNET-Pi's.
+    #[default]
+    PerFile,
+    /// Each window's week from its own capture date (the recording's start
+    /// shifted by the window's start), and the occurrence filter's verdict
+    /// for that window from that week. For research that needs each window
+    /// judged on the day it was heard; it departs from BirdNET-Pi only for
+    /// windows past a bin boundary inside one recording.
+    PerWindow,
 }
 
 impl Default for PipelineConfig {
@@ -157,6 +227,8 @@ impl Default for PipelineConfig {
             chunk_step_secs: None,
             raw_audio_input: false,
             extra_sample_rates: Vec::new(),
+            occurrence_week: OccurrenceWeek::PerFile,
+            channels: ChannelAnalysis::Mean,
         }
     }
 }
@@ -188,6 +260,10 @@ pub struct PreparedChunk {
     /// with zeros as the primary's copy is. Empty when every classifier shares
     /// the primary's rate.
     pub at_rates: Vec<(u32, Vec<f32>)>,
+    /// The channel this chunk was cut from, counted from `0`, when the
+    /// pipeline analysed channels separately ([`ChannelAnalysis::Only`] and
+    /// [`ChannelAnalysis::Each`]); `None` for the mean of every channel.
+    pub channel: Option<u16>,
 }
 
 impl PreparedChunk {
@@ -362,16 +438,94 @@ pub fn process_file_with_source_rate(
     path: &Path,
     config: &PipelineConfig,
 ) -> Result<(Vec<PreparedChunk>, u32), PipelineError> {
+    if config.channels == ChannelAnalysis::Each {
+        return Err(PipelineError::Config(
+            "each channel analysed on its own gives one set of chunks per channel; \
+             call process_file_channels"
+                .to_owned(),
+        ));
+    }
+    let (mut groups, rate, _) = process_file_channels(path, config)?;
+    Ok((groups.pop().map_or_else(Vec::new, |g| g.chunks), rate))
+}
+
+/// [`process_file_with_source_rate`] under every [`ChannelAnalysis`].
+///
+/// One [`ChannelChunks`] for the mean or the one chosen channel, one per channel
+/// for [`ChannelAnalysis::Each`], and the decoder's account of the file's
+/// channels (review F12).
+///
+/// # Errors
+///
+/// As [`process_file`], and a decode error for a channel the file lacks.
+pub fn process_file_channels(
+    path: &Path,
+    config: &PipelineConfig,
+) -> Result<(Vec<ChannelChunks>, u32, decode::ChannelProvenance), PipelineError> {
     let recording = RecordingFile::parse(&path.to_string_lossy()).ok_or_else(|| {
         PipelineError::Watch(format!(
             "cannot parse recording filename: {}",
             path.display()
         ))
     })?;
+    // Judged from the header before anything is decoded (review F11), and
+    // decoded under the cap that judgement gives: a file past a live
+    // segment's length is refused, and one whose header understates its
+    // length still cannot grow the buffer past it.
+    let cap = crate::audio::admission::admit_for_live_analysis(path)
+        .map_err(PipelineError::Refused)?
+        .sample_cap();
+    let (audios, provenance): (Vec<(Option<u16>, decode::AudioData)>, _) = match config.channels {
+        ChannelAnalysis::Mean => {
+            let (audio, p) =
+                decode::decode_file_with_provenance(path, decode::ChannelMix::Mean, Some(cap))?;
+            (vec![(None, audio)], p)
+        }
+        ChannelAnalysis::Only(c) => {
+            let (audio, p) = decode::decode_file_with_provenance(
+                path,
+                decode::ChannelMix::Channel(c),
+                Some(cap),
+            )?;
+            (vec![(Some(c), audio)], p)
+        }
+        ChannelAnalysis::Each => {
+            let (each, p) = decode::decode_file_each_channel(path, Some(cap))?;
+            (
+                each.into_iter()
+                    .enumerate()
+                    .map(|(i, a)| (Some(u16::try_from(i).unwrap_or(u16::MAX)), a))
+                    .collect(),
+                p,
+            )
+        }
+    };
+    let rate = provenance.sample_rate;
+    let groups = audios
+        .into_iter()
+        .map(|(channel, audio)| {
+            Ok(ChannelChunks {
+                channel,
+                chunks: chunks_of(&recording, &audio, config, channel)?,
+            })
+        })
+        .collect::<Result<_, PipelineError>>()?;
+    Ok((groups, rate, provenance))
+}
 
-    // Decode audio
-    let audio = decode::decode_file(path)?;
-
+/// Cut one decoded stream into prepared chunks.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss,
+    clippy::cast_sign_loss,
+    reason = "sample counts and second offsets of one recording, far inside f32's exact range"
+)]
+fn chunks_of(
+    recording: &RecordingFile,
+    audio: &decode::AudioData,
+    config: &PipelineConfig,
+    channel: Option<u16>,
+) -> Result<Vec<PreparedChunk>, PipelineError> {
     // Resample to target rate
     let samples = resample::resample(&audio.samples, audio.sample_rate, config.target_sample_rate)?;
     // And once more per rate another classifier wants, from the decoded audio
@@ -450,10 +604,11 @@ pub fn process_file_with_source_rate(
             recording: recording.clone(),
             silent,
             at_rates,
+            channel,
         });
     }
 
-    Ok((chunks, audio.sample_rate))
+    Ok(chunks)
 }
 
 /// The span `[pos, pos + len)` of a recording at `from` hertz, cut from the
@@ -938,5 +1093,195 @@ mod chunk_step_tests {
             ..PipelineConfig::default()
         };
         assert!(chunk_step_samples(&config) >= 1);
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod channel_tests {
+    use super::{
+        ChannelAnalysis, PipelineConfig, process_file_channels, process_file_with_source_rate,
+    };
+
+    /// A 6 s, 48 kHz, 16-bit WAV whose channel `c` at frame `i` is
+    /// `gain[c] * noise(i)`, named as the pipeline expects.
+    pub fn write_channels(dir: &std::path::Path, gain: &[i16]) -> std::path::PathBuf {
+        let path = dir.join("2026-05-19-birdnet-09:00:00.wav");
+        let spec = hound::WavSpec {
+            channels: u16::try_from(gain.len()).unwrap(),
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        let mut x: u32 = 1;
+        for _ in 0..48_000 * 6 {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            #[allow(
+                clippy::cast_possible_wrap,
+                reason = "a test noise generator, wrapped on purpose"
+            )]
+            let n = ((x >> 16) as i16) / 8;
+            for &g in gain {
+                w.write_sample(n.saturating_mul(g)).unwrap();
+            }
+        }
+        w.finalize().unwrap();
+        path
+    }
+
+    fn config(channels: ChannelAnalysis) -> PipelineConfig {
+        PipelineConfig {
+            raw_audio_input: true,
+            target_sample_rate: 48_000,
+            chunk_duration_secs: 3.0,
+            channels,
+            ..PipelineConfig::default()
+        }
+    }
+
+    /// A WAV of `secs` seconds of quiet noise at 8 kHz, named as the pipeline
+    /// expects (8 kHz keeps a twelve-minute file near 11 MB).
+    fn write_long(dir: &std::path::Path, secs: u32) -> std::path::PathBuf {
+        let path = dir.join("2026-05-19-birdnet-09:00:00.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 8_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for i in 0..8_000 * secs {
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_possible_wrap,
+                reason = "i % 97 fits an i16"
+            )]
+            w.write_sample(((i % 97) as i16) - 48).unwrap();
+        }
+        w.finalize().unwrap();
+        path
+    }
+
+    /// Review F11: a file longer than a live segment may be is refused before
+    /// it is decoded, and the refusal names the command that takes it; the
+    /// detection path no longer decodes a recording of any length whole.
+    #[test]
+    fn a_recording_longer_than_a_segment_is_refused_and_pointed_at_the_ingest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let secs = u32::try_from(crate::audio::admission::LIVE_MAX_FILE_SECS).unwrap() + 1;
+        let wav = write_long(tmp.path(), secs);
+        let mut cfg = config(ChannelAnalysis::Mean);
+        cfg.target_sample_rate = 8_000;
+        let text = match process_file_channels(&wav, &cfg) {
+            Ok((groups, _, _)) => panic!(
+                "a recording past the live limit was decoded whole: {} chunks",
+                groups[0].chunks.len()
+            ),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            text.contains(crate::audio::admission::INGEST_COMMAND),
+            "the refusal names the ingest command: {text}"
+        );
+    }
+
+    /// The counterpart: a recording exactly at the limit is analysed, every
+    /// sample of it.
+    #[test]
+    fn a_recording_at_the_live_limit_is_analysed_whole() {
+        let tmp = tempfile::tempdir().unwrap();
+        let secs = u32::try_from(crate::audio::admission::LIVE_MAX_FILE_SECS).unwrap();
+        let wav = write_long(tmp.path(), secs);
+        let mut cfg = config(ChannelAnalysis::Mean);
+        cfg.target_sample_rate = 8_000;
+        let (groups, rate, _) = process_file_channels(&wav, &cfg).expect("admitted");
+        assert_eq!(rate, 8_000);
+        let chunks = &groups[0].chunks;
+        let last = chunks.last().expect("chunks");
+        assert!(
+            (last.end_secs - f32::from(u16::try_from(secs).unwrap())).abs() < 0.01,
+            "the last chunk ends at the recording's end: {}",
+            last.end_secs
+        );
+    }
+
+    /// Review F12: antiphase stereo (`R = -L`) averages to exact silence, so
+    /// the default pipeline marks every chunk silent and classifies nothing.
+    /// Analysed channel by channel, each is heard, and each chunk says which
+    /// channel it came from; one channel can also be chosen alone.
+    #[test]
+    fn antiphase_stereo_is_silent_mixed_and_heard_channel_by_channel() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wav = write_channels(tmp.path(), &[1, -1]);
+
+        let (mean, _, provenance) =
+            process_file_channels(&wav, &config(ChannelAnalysis::default())).unwrap();
+        assert_eq!(mean.len(), 1);
+        assert_eq!(mean[0].channel, None);
+        assert!(
+            mean[0]
+                .chunks
+                .iter()
+                .all(|c| c.silent && c.channel.is_none()),
+            "the mean is silence"
+        );
+        assert!(provenance.cancellation_suspected(), "{provenance:?}");
+
+        let (each, _, _) = process_file_channels(&wav, &config(ChannelAnalysis::Each)).unwrap();
+        let channels: Vec<Option<u16>> = each.iter().map(|g| g.channel).collect();
+        assert_eq!(channels, [Some(0), Some(1)]);
+        for g in &each {
+            assert_eq!(g.chunks.len(), 2);
+            assert!(
+                g.chunks.iter().all(|c| !c.silent && c.channel == g.channel),
+                "channel {:?}",
+                g.channel
+            );
+        }
+        // The two channels are the same audio inverted.
+        let (l, r) = (
+            &each[0].chunks[0].spectrogram.data,
+            &each[1].chunks[0].spectrogram.data,
+        );
+        assert!(l.iter().zip(r).all(|(a, b)| (a + b).abs() < 1e-6));
+
+        let (right, _, _) = process_file_channels(&wav, &config(ChannelAnalysis::Only(1))).unwrap();
+        assert_eq!(right.len(), 1);
+        assert_eq!(right[0].channel, Some(1));
+        assert_eq!(right[0].chunks[0].spectrogram.data, *r);
+        assert!(
+            process_file_channels(&wav, &config(ChannelAnalysis::Only(2))).is_err(),
+            "no third channel"
+        );
+    }
+
+    /// A live channel beside a silent one: the mean is heard (half the level),
+    /// the live channel is heard, the silent one is digital silence and is
+    /// marked so. Counterpart: the default is chunk for chunk what
+    /// `process_file_with_source_rate` gives, and that refuses `Each`.
+    #[test]
+    fn one_silent_channel_is_marked_silent_and_the_default_is_unchanged() {
+        let tmp = tempfile::tempdir().unwrap();
+        let wav = write_channels(tmp.path(), &[1, 0]);
+        let (each, _, provenance) =
+            process_file_channels(&wav, &config(ChannelAnalysis::Each)).unwrap();
+        assert_eq!(each.len(), 2, "one set of chunks per channel");
+        assert!(each[0].chunks.iter().all(|c| !c.silent));
+        assert!(each[1].chunks.iter().all(|c| c.silent));
+        assert!(
+            !provenance.cancellation_suspected(),
+            "a silent channel is not cancellation"
+        );
+
+        let (mean, rate) =
+            process_file_with_source_rate(&wav, &config(ChannelAnalysis::Mean)).unwrap();
+        assert_eq!(rate, 48_000);
+        let (groups, _, _) = process_file_channels(&wav, &config(ChannelAnalysis::Mean)).unwrap();
+        assert_eq!(groups[0].chunks.len(), mean.len());
+        for (a, b) in groups[0].chunks.iter().zip(&mean) {
+            assert_eq!(a.spectrogram.data, b.spectrogram.data);
+            assert!(!a.silent);
+        }
+        assert!(process_file_with_source_rate(&wav, &config(ChannelAnalysis::Each)).is_err());
     }
 }

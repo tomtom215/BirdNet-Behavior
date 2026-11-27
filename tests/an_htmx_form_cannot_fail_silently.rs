@@ -751,6 +751,13 @@ const FORMS: &[Form] = &[
         Typed::Optional("sample_rate"),
     ),
     f(
+        "admin/audio.rs::live_access",
+        "POST",
+        "/admin/audio/live-access",
+        &["live_audio"],
+        Typed::None,
+    ),
+    f(
         "admin/settings/handler.rs::save_settings",
         "POST",
         "/admin/settings",

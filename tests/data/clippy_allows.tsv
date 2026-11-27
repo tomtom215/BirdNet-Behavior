@@ -2,8 +2,6 @@
 # Read by tests/every_clippy_allow_says_why.rs. Each number is the number in the tree and
 # only ever goes down: give an allow a reason, or split a function, and lower its line.
 too_many_lines	26
-crates/birdnet-behavioral/src/connection/analytics.rs	1
-crates/birdnet-behavioral/src/connection/live.rs	1
 crates/birdnet-core/benches/audio_pipeline.rs	3
 crates/birdnet-core/src/audio/biquad.rs	1
 crates/birdnet-core/src/audio/capture/disk/manager.rs	1
@@ -53,7 +51,7 @@ crates/birdnet-db/src/audio_sources.rs	2
 crates/birdnet-db/src/sound_levels.rs	3
 crates/birdnet-db/src/species_tracking.rs	1
 crates/birdnet-db/src/sqlite/queries/charts.rs	2
-crates/birdnet-db/src/sqlite/queries/correlation.rs	2
+crates/birdnet-db/src/sqlite/queries/correlation.rs	1
 crates/birdnet-db/src/sqlite/queries/detections/read.rs	1
 crates/birdnet-db/src/thresholds.rs	1
 crates/birdnet-db/src/weather.rs	2
@@ -108,7 +106,7 @@ crates/birdnet-web/src/routes/api_write.rs	2
 crates/birdnet-web/src/routes/auth_pages.rs	1
 crates/birdnet-web/src/routes/charts.rs	1
 crates/birdnet-web/src/routes/feeds.rs	2
-crates/birdnet-web/src/routes/pages/atoms.rs	4
+crates/birdnet-web/src/routes/pages/atoms.rs	3
 crates/birdnet-web/src/routes/pages/behavioral.rs	1
 crates/birdnet-web/src/routes/pages/behavioral_answers.rs	1
 crates/birdnet-web/src/routes/pages/changelog.rs	2

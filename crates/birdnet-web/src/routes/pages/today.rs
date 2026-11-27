@@ -1205,7 +1205,7 @@ fn empty_day_message(search: Option<&str>, filter: TodayFilter) -> String {
         TodayFilter::All => None,
         TodayFilter::FirstToday => Some("new species"),
         TodayFilter::Rare => Some("rare birds"),
-        TodayFilter::HighConfidence => Some("very sure detections"),
+        TodayFilter::HighConfidence => Some("high-score detections"),
     };
     match (search, narrowed) {
         (None, None) => r#"<p class="tdl-empty">No detections yet today.</p>"#.to_owned(),

@@ -95,7 +95,13 @@ async fn recordings_page(
     let nav = subtabs("/recordings", "view", VIEWS, tab.key);
 
     let body = if tab.key == "live" {
-        live_view(&state, params.source.as_deref()).await
+        let listen_headers = headers.clone();
+        let may_listen = state
+            .run_blocking(move |state| {
+                crate::live_audio::may_listen_with_headers(state, &listen_headers)
+            })
+            .await;
+        live_view(&state, params.source.as_deref(), may_listen).await
     } else {
         clips_view(&state, params.filter.as_deref(), params.q.as_deref()).await
     };
@@ -567,7 +573,7 @@ pub(super) fn base_name(file: &str) -> String {
 
 /// The folded `/listen` surface, reskinned to the `rc-live` treatment: the
 /// honest streaming sonogram, a source picker, and the live-detection trickle.
-async fn live_view(state: &AppState, source: Option<&str>) -> String {
+async fn live_view(state: &AppState, source: Option<&str>, may_listen: bool) -> String {
     let state_q = state.clone();
     // A source list that could not be read is not a station with no microphone:
     // the picker would say "no source yet" to an operator whose microphone is
@@ -585,6 +591,17 @@ async fn live_view(state: &AppState, source: Option<&str>) -> String {
         }
     };
     let trickle_skel = super::skeletons::feed_rows(6);
+    // OOB-13: a visitor the station will not play the live audio to is told
+    // so, and how to listen, instead of a button whose stream answers 401.
+    let listen = if may_listen {
+        r#"<button type="button" id="rc-listen-btn" class="bnb-btn rc-listen-btn"><span id="rc-listen-glyph" aria-hidden="true">▶</span> <span id="rc-listen-label">Listen (audio)</span></button>"#.to_owned()
+    } else {
+        format!(
+            r#"<a class="bnb-btn rc-listen-btn" href="/login?next=%2Frecordings%3Fview%3Dlive">Sign in to listen</a>
+    <span class="bnb-meta" id="rc-listen-why">{}</span>"#,
+            crate::live_audio::SIGN_IN_TO_LISTEN
+        )
+    };
 
     format!(
         r#"<p class="bnb-lede"><b>Listen along with your station, live.</b> Pick a source and watch the spectrogram scroll as audio arrives — detections appear in the trickle below the moment they're classified. The signal is honest: a flat line when nothing is coming in, never a fake waveform.</p>
@@ -611,7 +628,7 @@ async fn live_view(state: &AppState, source: Option<&str>) -> String {
         <option value="2000">up 2 kHz</option>
       </select>
     </span>
-    <button type="button" id="rc-listen-btn" class="bnb-btn rc-listen-btn"><span id="rc-listen-glyph" aria-hidden="true">▶</span> <span id="rc-listen-label">Listen (audio)</span></button>
+    {listen}
     <audio id="rc-audio" preload="none" class="rc-audio-hidden"></audio>
   </div>
 </div>
@@ -774,7 +791,7 @@ mod tests {
     async fn the_live_panel_offers_a_pitch_control_that_shifts_downward() {
         let dir = tempfile::tempdir().expect("tempdir");
         let state = AppState::new(dir.path().join("birds.db")).expect("state");
-        let html = live_view(&state, None).await;
+        let html = live_view(&state, None, true).await;
 
         assert!(
             html.contains(r#"id="rc-freq-shift""#),

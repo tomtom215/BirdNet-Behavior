@@ -66,8 +66,9 @@ and total.
 
 **4 · The heartbeat.** One unified log. The **live feed** streams new
 detections as they arrive — each row a time, a species avatar (its four-letter
-banding code in the species' own colour), the names, a mini call-waveform, the
-confidence, and a play button; a freshly arrived detection rises in with a
+banding code in the species' own colour), the names, the
+confidence, and a play button (the row draws no waveform: the station keeps none for a
+detection, so any shape there would be made up); a freshly arrived detection rises in with a
 brief moss pulse. The **full day** sits behind one "Show the full day"
 disclosure, where you can search (prefix `NOT` to exclude), filter by **Rare /
 First today / High confidence**, and **lock**, **re-label** or **delete** any

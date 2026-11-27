@@ -79,12 +79,21 @@ fn credit_analysed(
     tx.commit()
 }
 
-/// Credit `seconds` of being up to `source`, in the current local hour.
+/// Credit `seconds` of being up to `source`, in the current local hour, and
+/// in the current UTC hour split by what the system said of its clock
+/// (`clock_synced`, as the station-health poll last read it; `None` is
+/// unknown, never assumed synchronised).
 fn credit_up(
     conn: &rusqlite::Connection,
     source: &str,
     seconds: f64,
+    clock_synced: Option<bool>,
 ) -> Result<(), rusqlite::Error> {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+    birdnet_db::capture_ledger::credit_up_utc(conn, now, source, seconds, clock_synced)
+        .map_err(db_to_sqlite)?;
     conn.execute(
         "INSERT INTO recording_effort_hourly (date, hour, source, seconds_up)
          VALUES (date('now','localtime'), CAST(strftime('%H','now','localtime') AS INTEGER), ?1, ?2)
@@ -111,6 +120,98 @@ pub fn note_analysed(state: &AppState, path: &std::path::Path, seconds: f64) {
     state
         .metrics()
         .add_effort_pending(&recording.date, hour, &source, seconds);
+    if let Some(at) = recording_instant(&recording.date, &recording.time, now_unix()) {
+        state.metrics().add_effort_pending_utc(
+            birdnet_db::capture_ledger::hour_start(at),
+            &source,
+            seconds,
+        );
+    }
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+fn db_to_sqlite(e: birdnet_db::sqlite::DbError) -> rusqlite::Error {
+    match e {
+        birdnet_db::sqlite::DbError::Sqlite(e) => e,
+        other => rusqlite::Error::ToSqlConversionFailure(Box::new(other)),
+    }
+}
+
+/// The instant a recording's local `date` and `time` name, for the UTC ledger.
+///
+/// The rule the daemon stamps `detected_at_utc` by
+/// (`daemon::local_offset::detection_instant`, private to the daemon): the
+/// zone rules' offset for the recording's own date, unless that puts it more
+/// than five minutes in the future, which only the repeated autumn hour does
+/// for a recording just made, and then the offset in force now. `None` when
+/// the name does not give a civil time.
+fn recording_instant(date: &str, time: &str, now: i64) -> Option<i64> {
+    let live = birdnet_core::civil::unix_secs_from_local(
+        date,
+        time,
+        birdnet_db::clock::local_utc_offset_secs(),
+    )?;
+    let Some(offset) = utc_offset_at(date, time) else {
+        return Some(live);
+    };
+    let dated = birdnet_core::civil::unix_secs_from_local(date, time, offset)?;
+    Some(if dated > now.saturating_add(300) {
+        live
+    } else {
+        dated
+    })
+}
+
+/// The zone rules' UTC offset at local `date` `time`, asked of `SQLite` as the
+/// rest of the station asks it.
+fn utc_offset_at(date: &str, time: &str) -> Option<i64> {
+    let c = birdnet_core::civil::parse_civil(date, time)?;
+    let stamp = format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+        c.year, c.month, c.day, c.hour, c.minute, c.second
+    );
+    let conn = rusqlite::Connection::open_in_memory().ok()?;
+    conn.query_row(
+        "SELECT CAST(strftime('%s', ?1) AS INTEGER) - CAST(strftime('%s', ?1, 'utc') AS INTEGER)",
+        [&stamp],
+        |row| row.get::<_, Option<i64>>(0),
+    )
+    .ok()
+    .flatten()
+    .filter(|o| (-14 * 3600..=14 * 3600).contains(o))
+}
+
+/// Write the UTC ledger's held analysed audio; give back what could not be.
+fn flush_analysed_utc(state: &AppState) -> bool {
+    let credits = state.metrics().take_effort_pending_utc();
+    if credits.is_empty() {
+        return false;
+    }
+    let written = state.with_db(|conn| {
+        let tx = conn.unchecked_transaction()?;
+        for ((hour, source), seconds) in &credits {
+            birdnet_db::capture_ledger::credit_analysed_utc(&tx, *hour, source, *seconds)
+                .map_err(db_to_sqlite)?;
+        }
+        tx.commit()
+    });
+    match written {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "UTC effort could not be written; holding it for the next tick");
+            for ((hour, source), seconds) in credits {
+                state
+                    .metrics()
+                    .add_effort_pending_utc(hour, &source, seconds);
+            }
+            false
+        }
+    }
 }
 
 /// Write the held analysed audio. Credits that could not be written are held
@@ -155,7 +256,8 @@ fn sample_once(state: &AppState, seconds: f64) -> usize {
         // this source yet — at startup, or in web-only mode.
         if state.metrics().source_up(&source.id) == Some(true) {
             let id = source.id.clone();
-            if let Err(e) = state.with_db(|conn| credit_up(conn, &id, seconds)) {
+            let clock = state.metrics().clock_synced();
+            if let Err(e) = state.with_db(|conn| credit_up(conn, &id, seconds, clock)) {
                 tracing::debug!(error = %e, source = %id, "uptime sample failed");
             } else {
                 credited += 1;
@@ -183,6 +285,7 @@ const fn mirror_to_analytics(_state: &AppState) {}
 /// One tick of the recorder: what happens every [`POLL_EVERY`].
 pub fn tick(state: &AppState, seconds: f64) {
     sample_once(state, seconds);
+    flush_analysed_utc(state);
     if flush_analysed(state) {
         mirror_to_analytics(state);
     }
@@ -278,12 +381,59 @@ mod tests {
         assert_seconds(seconds_for(&c, "cam2"), 900.0);
     }
 
+    /// RES-12 / RES-13: the same uptime sample is credited to the UTC hour,
+    /// under the clock state the station last read, and an unknown state is
+    /// not counted as synchronised.
+    #[test]
+    fn uptime_is_credited_by_utc_hour_under_the_clock_state() {
+        let c = conn();
+        credit_up(&c, "mic", 300.0, Some(false)).unwrap();
+        credit_up(&c, "mic", 300.0, None).unwrap();
+        let (up, synced, unsynced): (f64, f64, f64) = c
+            .query_row(
+                "SELECT COALESCE(SUM(seconds_up), 0), COALESCE(SUM(seconds_up_clock_synced), 0), COALESCE(SUM(seconds_up_clock_unsynced), 0)
+                   FROM recording_effort_utc WHERE source = 'mic'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_seconds(up, 600.0);
+        assert_seconds(synced, 0.0);
+        assert_seconds(unsynced, 300.0);
+    }
+
+    /// The analysed audio reaches the UTC ledger too, under the hour its
+    /// recording began.
+    #[test]
+    fn analysed_audio_is_held_and_written_by_utc_hour() {
+        let c = conn();
+        let state = AppState::from_connection(c, std::path::PathBuf::from(":memory:"));
+        note_analysed(
+            &state,
+            std::path::Path::new("/tmp/2026-05-19-birdnet-09:14:00.wav"),
+            15.0,
+        );
+        assert!(flush_analysed_utc(&state), "something was held");
+        let at = recording_instant("2026-05-19", "09:14:00", now_unix()).unwrap();
+        let stored: (i64, f64) = state
+            .with_db(|c| {
+                c.query_row(
+                    "SELECT hour_start_utc, seconds_analysed FROM recording_effort_utc",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(stored.0, birdnet_db::capture_ledger::hour_start(at));
+        assert_seconds(stored.1, 15.0);
+    }
+
     /// The uptime sample is stamped with the *local* date and hour, as the
     /// detections it sits beside are (see `birdnet_db::clock`).
     #[test]
     fn uptime_is_stamped_with_the_local_date_and_hour() {
         let c = conn();
-        credit_up(&c, "local", 300.0).unwrap();
+        credit_up(&c, "local", 300.0, None).unwrap();
         let (stored, local, hour, local_hour): (String, String, i64, i64) = c
             .query_row(
                 "SELECT date, date('now','localtime'), hour,

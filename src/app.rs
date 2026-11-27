@@ -491,6 +491,10 @@ fn build_state(
             .map_err(|e| format!("database error: {e}"))?
     };
 
+    // Commit durability, from DB_SYNCHRONOUS, on the one connection that
+    // writes detections (review F17).
+    helpers::apply_db_durability(&state, config);
+
     // Thread the active config path so the in-UI diagnostics page can re-read
     // and validate it, and the broadcaster the `tracing` layer installed in
     // `main` is already writing to — without this the state holds the empty
@@ -570,6 +574,11 @@ async fn settle_settings(
     // Insert-only, so it never overwrites a setting the operator later changed
     // in the UI.
     helpers::seed_db_settings_from_config(config.as_ref(), cli, &state, &secret_files.resolved());
+    // OOB-13: who may hear the live microphone, written once — `anyone` for a
+    // station that already holds detections, `signed-in` for a new one.
+    state
+        .run_blocking(birdnet_web::live_audio::seed_at_start)
+        .await;
 
     // Overlay the admin-UI settings (SQLite `settings` table) on top of the
     // file config so settings saved in the web UI actually take effect. Without

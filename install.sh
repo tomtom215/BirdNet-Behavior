@@ -25,6 +25,7 @@
 #   sudo bash install.sh repair       # fix dirs/permissions + rewrite the unit
 #   sudo bash install.sh reinstall    # re-download and rewrite everything
 #   sudo bash install.sh uninstall    # remove the software, keep data
+#   sudo bash install.sh reset-password  # a new admin password, printed; data kept
 #
 # Do NOT use `sudo bash <(curl ...)`: process substitution hands bash a file
 # descriptor owned by your user, and sudo closes it crossing to root, so the
@@ -927,6 +928,80 @@ detect_existing_install() {
     fi
 }
 
+# BirdNET-Pi on this machine (OOB-03).
+#
+# BirdNET-Pi makes /etc/birdnet/birdnet.conf a link to ~/BirdNET-Pi/birdnet.conf
+# — this installer's CONFIG_FILE. Taken as "a kept config", that file decided
+# the classifier, skipped every station question and the admin password, and
+# write_config then ran chmod (which follows a link), `sed -i` (which replaces
+# the link with a copy) and `>>` (which appends to the target) on it: BirdNET-Pi's
+# own settings file was changed by an install that never meant to touch it. And
+# with BirdNET-Pi's recorder still enabled, both stations open one microphone.
+#
+# So the installer stops, before anything is downloaded or written, when
+#   * the config file is a link (it is never written through one), or
+#   * a BirdNET-Pi recorder or analyser is enabled to start at boot,
+# and says what to do instead. Unit files left behind by a BirdNET-Pi whose
+# services are disabled are only mentioned: the owner has already stopped it.
+# Uninstall is never refused.
+BIRDNET_PI_UNITS="birdnet_recording.service birdnet_analysis.service"
+# Where enabled units' links live. One variable so the tests can point it at a
+# sandbox.
+SYSTEMD_UNIT_DIRS="${SYSTEMD_UNIT_DIRS:-/etc/systemd/system /usr/lib/systemd/system /lib/systemd/system}"
+
+# Prints one line per piece of evidence; status 0 when there is something that
+# must stop the install, 1 when there is nothing (a leftover unit file is
+# printed with a "leftover:" prefix and does not, alone, stop it).
+birdnet_pi_evidence() {
+    local stop=1 unit dir target
+    if [ -L "${CONFIG_FILE}" ]; then
+        target="$(readlink -f "${CONFIG_FILE}" 2>/dev/null || readlink "${CONFIG_FILE}" 2>/dev/null || true)"
+        echo "${CONFIG_FILE} is a link to ${target:-a missing file}"
+        stop=0
+    fi
+    for unit in ${BIRDNET_PI_UNITS}; do
+        for dir in ${SYSTEMD_UNIT_DIRS}; do
+            if [ -e "${dir}/multi-user.target.wants/${unit}" ] || [ -L "${dir}/multi-user.target.wants/${unit}" ]; then
+                echo "BirdNET-Pi's ${unit} is enabled (${dir}/multi-user.target.wants/${unit})"
+                stop=0
+            elif [ -e "${dir}/${unit}" ]; then
+                echo "leftover: ${dir}/${unit} (not enabled)"
+            fi
+        done
+    done
+    return "${stop}"
+}
+
+refuse_birdnet_pi_host() {
+    [ "${SUBCOMMAND:-}" = "uninstall" ] && return 0
+    local evidence line
+    if evidence="$(birdnet_pi_evidence)"; then
+        error "This machine has BirdNET-Pi on it, and installing over it would change BirdNET-Pi's files."
+        while IFS= read -r line; do
+            [ -n "${line}" ] && error "  - ${line#leftover: }"
+        done <<<"${evidence}"
+        error "Nothing has been downloaded or changed. To install BirdNet-Behavior here:"
+        error "  1. Stop BirdNET-Pi and keep it from starting at boot:"
+        error "       sudo systemctl disable --now ${BIRDNET_PI_UNITS}"
+        if [ -L "${CONFIG_FILE}" ]; then
+            error "  2. Move the link out of the way (BirdNET-Pi's own file stays where it is):"
+            error "       sudo mv ${CONFIG_FILE} ${CONFIG_FILE}.birdnet-pi"
+            error "  3. Run this installer again. To bring your BirdNET-Pi settings, history and"
+        else
+            error "  2. Run this installer again. To bring your BirdNET-Pi settings, history and"
+        fi
+        error "     recordings across afterwards, use Settings -> Data -> Import in the browser,"
+        error "     which only reads BirdNET-Pi's files (docs: Migrating from BirdNET-Pi)."
+        exit 1
+    fi
+    while IFS= read -r line; do
+        case "${line}" in
+            leftover:*) warn "BirdNET-Pi was installed here and is disabled: ${line#leftover: }." ;;
+        esac
+    done <<<"${evidence}"
+    return 0
+}
+
 # One-line human summary of the detected install (for the menu / messages).
 describe_existing_install() {
     local parts=()
@@ -1434,11 +1509,21 @@ download_classifier() {
         install -d -m 0750 -o "${SERVICE_USER}" -g "${SERVICE_USER}" "${MODEL_DIR}"
         local filter_files="${V24_RANGE_FILE}"
         [ "${FILTER_ID}" = "${V3_GEOMODEL_ID}" ] && filter_files="${GEOMODEL_FILE} and ${GEOMODEL_LABELS_FILE}"
-        loud_warn "BIRDNET_SKIP_MODEL=1 — the ML model was NOT installed." \
-                  "The service will start but will detect NOTHING until you stage it:" \
+        # MDL-27: the station looks after the files its configuration names, so
+        # it fetches these itself when it starts, and once an hour while they
+        # are missing. Saying "detects nothing until you stage it" was untrue;
+        # the opt-out is the station's offline mode, which turns off every
+        # connection it makes on its own, not just this one.
+        loud_warn "BIRDNET_SKIP_MODEL=1 — the installer did NOT install the ML model." \
+                  "The station fetches it itself when it starts, and once an hour while it is" \
+                  "  missing (sha256 and size checked, as here). To stage the files yourself:" \
                   "  put ${MODEL_FILE} and ${LABELS_FILE} (and ${filter_files} to filter by location)" \
                   "  in ${MODEL_DIR}, then restart the service. They are what" \
-                  "  ${BINARY_NAME} --install-model ${CLASSIFIER} and ${FILTER_ID} write."
+                  "  ${BINARY_NAME} --install-model ${CLASSIFIER} and ${FILTER_ID} write." \
+                  "To stop the station fetching anything on its own (models included), run it" \
+                  "  offline: sudo systemctl edit ${SERVICE_NAME}, add [Service] and" \
+                  "  Environment=BIRDNET_OFFLINE=1, then restart. BIRDNET_MODEL_MIRROR names a" \
+                  "  mirror on your own network that an offline station still uses."
         return
     fi
 
@@ -1726,6 +1811,13 @@ enable_range_filter_in_kept_config() {
 }
 
 write_config() {
+    # Never through a link: chmod follows one, `sed -i` replaces it with a copy
+    # and `>>` appends to the file behind it, which on BirdNET-Pi is BirdNET-Pi's
+    # own settings (OOB-03). main refuses such a host first; this is the
+    # backstop for any path that reaches here without it.
+    if [ -L "${CONFIG_FILE}" ]; then
+        fatal "${CONFIG_FILE} is a link (to $(readlink "${CONFIG_FILE}" 2>/dev/null || echo '?')); the installer does not write through links. Move it aside and run the installer again."
+    fi
     if [ -f "${CONFIG_FILE}" ]; then
         warn "Config file already exists at ${CONFIG_FILE} — skipping."
         move_config_off_legacy_names
@@ -2037,6 +2129,10 @@ User=${SERVICE_USER}
 # from the release tarball to ${HELP_DIR}; harmless if absent on older releases —
 # the ServeDir simply returns 404 for /help, exactly as before.
 Environment=BNB_HELP_DIR=${HELP_DIR}
+# The journal is not a terminal: without this the log layer writes ANSI colour
+# codes into every line journalctl shows and a support bundle carries (MDL-28).
+# Environment= applies to the ExecStartPre doctor as well.
+Environment=NO_COLOR=1
 
 # Recreate the ephemeral stream/watch dir before anything else runs. With
 # PrivateTmp=yes (below) the service gets a FRESH, EMPTY /tmp on every start,
@@ -3031,6 +3127,49 @@ do_repair() {
 # Remove the software cleanly. Data/config are kept unless the operator opts in
 # (interactively, or via BIRDNET_PURGE=1). Idempotent: safe to re-run when
 # nothing — or only part — is installed.
+# A new admin password for a station whose password is lost (OOB-07, N25-14).
+#
+# `sudo grep '^CADDY_PWD'` used to be the only way back, and it answers with
+# the password the installer wrote: once the password has been changed on the
+# Accounts page the file still holds the old one, and the station ignores it.
+# A NEW value in CADDY_PWD is what the station applies at its next start
+# (helpers::auth::bootstrap_admin_password: a CADDY_PWD that is not the one it
+# last applied replaces the stored password and signs every session out), so
+# this writes a new random one, restarts, and prints it. Nothing else in the
+# file changes; no detection, recording or setting is touched.
+do_reset_password() {
+    [ -f "${CONFIG_FILE}" ] || fatal "No configuration at ${CONFIG_FILE}: there is no installed station here to reset."
+    [ -L "${CONFIG_FILE}" ] && fatal "${CONFIG_FILE} is a link; the installer does not write through links."
+    local pwd tmp
+    pwd="$(gen_password)"
+    tmp="$(mktemp "${CONFIG_FILE}.reset.XXXXXX")"
+    # Replace every active CADDY_PWD line with the new one (the last would win
+    # anyway), or add one; a commented-out example line is left as it is.
+    awk -v line="CADDY_PWD=${pwd}" '
+        /^[[:space:]]*CADDY_PWD[[:space:]]*=/ { if (!done) print line; done = 1; next }
+        { print }
+        END { if (!done) { print ""; print "# Set by install.sh reset-password."; print line } }
+    ' "${CONFIG_FILE}" >"${tmp}"
+    chmod --reference="${CONFIG_FILE}" "${tmp}" 2>/dev/null || chmod 0640 "${tmp}"
+    chown --reference="${CONFIG_FILE}" "${tmp}" 2>/dev/null || true
+    mv -f "${tmp}" "${CONFIG_FILE}"
+    if grep -qE '^[[:space:]]*CADDY_USER[[:space:]]*=' "${CONFIG_FILE}" \
+        && ! grep -qE '^[[:space:]]*CADDY_USER[[:space:]]*=[[:space:]]*admin[[:space:]]*$' "${CONFIG_FILE}"; then
+        warn "CADDY_USER in ${CONFIG_FILE} is not 'admin'; the account this resets is 'admin'."
+    fi
+    if has_systemd && systemctl restart "${SERVICE_NAME}" 2>/dev/null; then
+        success "Restarted ${SERVICE_NAME}: the new password is in force, and every browser was signed out."
+    else
+        warn "Could not restart ${SERVICE_NAME}; the new password takes effect when the station next starts:"
+        warn "  sudo systemctl restart birdnet-behavior"
+    fi
+    echo
+    echo -e "  ${BOLD}Admin panel login${RESET}"
+    echo -e "      username:  ${BOLD}admin${RESET}"
+    echo -e "      password:  ${BOLD}${pwd}${RESET}"
+    echo    "      Write it down now. You can change it on the Accounts page once signed in."
+}
+
 do_uninstall() {
     info "Removing BirdNet-Behavior…"
 
@@ -3230,6 +3369,8 @@ print_admin_login() {
         echo -e "      username:  ${BOLD}admin${RESET}"
         echo    "      password:  already set on this station. To see it:"
         echo -e "        ${BOLD}sudo grep '^CADDY_PWD' ${CONFIG_FILE}${RESET}"
+        echo    "      If it was changed in the browser since, that file holds the old one;"
+        echo    "      give the station a new password with:  sudo bash install.sh reset-password"
         echo    "      Signing in is required for the admin panel — earlier versions"
         echo    "      served it without a password. Viewing the dashboard is unchanged."
         return 0
@@ -3810,6 +3951,10 @@ Commands (auto-offered as a menu when an existing install is detected):
   reinstall      Re-download the binary and rewrite the unit/config
                  (your data and the model are preserved).
   uninstall      Remove the software (binary, service, tmpfs unit); keep data.
+  reset-password Give the admin account a new random password, print it, and
+                 restart the station. For a lost password, including one
+                 changed in the browser since install. Keeps every detection,
+                 setting and recording; signs every browser out.
 
 Options:
   -v, --version X.Y.Z   Install a specific release (default: latest stable).
@@ -3880,7 +4025,7 @@ parse_args() {
                 usage
                 exit 0
                 ;;
-            install | update | repair | reinstall | uninstall)
+            install | update | repair | reinstall | uninstall | reset-password)
                 [ -z "${SUBCOMMAND}" ] || fatal "Specify only one command (got '${SUBCOMMAND}' and '$1')."
                 SUBCOMMAND="$1"
                 shift
@@ -3933,6 +4078,11 @@ main() {
     # root check, download, or filesystem change, so a Mac user never gets a
     # half-finished Linux install.
     if [ "$(uname -s)" = "Darwin" ]; then
+        if [ "${SUBCOMMAND}" = "reset-password" ]; then
+            warn "On macOS, set a new password on the Accounts page, or put a new CADDY_PWD= line in"
+            warn "${MAC_DATA_DIR}/birdnet.conf and restart the agent."
+            exit 1
+        fi
         if [ "${SUBCOMMAND}" = "uninstall" ]; then
             warn "On macOS, uninstall with:  ./uninstall.sh   (it handles the launchd LaunchAgent)."
             exit 0
@@ -3965,11 +4115,16 @@ main() {
         fi
     fi
 
+    # Before anything is downloaded or written: never install over BirdNET-Pi's
+    # files (OOB-03). Uninstall passes.
+    refuse_birdnet_pi_host
+
     MODE="${SUBCOMMAND}"
     case "${SUBCOMMAND}" in
         install | update | reinstall) do_install ;;
         repair)                       do_repair ;;
         uninstall)                    do_uninstall ;;
+        reset-password)               do_reset_password ;;
         *)                            fatal "Unknown command: ${SUBCOMMAND}" ;;
     esac
 }

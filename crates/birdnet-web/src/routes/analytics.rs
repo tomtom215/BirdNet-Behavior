@@ -51,6 +51,12 @@ struct PhenologyQuery {
     limit: Option<u32>,
     /// Minimum detections per bucket before it is reported.
     min_detections: Option<u32>,
+    /// `?source=`: one capture source's detections and listening only.
+    #[serde(default, deserialize_with = "super::form::blank_is_none")]
+    source: Option<String>,
+    /// `?min_confidence=`: only detections scoring at least this (0 to 1).
+    #[serde(default, deserialize_with = "super::form::blank_is_none")]
+    min_confidence: Option<f64>,
 }
 
 // -- Query parameter types --
@@ -73,6 +79,12 @@ struct SessionsQuery {
 #[allow(dead_code)]
 struct RetentionQuery {
     min_detections: Option<u32>,
+    /// `?source=`: one capture source only.
+    #[serde(default, deserialize_with = "super::form::blank_is_none")]
+    source: Option<String>,
+    /// `?min_confidence=`: only detections scoring at least this (0 to 1).
+    #[serde(default, deserialize_with = "super::form::blank_is_none")]
+    min_confidence: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -199,6 +211,42 @@ const fn source_scope(source: Option<String>) -> birdnet_behavioral::types::Sour
     }
 }
 
+/// The rows a phenology, abundance or retention query reads, from `?source=`
+/// and `?min_confidence=` (UIC-11); `Err` for a confidence outside `[0, 1]`.
+#[cfg(feature = "analytics")]
+fn row_scope(
+    source: Option<String>,
+    min_confidence: Option<f64>,
+) -> Result<birdnet_behavioral::scope::RowScope, (StatusCode, Json<Value>)> {
+    if min_confidence.is_some_and(|c| !(c.is_finite() && (0.0..=1.0).contains(&c))) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "error": "min_confidence is a score from 0 to 1" })),
+        ));
+    }
+    Ok(birdnet_behavioral::scope::RowScope {
+        source,
+        min_confidence,
+    })
+}
+
+/// What a row-counting response says about itself (MSC-02): these routes count
+/// detection rows over the analytics copy, so N sources hearing one call are N
+/// rows, and with no `?source=` every source is pooled. The event-counting,
+/// per-site rate is `/api/v2/analytics/rates`.
+#[cfg(feature = "analytics")]
+fn row_counting(scope: &birdnet_behavioral::scope::RowScope) -> Value {
+    json!({
+        "counting": "rows",
+        "scope": scope,
+        "pooled_sources": scope.source.is_none(),
+        "note": "Detection rows, not events: N sources hearing one call are N rows, and without \
+    source= every source is pooled into one record. For events per hour of a site's listening, per site, \
+    use /api/v2/analytics/rates. Exploratory: a detection is not a bird.",
+        "event_rates": "/api/v2/analytics/rates",
+    })
+}
+
 // -- Handler implementations --
 
 #[cfg(feature = "analytics")]
@@ -286,10 +334,15 @@ async fn retention(
         min_detections: query.min_detections.unwrap_or(5),
         ..birdnet_behavioral::types::RetentionParams::default()
     };
+    let scope = match row_scope(query.source, query.min_confidence) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let meta = row_counting(&scope);
 
     let result = tokio::task::spawn_blocking(move || {
         state
-            .with_analytics_read(|adb| adb.retention(&params))
+            .with_analytics_read(|adb| adb.retention_scoped(&params, &scope))
             .unwrap_or_else(|| {
                 Err(
                     birdnet_behavioral::connection::AnalyticsError::ExtensionLoad(
@@ -308,6 +361,7 @@ async fn retention(
                 Json(json!({
                     "retention": retention_data,
                     "total": total,
+                    "rows": meta,
                 })),
             )
         }
@@ -1020,8 +1074,25 @@ async fn abundance(
         species: q.species,
         min_weekly_count: q.min_detections.unwrap_or(1),
     };
-    let sql = birdnet_behavioral::phenology::effort_corrected_abundance_sql(&params);
-    run_phenology_query(&state, &sql, "abundance").await
+    let scope = match row_scope(q.source, q.min_confidence) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let sql = scope.apply(&birdnet_behavioral::phenology::effort_corrected_abundance_sql(&params));
+    with_meta(
+        run_phenology_query(&state, &sql, "abundance").await,
+        row_counting(&scope),
+    )
+}
+
+/// `out` with `meta` under `rows` when it is a success.
+#[cfg(feature = "analytics")]
+fn with_meta(out: (StatusCode, Json<Value>), meta: Value) -> (StatusCode, Json<Value>) {
+    let (code, Json(mut body)) = out;
+    if code == StatusCode::OK {
+        body["rows"] = meta;
+    }
+    (code, Json(body))
 }
 
 /// Per-species arrival, departure and presence for a calendar year.
@@ -1054,8 +1125,17 @@ async fn phenology(
         min_detections: q.min_detections.unwrap_or(5),
         limit: q.limit.unwrap_or(500),
     };
-    let sql = birdnet_behavioral::phenology::phenology_timing_sql(&params);
-    run_phenology_query(&state, &sql, "phenology").await
+    let scope = match row_scope(q.source, q.min_confidence) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    let sql = scope.apply(&birdnet_behavioral::phenology::phenology_timing_sql(
+        &params,
+    ));
+    with_meta(
+        run_phenology_query(&state, &sql, "phenology").await,
+        row_counting(&scope),
+    )
 }
 
 /// The current calendar year, from the station's local clock.

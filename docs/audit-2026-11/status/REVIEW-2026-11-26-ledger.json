@@ -1,0 +1,1590 @@
+{
+ "base_commit": "e5ba1332af139f675eab09c538f7a24c27395ad0",
+ "head": "105c8ae952415e181ba9fa8120dda1402f7dbfed",
+ "commits": {
+  "mdl22": "355efc0",
+  "laneA": "ce3de58",
+  "f08": "1a972f7",
+  "n2511": "223ac20",
+  "f19": "ebf6743",
+  "f14": "85191b0",
+  "f17": "b00076e",
+  "f21": "194b730",
+  "f18": "ef07e0d",
+  "f22": "65e2a68",
+  "f10": "d11737c"
+ },
+ "findings": [
+  {
+   "id": "F01",
+   "title": "Replay binds historical inference to the new process run and current policy",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "`ce3de58`, `4f0a504`",
+   "note": "Bars computed once per detection at processing time and recorded with it; deciding at inference time not done. Other gates apply under the settings in force at replay (declared)."
+  },
+  {
+   "id": "F02",
+   "title": "Replay acknowledges dequeue progress without a durable outcome",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "`ce3de58`, `4f0a504`, `95d6d34`",
+   "note": "Live refusals kept through the same queue (after up to a second in memory); acknowledgement only once durable; BirdWeather parked before sending (at least once; duplicate window, no idempotency key). Other channels not outboxed; no page for held detections."
+  },
+  {
+   "id": "F03",
+   "title": "Shutdown persists unfiltered raw segments and neighbours despite clip privacy",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "`ce3de58`, `4f0a504`, `3439d6a`",
+   "note": "Quarantine rows have clips of their own in the recordings directory, removed with the row; neighbour samples kept only where a clip reaches (`fc52a6e`)."
+  },
+  {
+   "id": "F04",
+   "title": "Spool commit lacks complete file/directory durability and atomic checkpoint",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "`ce3de58`, `4f0a504`",
+   "note": "Acknowledged only once the commit is durable (checkpoint or synchronous=FULL). Not power-cut tested (V04)."
+  },
+  {
+   "id": "F05",
+   "title": "Malformed replay entries and unreadable directories become skips or hidden leftovers",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "ce3de58",
+   "note": "Unreadable, later-format and path-escaping lines are held, never deleted; read_dir errors logged at error level; keep returns what was written."
+  },
+  {
+   "id": "F06",
+   "title": "Duplicate interval is order-dependent and not durable",
+   "status": "implemented",
+   "checklist_status": "in_progress",
+   "commit": "ce3de58",
+   "note": "Invariant held: no two admitted rows of one species and source within the interval in any arrival order. Not order-free (85,80,92 vs 80,85,92); that needs read-time events (decision 1, RES-18). DST fold not addressed."
+  },
+  {
+   "id": "F07",
+   "title": "Duplicate gate mutates before storage; failed insert can suppress the next valid row",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "ce3de58",
+   "note": "Duplicate gate checks before and records after a successful insert."
+  },
+  {
+   "id": "F08",
+   "title": "Privacy coverage can silently weaken when a routed classifier fails",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "1a972f7",
+   "note": "A window a human-capable classifier failed is privacy-unassessed and masked when the filter is on."
+  },
+  {
+   "id": "F09",
+   "title": "Multi-model window length and score semantics are conflated",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "`2003fdd`, `8aa6040`, `f1d2533`, `ec1fecb`",
+   "note": "Padding recorded (migration 68), per-classifier privacy and noise on each classifier's own scale. The merge still picks its winner by raw confidence across scales (named, left alone)."
+  },
+  {
+   "id": "F10",
+   "title": "Decoder conceals packet loss without returning validity or timing uncertainty",
+   "status": "implemented",
+   "checklist_status": "in_progress",
+   "commit": "d11737c",
+   "note": "Effort credited from decoded duration (probe: header 15.0 s vs 1 s decoded; ffmpeg placeholder header None). Remains: known-length lost packets are zero-filled and counted; no validity mask or timing uncertainty."
+  },
+  {
+   "id": "F11",
+   "title": "Detection decode uses uncapped in-memory path",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "`dfd2c76`, `2f0731a`, `a7a46d9`, `ba1e1e6`, `90aec89`, `1f4a5d5`",
+   "note": "Bounded streaming ingestion (--ingest-recordings), admission before decode, refused recordings set aside, imported history not announced."
+  },
+  {
+   "id": "F12",
+   "title": "Downmix can erase valid stereo content",
+   "status": "implemented",
+   "checklist_status": "in_progress",
+   "commit": "`e2ffccf`, `c5fe96b`, `ec1fecb`",
+   "note": "Cancellation warned, one channel selectable (ANALYSIS_CHANNELS); each-channel analysis built and refused in configuration (rows keyed by file, time and species); provenance logged, not stored."
+  },
+  {
+   "id": "F13",
+   "title": "Geomodel week fixed at file start even across civil boundaries",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "`d5dabf3`, `ec1fecb`",
+   "note": "OCCURRENCE_WEEK=window, the research profile's default; per-file week stays the default."
+  },
+  {
+   "id": "F14",
+   "title": "Occupancy-style export pools site detections with unrelated effort and legacy uptime",
+   "status": "implemented",
+   "checklist_status": "in_progress",
+   "commit": "85191b0",
+   "note": "A detection makes an occasion detected only on a source that surveyed it; &source= scopes the history. Remains: survey-design export, interval-union effort for declared co-located sites, DST-aware occasions, vocabulary eligibility."
+  },
+  {
+   "id": "F15",
+   "title": "Detection row and per-model answer evidence are not atomically coupled",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "`ce3de58`, `4f0a504`",
+   "note": "Batch 1 was wrong: the answers insert failure was swallowed. Now propagated and rolled back; red by an injected trigger."
+  },
+  {
+   "id": "F16",
+   "title": "A backlog detection marks capture source up, irrespective of current capture",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "ce3de58",
+   "note": "Replayed detections no longer stamp source up. A live backlog file still stamps; the supervisor rewrites the gauge each tick (2 s default)."
+  },
+  {
+   "id": "F17",
+   "title": "WAL NORMAL intentionally sacrifices committed data durability under power loss",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "`b00076e`, `2ba51db`",
+   "note": "FULL by default under STATION_PROFILE=research. Power-loss behaviour not measured (V04)."
+  },
+  {
+   "id": "F18",
+   "title": "A failed later inference window discards all earlier successful predictions in a file",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "ef07e0d",
+   "note": "Failed windows keep the rest of the file; failed share not credited as effort."
+  },
+  {
+   "id": "F19",
+   "title": "Exports join a run-level model hash rather than each answer’s artifact",
+   "status": "implemented",
+   "checklist_status": "in_progress",
+   "commit": "ebf6743",
+   "note": "Migration 67 records each classifier per run; exports resolve (run_id, model_id); ambiguous legacy runs export no checksum. Remains: CSV confidence still 4 decimals (JSON is full precision); per-answer artefacts in the model-scores export."
+  },
+  {
+   "id": "F20",
+   "title": "Mirror credentials appear in model fetch logs and errors",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "355efc0",
+   "note": "Mirror credentials redacted from every log line and error of the model download."
+  },
+  {
+   "id": "F21",
+   "title": "Model staging durability and bundle-level activation need cross-path proof",
+   "status": "implemented",
+   "checklist_status": "done",
+   "commit": "194b730",
+   "note": "Directory fsync via atomic_file::commit at all four placements. Mixed-generation hypothesis REJECTED by reading (per-file pin hash before rename; model then labels)."
+  },
+  {
+   "id": "F22",
+   "title": "Mutation gate was not fully green in last inspected mutation run",
+   "status": "implemented",
+   "checklist_status": "in_progress",
+   "commit": "65e2a68",
+   "note": "ffmpeg job annotated, model.rs shards 70->80 min; check-ci-config.py passes locally (durations not readable here). The [3/3] job's own failure (log 404) is unexplained. Needs a mutation run on the integrated head."
+  }
+ ],
+ "routed_backlog": [
+  {
+   "id": "RES-23",
+   "lane": "A",
+   "severity": "low",
+   "title": "Clips carry thin metadata and no checksum",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): each clip's SHA-256 and length recorded at write time, permanent, NULL meaning unknown; GET /api/v2/recordings/verify/{detection_uuid} checks on demand (`17e2218`, `105c8ae`)."
+  },
+  {
+   "id": "RES-25",
+   "lane": "A",
+   "severity": "medium",
+   "title": "No stable detection identifier",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): every detection has a permanent detection_uuid (migration 69: trigger-stamped, backfilled, unique, unchangeable), carried by the exports and kept by the CSV import (`17e2218`); the read-time event layer names members by it, policy events-2 (`98d316b`)."
+  },
+  {
+   "id": "RES-29",
+   "lane": "A",
+   "severity": "low",
+   "title": "Offsite backup covers the database, not the audio evidence",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): full backups carry a clip manifest, sha256sum-checkable checksums and a backup manifest, and a restore verifies them; ?audio=kept|none (`0d11af4`). Offsite copies are still the database only."
+  },
+  {
+   "id": "N25-07",
+   "lane": "A",
+   "severity": "medium",
+   "title": "Maintenance queries drop rows that fail to read (.filter_map(Result::ok))",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): swept every .filter_map(Result::ok) / .flatten() over a query or directory outside tests; the clip reconciliation, retention and species-cap passes fail on a read error and a failed reconciliation no longer publishes orphaned_clips = 0 (`5323ab0`)."
+  },
+  {
+   "id": "N25-10",
+   "lane": "A",
+   "severity": "medium",
+   "title": "The stream and recordings disk managers write the same purge-ineffective flag",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the stream manager has its own purge-ineffective flag; purge_ineffective() is the OR of the two (`79e52cc`)."
+  },
+  {
+   "id": "N25-11",
+   "lane": "A",
+   "severity": "high",
+   "title": "With the watch directory equal to the recordings directory, locked and reviewed clips are not protected from the disk-full purge",
+   "status_before": "in_progress",
+   "status_after": "done",
+   "disposition": "touched",
+   "evidence_appended": "`223ac20` (review session 2026-11-26): with --watch-dir equal to the recordings dir, the stream manager also protects the database's kept-back clips; a failed read deletes nothing that cycle. Unlocked clips are still drained after STREAM_RETENTION_SECS; the startup notice and backups.md say so. Gate helpers::system::tests::a_stream_dir_that_holds_clips_protects_the_locked_ones, red with the old provider."
+  },
+  {
+   "id": "N26-01",
+   "lane": "A",
+   "severity": "high",
+   "title": "The configuration file is in no backup on a standard install, and a restore would not put one where the station reads it",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a full backup carries the configuration file the station was started with, and a restore puts it back, keeping the replaced file as .before-restore (`0d11af4`)."
+  },
+  {
+   "id": "N26-02",
+   "lane": "A",
+   "severity": "medium",
+   "title": "OGG clips are invisible to the disk manager",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the disk modules count OGG clips through is_kept_audio_file (`b6a77f3`)."
+  },
+  {
+   "id": "MSC-04",
+   "lane": "A",
+   "severity": "medium",
+   "title": "A second source's quarantined detection in the same second is discarded; an approved one loses its source and its audio",
+   "status_before": "in_progress",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): already fixed by `7bef7b7` (quarantine keyed by recording, source kept through approval) with playable quarantine clips from `4f0a504`/`3439d6a`; approval now also carries the clip checksum (`17e2218`)."
+  },
+  {
+   "id": "MMP-09",
+   "lane": "B",
+   "severity": "medium",
+   "title": "Exact-scientific-name merge splits renamed species into two rows with no agreement",
+   "status_before": "in_progress",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): two names of one species (101 renames from the taxonomy table with two or more sources) merge as one row with agreement 2; one-classifier stations unchanged (`0b73c9e`). The 20 single-source renames are not applied."
+  },
+  {
+   "id": "MMP-15",
+   "lane": "B",
+   "severity": "medium",
+   "title": "Perch's bar is measured, not validated on station audio",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): instruments and protocol only (`d51e165`)."
+  },
+  {
+   "id": "MMP-21",
+   "lane": "B",
+   "severity": "medium",
+   "title": "The multi-model invariants that are not tested",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): invariants I1-I12 indexed and tested, each seen red against its mutant (`a6f4e64`); no run with two real models."
+  },
+  {
+   "id": "ACC-06",
+   "lane": "B",
+   "severity": "medium",
+   "title": "The default capture high-pass (120 Hz) and DC block change the model's input and are outside every parity measurement",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): conditioning::describe() names the capture filtering and a test measures it on a fixture (-3.80 dB residual through the tee's filters) (`cd34079`); not yet recorded with the run. The tee uses one-pole filters where EqChain uses two-pole."
+  },
+  {
+   "id": "ACC-19",
+   "lane": "B",
+   "severity": "low",
+   "title": "Overlapping windows are separate rows, and counts scale with `OVERLAP`",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): read-side window_slots (policy slots-1) counts distinct zero-overlap slots (`6dbdb9b`); not yet wired into the event API."
+  },
+  {
+   "id": "ACC-20",
+   "lane": "B",
+   "severity": "low",
+   "title": "The V3.0 window length and its privacy default rest on thin evidence",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): instruments and protocol only (`d51e165`, guides/evaluation.md)."
+  },
+  {
+   "id": "MSC-09",
+   "lane": "B",
+   "severity": "low",
+   "title": "With OVERLAP > 0, one call is several rows unless the operator also enables the duplicate interval",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as ACC-19 (`6dbdb9b`)."
+  },
+  {
+   "id": "MDL-23",
+   "lane": "B",
+   "severity": "low",
+   "title": "The async-runtime scan exempts the start-up steps by name",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "MSC-13",
+   "lane": "C",
+   "severity": "low",
+   "title": "Source identity is the row id, not the device — re-adding splits history, editing a URL merges two places",
+   "status_before": "in_progress",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): audio_source_devices keeps a device number per source that survives re-adding the same device and changes on a URL edit; every existing source id unchanged (1309946, `b829f62`)."
+  },
+  {
+   "id": "MSC-14",
+   "lane": "C",
+   "severity": "medium",
+   "title": "Timestamps are wall clock at segment open with one-second resolution; RTSP adds unmeasured latency, burst-time stamps and possible same-second overwrites",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): probe: ffmpeg's segment muxer fed 60 s faster than real time wrote one 15 s file, overwriting the rest; needs sample-clock or index naming. RTSP latency unmeasured."
+  },
+  {
+   "id": "MSC-15",
+   "lane": "C",
+   "severity": "medium",
+   "title": "The stream directory's limits do not scale with the number of sources",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): stream budget arithmetic and a doctor check (`cd241dc`); the disk-manager cap and the shed threshold are not wired."
+  },
+  {
+   "id": "MSC-20",
+   "lane": "C",
+   "severity": "low",
+   "title": "\"Also heard by\" hides a failed read and uses a fixed 30 s window",
+   "status_before": "in_progress",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): \"Also heard by\" compares detected_at_utc within the event tolerance and names it (`161e8f1`); the failed-read half was `5be0ece`."
+  },
+  {
+   "id": "MSC-21",
+   "lane": "C",
+   "severity": "low",
+   "title": "One analysis thread for every source",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "OOB-17",
+   "lane": "C",
+   "severity": "medium",
+   "title": "After a power cut with no network, an RTC-less Pi records under a stale clock with nothing saying so",
+   "status_before": "in_progress",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as RES-12: an unsynchronised clock is recorded and warned about while recording (`fb48963`); RTC guidance in the hardware guide."
+  },
+  {
+   "id": "OOB-21",
+   "lane": "C",
+   "severity": "low",
+   "title": "Hardware guidance is generic; no recommended kit, height or orientation, and the target level disagrees across pages",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "RES-12",
+   "lane": "C",
+   "severity": "medium",
+   "title": "Clock trust is never written down, and capture records under an untrusted clock",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): clock_observations records the clock's state at capture (synced, unsynced, unknown, unset; a step of 2 s or more); on /api/v2/health and a Clock_State export column (1309946, `fb48963`, `b829f62`)."
+  },
+  {
+   "id": "RES-13",
+   "lane": "C",
+   "severity": "medium",
+   "title": "Time resolution, and local-time buckets in the levels and effort tables",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): effort keyed on UTC hours with uptime split by clock state, exported at /api/v2/effort/export/utc (1309946, `fb48963`); the levels tables are not done."
+  },
+  {
+   "id": "RES-20",
+   "lane": "C",
+   "severity": "medium",
+   "title": "Sound levels are labelled dB SPL from one unverified offset and a ~5 % sample",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "OOB-10",
+   "lane": "C",
+   "severity": "medium",
+   "title": "The Docker quick-start stores the unstable ALSA card index",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): quickstart.sh carries the installer's card-id detector, held equal by alsa-device-detect.sh (`74c867d`)."
+  },
+  {
+   "id": "OOB-14",
+   "lane": "C",
+   "severity": "medium",
+   "title": "SD-card wear for an unattended Pi",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "touched",
+   "evidence_appended": "`b00076e` (review F17): DB_SYNCHRONOUS=full, opt-in, syncs every commit at the cost of more writes; the default is unchanged. No wear measured."
+  },
+  {
+   "id": "N26-03",
+   "lane": "C",
+   "severity": "medium",
+   "title": "--doctor does not see values saved only on the settings page",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the doctor lays the settings table over the configuration file before checking (`cd241dc`)."
+  },
+  {
+   "id": "MSC-02",
+   "lane": "D",
+   "severity": "high",
+   "title": "Every count is a row count, and N sources hearing one bird are N rows; no deduplicated view exists",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): /api/v2/analytics/rates counts events over a site's listening bounds (`14d8853`); legacy row-count routes now say they count rows."
+  },
+  {
+   "id": "MSC-07",
+   "lane": "D",
+   "severity": "medium",
+   "title": "BirdWeather receives one post per source for one bird",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): SOURCE_SITES says which sources share a site; BirdWeather gets one post per event at a site (`3fdf6e0`). Unset, every source is posted as before."
+  },
+  {
+   "id": "MSC-18",
+   "lane": "D",
+   "severity": "low",
+   "title": "No per-source thresholds, species lists, location or dynamic threshold",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): per-query filters only (`14d8853`); stored per-source thresholds or lists not done."
+  },
+  {
+   "id": "MMP-08",
+   "lane": "D",
+   "severity": "medium",
+   "title": "Exports and run records attribute every row to the primary model's file and checksum",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "touched",
+   "evidence_appended": "`ebf6743` (review F19): migration 67 analysis_run_models; exports resolve a row's file through (run_id, model_id); a pre-67 run whose rows name more than one classifier exports no checksum. Gate crates/birdnet-web/tests/an_export_names_the_file_each_rows_classifier_ran.rs, first case red on `e5ba133`. Not done: per-answer artefacts in the model-scores export."
+  },
+  {
+   "id": "ACC-08",
+   "lane": "D",
+   "severity": "medium",
+   "title": "The per-species threshold suggester is too thin to trust and biased by what was reviewed",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the threshold suggester needs 20 verdicts and 5 of each class, and says reviews are not random (`17d6839`)."
+  },
+  {
+   "id": "ACC-09",
+   "lane": "D",
+   "severity": "medium",
+   "title": "An uncalibrated score is presented as certainty",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the named phrases no longer call a score certainty; gate a_score_is_never_called_certainty (5478669)."
+  },
+  {
+   "id": "RES-04",
+   "lane": "D",
+   "severity": "high",
+   "title": "No record of windows that were analysed and found nothing, and no scores below the threshold",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): an opt-in per-window score store with a floor and retention, measured at about 134 MB for 30 days of one source (`ba19f84`); not wired into inference."
+  },
+  {
+   "id": "RES-05",
+   "lane": "D",
+   "severity": "high",
+   "title": "No re-analysis or batch path, and SD-card recordings cannot be ingested",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): bounded streaming ingestion: --ingest-recordings, the admission check, segments staged a few at a time, imported history not announced, refused recordings set aside (`dfd2c76`, `2f0731a`, `a7a46d9`, `ba1e1e6`, `90aec89`, `1f4a5d5`). Re-analysis of stored audio is not built."
+  },
+  {
+   "id": "RES-07",
+   "lane": "D",
+   "severity": "high",
+   "title": "No validation protocol: reviewers see confidence, the queue is not random, and there are no precision estimates or intervals",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): seeded stratified validation samples, blind review, verdict export under /admin/validation (`5509f5b`); JSON only, detections only (no recall)."
+  },
+  {
+   "id": "RES-08",
+   "lane": "D",
+   "severity": "medium",
+   "title": "The CSV export leaves out the columns a methods section needs, and carries no schema version or licence",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): GET /api/v2/detections/export/study: a deterministic ZIP with every provenance table and a manifest of schema, generator, parameters and member hashes (`1a10850`)."
+  },
+  {
+   "id": "RES-11",
+   "lane": "D",
+   "severity": "medium",
+   "title": "`analysis_runs` records less than the configuration that decided what was recorded",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a run records its deciding configuration canonically with its SHA-256 (`5c387c7`), and the daemon records the resolved settings (`aede030`); capture conditioning and the profile name are not in it."
+  },
+  {
+   "id": "RES-16",
+   "lane": "D",
+   "severity": "medium",
+   "title": "The behavioural \"patterns\" are web-analytics measures with no null model",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): co-occurrence has a seeded permutation null with Benjamini-Hochberg and verdicts stands_out / within_chance / too_little_data (`e388b82`); answers, next-species and retention have none."
+  },
+  {
+   "id": "RES-17",
+   "lane": "D",
+   "severity": "medium",
+   "title": "Dawn analyses use clock hours and today's sun across a 60-day window",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): /api/v2/analytics/sunrise-relative uses each day's own sunrise (`14d8853`); charts not moved."
+  },
+  {
+   "id": "RES-18",
+   "lane": "D",
+   "severity": "medium",
+   "title": "Pseudo-replication and double counting across sources",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as MSC-02 (`14d8853`)."
+  },
+  {
+   "id": "RES-21",
+   "lane": "D",
+   "severity": "medium",
+   "title": "Weather comes from a forecast model, from mixed providers, with no provenance",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): each weather hour records its provider and product (`f8f5391`); no archive endpoint, no licence."
+  },
+  {
+   "id": "RES-22",
+   "lane": "D",
+   "severity": "medium",
+   "title": "There is no deployment record or station identity",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): station_identity (one UUID), operator-stated deployments (append-only by trigger), GET /api/v2/station/record and POST /api/v2/deployments; exports name station and deployment (1309946, `b829f62`)."
+  },
+  {
+   "id": "RES-24",
+   "lane": "D",
+   "severity": "low",
+   "title": "No researcher chapter and no citable methods block",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Research Use chapter with a fill-in methods paragraph (`dcaa06b`)."
+  },
+  {
+   "id": "RES-27",
+   "lane": "D",
+   "severity": "medium",
+   "title": "The eBird export claims presence from unreviewed detections",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "RES-30",
+   "lane": "D",
+   "severity": "low",
+   "title": "Confidence is presented as a probability",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as ACC-09 (5478669); \"87 % sure\" in sky-song JS, the email hint and six core comments remain."
+  },
+  {
+   "id": "RES-32",
+   "lane": "D",
+   "severity": "low",
+   "title": "The taxonomy edition is not recorded",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the taxonomy edition is stamped per run in the study bundle (`1a10850`); not stored in the database."
+  },
+  {
+   "id": "UIR-18",
+   "lane": "D",
+   "severity": "medium",
+   "title": "Dawn and dusk are defined by the clock on some charts and by the sun on others",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as RES-17 (`14d8853`)."
+  },
+  {
+   "id": "UIR-21",
+   "lane": "D",
+   "severity": "medium",
+   "title": "\"Nothing stands out\" beside a disc that dominates the figure",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "UIR-22",
+   "lane": "D",
+   "severity": "medium",
+   "title": "Co-occurrence: the strongest tie is 3 %, drawn as if it were strong; three definitions of \"together\"",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): data for chance-aware co-occurrence (`e388b82`); the figure is not redrawn here."
+  },
+  {
+   "id": "UIR-34",
+   "lane": "D",
+   "severity": "medium",
+   "title": "Trends asks a question and does not answer it",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): /api/v2/analytics/rates/compare gives a direction only when the interval excludes 1 (`14d8853`); no red test, page not changed."
+  },
+  {
+   "id": "UIC-02",
+   "lane": "D",
+   "severity": "high",
+   "title": "An effort-corrected abundance API exists and no chart uses it; every Patterns chart draws raw counts",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the effort-corrected rates API exists with intervals (`14d8853`); no chart draws it yet."
+  },
+  {
+   "id": "UIC-10",
+   "lane": "D",
+   "severity": "medium",
+   "title": "Data export is a date range behind a login; the detection log cannot export what it found",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): GET /api/v2/detections/export/search exports what the log found, with the same columns as the detections export (`36b599b`, `105c8ae`)."
+  },
+  {
+   "id": "UIC-11",
+   "lane": "D",
+   "severity": "medium",
+   "title": "No source, model or confidence filter on any Patterns chart",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): source, confidence and species filters on the analytic API (`14d8853`); not on the pages."
+  },
+  {
+   "id": "N06-02",
+   "lane": "D",
+   "severity": "low",
+   "title": "Co-occurrence (birdnet-timeseries, sqlite correlation.rs), phenology and retention still pool sources with no source filter",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): co-occurrence and companions are per site (`e388b82`); retention, phenology and abundance take ?source= and say they pool by default (`14d8853`)."
+  },
+  {
+   "id": "N25-02",
+   "lane": "D",
+   "severity": "medium",
+   "title": "The reporting-frequency interval treats neighbouring days as independent trials",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the reporting-frequency interval is a Wilson interval at the effective number of days a design effect leaves (two-state Markov chain); coverage 0.687 plain vs 0.961 on a simulated autocorrelated series, seeded (`e388b82`). Not checked on station data."
+  },
+  {
+   "id": "N26-05",
+   "lane": "D",
+   "severity": "low",
+   "title": "A third listened-day rule: phenology's effort gap counts any day with more than 0 seconds",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): phenology's effort gap and the heat calendar use the one listened-day rule (`2dd1a5e`)."
+  },
+  {
+   "id": "N26-06",
+   "lane": "D",
+   "severity": "medium",
+   "title": "A pooled rate per listened time falls when a source that hears less is added",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): rates divide by site listening bounds, never summed sensor time (`14d8853`); pages not yet on it."
+  },
+  {
+   "id": "CHT-24",
+   "lane": "D",
+   "severity": "high",
+   "title": "No gate grades whether a relational figure would say \"nothing\" when nothing is there",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a data-level gate: a pair at chance is drawn as chance (`e388b82`)."
+  },
+  {
+   "id": "OOB-01",
+   "lane": "E",
+   "severity": "high",
+   "title": "No flashable image, and no documented path from a blank card to a terminal",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "OOB-03",
+   "lane": "E",
+   "severity": "high",
+   "title": "Installing over a BirdNET-Pi host adopts BirdNET-Pi's config file and changes its ownership",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the installer refuses a BirdNET-Pi host (link or enabled services) before writing anything; installer/test/birdnet-pi-host.sh (`4da5ede`). Only a real host can prove the fixture matches BirdNET-Pi."
+  },
+  {
+   "id": "OOB-07",
+   "lane": "E",
+   "severity": "medium",
+   "title": "The admin password is a 22-character string the reader must copy from a terminal, and recovery needs `sudo grep`",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): install.sh reset-password (`4da5ede`); the setup token (decision 6) is not built."
+  },
+  {
+   "id": "OOB-08",
+   "lane": "E",
+   "severity": "medium",
+   "title": "Updating needs a terminal; the station is never updated by this reader",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "OOB-13",
+   "lane": "E",
+   "severity": "medium",
+   "title": "The live microphone feed is open to anyone on the network by default",
+   "status_before": "in_progress",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): live audio needs a sign-in on a new station; a station that already holds detections keeps anyone, and the control is on the audio page (`fdaf180`). HLS status still returns playlist URLs with tokens to anyone on an anyone station."
+  },
+  {
+   "id": "OOB-18",
+   "lane": "E",
+   "severity": "low",
+   "title": "The settings and password are in no backup; nothing guides a dead-card recovery",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): card-failure and remote-access pages describe recovery with reset-password; configuration in backups (`0d11af4`); no first-boot recovery path."
+  },
+  {
+   "id": "OOB-20",
+   "lane": "E",
+   "severity": "low",
+   "title": "Location entry has no map and no place search; an offline install cannot complete",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "OOB-22",
+   "lane": "E",
+   "severity": "low",
+   "title": "The Docker quick-start runs the development branch's script, and the install needs Docker group surgery",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): quickstart takes compose files and image from one release, falling back with a warning (`355b703`); quickstart.sh itself is still fetched from main."
+  },
+  {
+   "id": "N25-14",
+   "lane": "E",
+   "severity": "medium",
+   "title": "The sign-in page's forgotten-password hint prints a stale password after a change in the browser",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the sign-in hint says a refusal means the password was changed in the browser and gives install.sh reset-password and the Docker way (`34136c4`)."
+  },
+  {
+   "id": "N26-04",
+   "lane": "E",
+   "severity": "low",
+   "title": "The models-v2.4 release's published notes still say nothing fetches from it, and the release is not immutable",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "MDL-18",
+   "lane": "E",
+   "severity": "medium",
+   "title": "No test installs a real model through the real install path, and none starts the built binary",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "MDL-22",
+   "lane": "E",
+   "severity": "low",
+   "title": "An operator's mirror URL is printed in errors and logs, credentials included",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "touched",
+   "evidence_appended": "`355efc0` (review F20): every origin is printed through redact_url_credentials and describe() redacts library messages. Gate model_catalog::tests::network::a_mirrors_credentials_are_never_logged_or_reported, red on `e5ba133` (password and token in the 'downloading' line and the error)."
+  },
+  {
+   "id": "MDL-25",
+   "lane": "E",
+   "severity": "low",
+   "title": "A station configured with the legacy V3.0 file names is not repaired by the station itself",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): repair recognises the old V3.0 file names and links a fetched file back to the configured name (`4da12e9`). A real V3.0 fetch was not run."
+  },
+  {
+   "id": "MDL-27",
+   "lane": "E",
+   "severity": "low",
+   "title": "A station installed with BIRDNET_SKIP_MODEL now downloads its models itself",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the skip-model texts say the station fetches its models and BIRDNET_OFFLINE=1 stops it (`4da5ede`); whether to opt out is the maintainer's call."
+  },
+  {
+   "id": "MDL-28",
+   "lane": "E",
+   "severity": "low",
+   "title": "Journal lines under systemd carry ANSI colour codes, and each service start logs \"starting BirdNet-Behavior\" twice",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): NO_COLOR=1 in the unit (`d410b62`); colour only on a terminal, and the start line only from the station, not its pre-start doctor (`1b9d060`)."
+  },
+  {
+   "id": "UIR-05",
+   "lane": "F",
+   "severity": "medium",
+   "title": "The per-row \"waveform\" is invented",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the invented waveform glyph is removed; a real envelope would need stored RMS values (`6863e83`)."
+  },
+  {
+   "id": "UIR-09",
+   "lane": "F",
+   "severity": "medium",
+   "title": "History calendar numbers collide, and an off day looks like a future one",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the history calendar marks off days and no longer draws a day to come like one (`a515ba6`)."
+  },
+  {
+   "id": "UIR-15",
+   "lane": "F",
+   "severity": "high",
+   "title": "Two settings applications that disagree with each other",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "UIR-16",
+   "lane": "F",
+   "severity": "medium",
+   "title": "\"Is it working?\" lives under a nav item called Settings",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as UIC-06 (`83d2005`)."
+  },
+  {
+   "id": "UIR-17",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Engine internals and command lines on pages written for birders",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "UIR-19",
+   "lane": "F",
+   "severity": "low",
+   "title": "Two hour-axis vocabularies",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): terrain's hour axis follows the 12/24-hour choice (9862315); Today's axis not changed."
+  },
+  {
+   "id": "UIR-20",
+   "lane": "F",
+   "severity": "low",
+   "title": "Five date formats",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): one date format on History (`251e437`); feeds, species pages and the life list not converted."
+  },
+  {
+   "id": "UIR-25",
+   "lane": "F",
+   "severity": "low",
+   "title": "Life list draws one curve twice and names 4 of 15 birds",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "UIR-27",
+   "lane": "F",
+   "severity": "low",
+   "title": "Page heads, H1 faces and content columns differ by page",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "UIR-29",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Phone: hidden tabs and clipped charts",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "UIR-30",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Numbers without provenance",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a \"Score from\" row, a counted-rows note on lists, and the terrain card's range line fixed (`251e437`, `6107bb9`); n and listened hours on each figure remain."
+  },
+  {
+   "id": "UIR-32",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Alerts is a rules engine where a birder expects \"tell me when…\"",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "UIR-35",
+   "lane": "F",
+   "severity": "low",
+   "title": "Queues with no home in the navigation",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): as UIC-07 (`83d2005`)."
+  },
+  {
+   "id": "UIR-36",
+   "lane": "F",
+   "severity": "low",
+   "title": "Migration and Dawn: pills that look like filters, colour that names a season",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Dawn's scope is a sentence, not pills (`83d2005`); season colours not changed."
+  },
+  {
+   "id": "UIC-05",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Six more routes are orphaned than TD-6 lists, including a full page",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): an orphan-route gate naming the 16 routes in TD-6 (`83d2005`)."
+  },
+  {
+   "id": "UIC-06",
+   "lane": "F",
+   "severity": "medium",
+   "title": "The \"is it working?\" home is labelled \"Settings\"",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Settings keeps its label (the maintainer's) and its accessible name says station health (`83d2005`)."
+  },
+  {
+   "id": "UIC-07",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Two \"Activity sessions\", two review queues, three searches, four hour-of-day pictures",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): one Review strip shared by /quarantine and /detection-reviews (`83d2005`)."
+  },
+  {
+   "id": "UIC-08",
+   "lane": "F",
+   "severity": "medium",
+   "title": "The Patterns range is JavaScript-only, not in the URL, not remembered, and not shareable",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): /patterns?days= sets the range in the address and the control is a GET form (8044794); source/model/confidence are not in the address yet."
+  },
+  {
+   "id": "UIC-09",
+   "lane": "F",
+   "severity": "low",
+   "title": "Sharing exists only for one detection",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "UIC-17",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Localisation stops at species names; chart times ignore the 12-hour setting; numbers always use commas",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "UIC-18",
+   "lane": "F",
+   "severity": "low",
+   "title": "Duplicated chart helpers, one with its arguments swapped; three heat scales",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "UIC-21",
+   "lane": "F",
+   "severity": "medium",
+   "title": "History scans the whole table on every month click; a day page lists every detection",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): History reads only the month it draws and a day page lists one page; 1287 ms to 24 ms per month click on a 3.3M-row table in this container, not a Pi (`251e437`)."
+  },
+  {
+   "id": "UIC-23",
+   "lane": "F",
+   "severity": "low",
+   "title": "Cached analytic figures do not say how old they are",
+   "status_before": "in_progress",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the remaining cached figures say how old they are (`52f2a99`)."
+  },
+  {
+   "id": "UIC-25",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Graphics the stored data supports and no page draws (for chart lovers and researchers)",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "UIC-27",
+   "lane": "F",
+   "severity": "medium",
+   "title": "The most-seen charts have no table alternative",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): five most-seen column charts offer their numbers as a table, held by a source scan (`89834c9`); the calendar and accumulation charts have none."
+  },
+  {
+   "id": "UIC-30",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Proposed simplified IA — one switch, two depths, same URLs",
+   "status_before": "in_progress",
+   "status_after": "in_progress",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "UIC-32",
+   "lane": "F",
+   "severity": "low",
+   "title": "Polling and the live socket overlap on Today",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "UIC-33",
+   "lane": "F",
+   "severity": "low",
+   "title": "The failed-read-as-zero sweep: gate exists and holds; blind spots named",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "CHT-01",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Sparklines are each scaled to their own maximum, so the rail compares shapes that are not comparable",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a species row with fewer than 10 detections is drawn as dots, and the rail says what the line's scale is (`fe59a0c`)."
+  },
+  {
+   "id": "CHT-02",
+   "lane": "F",
+   "severity": "medium",
+   "title": "The streamgraph answers \"how much, of whom\" for the top band only",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "CHT-03",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Hour-of-day columns pool a season of shifting sunrises onto a clock axis",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "CHT-04",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Hour × weekday is the wrong second axis for birds",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "CHT-05",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Dawn rings: radius is free, so identical activity is longer on an outer ring",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "CHT-06",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Trends has no band, so \"unusual\" is a table two folds away from the chart it is about",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Trends draws each day's usual range (10th-90th percentile of the 30 listened days before; too few days said, not drawn) (`713d7c4`)."
+  },
+  {
+   "id": "CHT-07",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Richness per day is mostly a picture of how much was heard",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): richness per day is rarefied to a common detection depth (Hurlbert, exact) (`b250f44`); not divided by listening time."
+  },
+  {
+   "id": "CHT-08",
+   "lane": "F",
+   "severity": "high",
+   "title": "The chord diagram cannot show the absence of association, and has no chance level",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): co-occurrence is tested against a permutation null within each clock hour (999 shuffles, seed 20261127, Benjamini-Hochberg at 5 %) and drawn as a ladder coloured only where a pair stands out; a fixture with nothing in it says \"Nothing stands out\" (`9de4839`, `6c91339`, `d748853`). The /api/v2/analytics/cooccurrence null (`e388b82`, day shifts in 28-day strata) is a second definition, not yet reconciled."
+  },
+  {
+   "id": "CHT-09",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Ridgeline: own-max heights hide low-count ridges that are one false positive",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a ridge with fewer than 5 detections at its peak is drawn hollow and says its count (`9db3df6`); a true axis with a Poisson band, and hatching an arrival after an outage, are not done."
+  },
+  {
+   "id": "CHT-10",
+   "lane": "F",
+   "severity": "low",
+   "title": "Bursts shows seven days of bars and no summary of what a visit is",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "CHT-12",
+   "lane": "F",
+   "severity": "high",
+   "title": "Before/after ranks neighbours by frequency, so the commonest bird follows everything",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): before/after ranks neighbours against their share by chance in the same hours, with an exact binomial test (`f6a388d`)."
+  },
+  {
+   "id": "CHT-13",
+   "lane": "F",
+   "severity": "medium",
+   "title": "The running order is drawn on a clock that the dawn moves across",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "CHT-14",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Who answers whom draws raw exchange counts; two frequent singers \"answer\" by chance",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): who-answers-whom is drawn against shifts that wrap within each bird's span of the day (a plain shift gave p=0.0003 for two independent birds) (`f6a388d`)."
+  },
+  {
+   "id": "CHT-15",
+   "lane": "F",
+   "severity": "medium",
+   "title": "Chorus assembling encodes a cumulative share as disc area on an ordinal time axis",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "CHT-23",
+   "lane": "F",
+   "severity": "high",
+   "title": "The kit has no mark for uncertainty and no shared rule for \"too few to say\"",
+   "status_before": "in_progress",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): the kit has a band mark (viz::uncertainty::band) and a \"too few to say\" rule (`713d7c4`)."
+  },
+  {
+   "id": "CHT-17",
+   "lane": "F",
+   "severity": "low",
+   "title": "What a visit is — session length and visits per day, per species",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "CHT-18",
+   "lane": "F",
+   "severity": "low",
+   "title": "Mixed-species bouts",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "CHT-19",
+   "lane": "F",
+   "severity": "low",
+   "title": "What happens when the hawk calls — an event-aligned plot",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "CHT-20",
+   "lane": "F",
+   "severity": "low",
+   "title": "Song onset against sunrise through the season",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "CHT-21",
+   "lane": "F",
+   "severity": "low",
+   "title": "Weather response",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "CHT-22",
+   "lane": "F",
+   "severity": "low",
+   "title": "Return across years, and the arrival order of spring",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "N24-07",
+   "lane": "F",
+   "severity": "low",
+   "title": "layout.mjs's new fit check grades only the routes listed in DISCLOSED, and layout.mjs does not read text below the first screen of a scrolling main on a phone",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "N25-04",
+   "lane": "F",
+   "severity": "medium",
+   "title": "The dawn chorus partials turn a failed chorus read into 'no chorus yet'",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): a failed chorus read is no longer shown as \"no chorus yet\" (`c5d29f8`)."
+  },
+  {
+   "id": "N26-07",
+   "lane": "F",
+   "severity": "low",
+   "title": "Migration's ridges draw counts, weeks with no listening are drawn at zero, and the table prints 'w43'",
+   "status_before": "open",
+   "status_after": "done",
+   "disposition": "done_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): Migration's ridges are drawn per listened time and weeks with too little listening hatched as unknown (`20cf387`)."
+  },
+  {
+   "id": "N26-08",
+   "lane": "F",
+   "severity": "low",
+   "title": "Small chart defects seen in screenshots: the bursts' 00:00 tick hidden at 390 px; Trends' two near-identical greys in dark; ck-cink has no hatch in plate mode; the flow chart's middle name is written over its top ribbon",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "N26-09",
+   "lane": "F",
+   "severity": "medium",
+   "title": "At 360 and 320 px wide, chart axis labels are cut by 3 to 4 px and neighbouring labels stand under 2 px apart",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "MMP-13",
+   "lane": "G",
+   "severity": "low",
+   "title": "Inference is sequential with a fixed 2 threads; no Pi measurement exists for V3 or Perch",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): model_check bench reports per-window timing with spread (`d51e165`); no Pi measurement."
+  },
+  {
+   "id": "ACC-03",
+   "lane": "G",
+   "severity": "high",
+   "title": "No ground-truth precision or recall exists for the default configuration; \"parity\" is agreement with BirdNET-Pi only",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): instruments only: selection-table scoring with Wilson and recording-cluster bootstrap intervals, examples/model_check.rs (`d51e165`). No ground truth measured."
+  },
+  {
+   "id": "ACC-12",
+   "lane": "G",
+   "severity": "medium",
+   "title": "Nothing checks the model's output on aarch64, the target platform",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): golden-output record and compare, and a described aarch64 job (`d51e165`); no workflow added, no aarch64 run."
+  },
+  {
+   "id": "RES-31",
+   "lane": "G",
+   "severity": "low",
+   "title": "Reproducibility of outputs is unmeasured",
+   "status_before": "open",
+   "status_after": "in_progress",
+   "disposition": "narrowed_in_batch_2",
+   "evidence_appended": "Review batch 2 (2026-11-27, branch claude/awesome-carson-rj7j5u): tests/model_output_is_reproducible.rs checks two runs bit for bit and against a golden record (`d51e165`)."
+  },
+  {
+   "id": "N25-15",
+   "lane": "H",
+   "severity": "low",
+   "title": "README says the Docker quick-start runs v0.17.1, and an old audit says every segment is zero-padded",
+   "status_before": "in_progress",
+   "status_after": "done",
+   "disposition": "touched",
+   "evidence_appended": "Read 2026-11-26 at `e5ba133`: README.md no longer carries the Docker quick-start version claim (`grep -n '0\\.17\\.1' README.md` finds nothing) after pull request 308."
+  },
+  {
+   "id": "MDL-24",
+   "lane": "H",
+   "severity": "medium",
+   "title": "26 functions still carry allow(clippy::too_many_lines), and 395 clippy allows give no reason",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  },
+  {
+   "id": "MDL-26",
+   "lane": "H",
+   "severity": "medium",
+   "title": "No per-file coverage floor for the start-up code",
+   "status_before": "open",
+   "status_after": "open",
+   "disposition": "not_addressed_in_this_branch",
+   "evidence_appended": null
+  }
+ ],
+ "counts": {
+  "routed": 138,
+  "touched": 96,
+  "status_changed": 77,
+  "routed_by_status_after": {
+   "done": 43,
+   "in_progress": 63,
+   "open": 32
+  },
+  "findings_by_status": {
+   "implemented": 22
+  }
+ }
+}

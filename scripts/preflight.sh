@@ -85,6 +85,15 @@ audit_gate() {
     tool cargo-audit cargo-audit 0.22.2 "cargo install --locked cargo-audit --version 0.22.2" \
         && cargo audit --deny warnings
 }
+# The workflow's own scope: every script outside installer/lib (which is checked as
+# part of the generated install.sh), at warning severity, following sourced files.
+shellcheck_gate() {
+    tool shellcheck shellcheck "" "pip install shellcheck-py" \
+        && find . -type f \( -name '*.sh' -o -name '*.bash' \) -not -path './installer/lib/*' \
+            -not -path './target/*' -not -path '*/node_modules/*' -not -path './.git/*' \
+            -not -path './.claude/*' -print0 \
+        | xargs -0 shellcheck -x -S warning
+}
 rustdoc_gate() {
     RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --document-private-items --all-features
 }
@@ -109,6 +118,8 @@ gate "fmt (ci.yml: Format)" cargo fmt --check --all
 gate "typos (supply-chain.yml: Spelling)" typos_gate
 gate "cargo-machete (supply-chain.yml)" machete_gate
 gate "installer is generated, no drift (supply-chain.yml: shellcheck job)" bash installer/build.sh --check
+gate "shellcheck (supply-chain.yml: shellcheck job)" shellcheck_gate
+gate "installer unit tests (supply-chain.yml)" bash installer/test/run-ci.sh
 gate "cargo-deny (supply-chain.yml)" deny_gate
 gate "cargo-audit (supply-chain.yml)" audit_gate
 gate "OSV, against the database as of now (osv.yml)" python3 scripts/osv-check.py

@@ -53,6 +53,17 @@ pub const AS_OF: &str = "<!--bnb:as-of-->";
 /// [`AS_OF`] as the line under a figure.
 pub const AS_OF_LINE: &str = r#"<p class="bnb-meta ck-asof"><!--bnb:as-of--></p>"#;
 
+/// `html` ending with [`AS_OF_LINE`]: what a cached figure's renderer returns so the cache can
+/// stamp it (UIC-23).
+#[must_use]
+#[allow(
+    clippy::needless_pass_by_value,
+    reason = "callers hand over the fragment they built, and the line is appended to it in place"
+)]
+pub fn stamped(html: String) -> String {
+    html + AS_OF_LINE
+}
+
 /// The local wall clock, seconds since the epoch shifted by the UTC offset.
 fn local_now() -> i64 {
     crate::routes::pages::unix_secs() + crate::routes::pages::local_utc_offset_secs()

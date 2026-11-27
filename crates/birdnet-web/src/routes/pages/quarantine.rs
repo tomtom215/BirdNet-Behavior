@@ -100,6 +100,39 @@ async fn quarantine_page(Query(params): Query<ListParams>, headers: HeaderMap) -
     super::render_page_for_request("Quarantine Review", &content, "species", &headers)
 }
 
+/// The two review queues, as one strip both pages open with (UIC-07, UIR-35): held detections,
+/// which are not in the records until approved, and verdicts on detections that are. Each
+/// keeps its own address; the strip only makes them one place to go.
+pub(super) fn review_tabs(active: &str) -> String {
+    let mut out = String::from(
+        r#"<nav class="bnb-subtabs" aria-label="Review" data-screen-label="Review queues">"#,
+    );
+    for (href, label, question) in [
+        (
+            "/quarantine",
+            "Held back",
+            "approve or reject before it counts",
+        ),
+        (
+            "/detection-reviews",
+            "Your verdicts",
+            "confirm or reject what was kept",
+        ),
+    ] {
+        let (cls, cur) = if href == active {
+            (" active", r#" aria-current="page""#)
+        } else {
+            ("", "")
+        };
+        let _ = write!(
+            out,
+            r#"<a class="bnb-subtab{cls}" href="{href}"{cur}><span class="l">{label}</span><span class="q">{question}</span></a>"#
+        );
+    }
+    out.push_str("</nav>");
+    out
+}
+
 fn build_page_html(active_filter: &str) -> String {
     // Active filter tab → highlighted vs plain, as enumerable classes.
     let cls = |f: &str| {
@@ -117,9 +150,10 @@ fn build_page_html(active_filter: &str) -> String {
     // O-20 help link for the quarantine review surface.
     let help_link = super::help::help_link(super::help::Topic::Reviews);
 
+    let tabs = review_tabs("/quarantine");
     // Initial HTMX load passes the active filter so the list matches the URL.
     format!(
-        "<div class=\"qz-head\">\
+        "{tabs}<div class=\"qz-head\">\
   <div class=\"bnb-eyebrow qz-eyebrow\"><span>Review</span>{help_link}</div>\
   <h1 class=\"display qz-h1\">Rare bird quarantine</h1>\
   <p class=\"qz-lede\">\
@@ -445,6 +479,28 @@ fn row_share_button(token: &str) -> String {
     )
 }
 
+/// Remove from the recordings directory those of `names` that no detection
+/// and no quarantine row names any longer. A failed read removes nothing.
+pub(crate) fn remove_unreferenced_clips(state: &AppState, names: &[String]) {
+    let unreferenced = match state
+        .with_read_db(|conn| birdnet_db::sqlite::unreferenced_clips(conn, names))
+    {
+        Ok(found) => found,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not tell which quarantine clips are unreferenced; none removed");
+            return;
+        }
+    };
+    let dir = state.recording_dir();
+    for name in unreferenced {
+        if let Err(e) = std::fs::remove_file(dir.join(&name))
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            tracing::warn!(error = %e, clip = %name, "could not remove a quarantine clip");
+        }
+    }
+}
+
 /// Render an inline `<audio>` player for a quarantine row's source recording, if any.
 fn row_audio_player(file_name: Option<&str>) -> String {
     file_name.filter(|f| !f.is_empty()).map_or_default(|f| {
@@ -587,7 +643,21 @@ async fn quarantine_delete(
     let offset = form.offset.unwrap_or(0);
 
     let result = tokio::task::spawn_blocking(move || {
+        // The clip cut for the row (review F03, second batch) goes with it,
+        // unless a detection approved from it, or another row, names it.
+        let clip = match state.with_read_db(|conn| birdnet_db::sqlite::quarantine_clip_of(conn, id)) {
+            Ok(clip) => clip,
+            Err(e) => {
+                tracing::warn!(id, error = %e, "could not read a quarantine row's clip; it is kept");
+                None
+            }
+        };
         let result = state.with_db(|conn| birdnet_db::sqlite::delete_quarantine(conn, id));
+        if result.is_ok()
+            && let Some(name) = clip
+        {
+            remove_unreferenced_clips(&state, &[name]);
+        }
         if result.is_ok() {
             crate::audit::audit(
                 &state,
@@ -715,5 +785,56 @@ mod tests {
         assert!(html.contains("quarantine-stats"));
         assert!(html.contains("quarantine-list"));
         assert!(html.contains("Pending Review") || html.contains("Filter"));
+    }
+
+    /// The one "Review" strip both queues open with, or `None`.
+    fn review_strip(html: &str) -> Option<&str> {
+        let from = html.find(r#"<nav class="bnb-subtabs" aria-label="Review""#)?;
+        let to = from + html[from..].find("</nav>")?;
+        Some(&html[from..to])
+    }
+
+    /// UIC-07 / UIR-35. Two review queues, each reachable from the other only through a link
+    /// in its prose, and neither in the navigation: a birder could not tell which was "the"
+    /// review page. Both now open with one Review strip naming the two, the page you are on
+    /// marked; each keeps its address.
+    #[tokio::test(flavor = "current_thread")]
+    async fn both_review_queues_open_with_one_review_strip() {
+        let held = build_page_html("pending");
+        let strip = review_strip(&held).expect("the quarantine page opens with the Review strip");
+        assert!(
+            strip.contains(r#"href="/quarantine" aria-current="page""#),
+            "{strip}"
+        );
+        assert!(strip.contains(r#"href="/detection-reviews""#), "{strip}");
+        assert_eq!(strip.matches("aria-current").count(), 1, "{strip}");
+
+        let verdicts = {
+            use tower::ServiceExt as _;
+            let conn = rusqlite::Connection::open_in_memory().expect("open");
+            birdnet_db::migration::migrate(&conn).expect("migrate");
+            let state =
+                crate::state::AppState::from_connection(conn, std::path::PathBuf::from(":memory:"));
+            let response = super::super::detection_reviews::router()
+                .with_state(state)
+                .oneshot(
+                    axum::http::Request::get("/detection-reviews")
+                        .body(axum::body::Body::empty())
+                        .expect("request"),
+                )
+                .await
+                .expect("response");
+            let body = axum::body::to_bytes(response.into_body(), 1 << 22)
+                .await
+                .expect("body");
+            String::from_utf8(body.to_vec()).expect("utf-8")
+        };
+        let strip = review_strip(&verdicts).expect("the verdicts page opens with it too");
+        assert!(
+            strip.contains(r#"href="/detection-reviews" aria-current="page""#),
+            "{strip}"
+        );
+        assert!(strip.contains(r#"href="/quarantine""#), "{strip}");
+        assert_eq!(strip.matches("aria-current").count(), 1, "{strip}");
     }
 }

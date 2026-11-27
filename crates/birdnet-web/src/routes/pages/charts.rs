@@ -36,7 +36,7 @@ pub(crate) fn render_hourly_chart(id: &str, hours: &[birdnet_db::sqlite::HourlyC
         top: None,
         stack: None,
         temps: &[],
-        table: false,
+        table: true,
         class: "",
         compact: false,
     })
@@ -149,7 +149,7 @@ fn daily_chart(
         mean_line: true,
         future_from: None,
         weekday_labels: false,
-        table: false,
+        table: true,
         class: layout.class,
     })
 }
@@ -274,7 +274,7 @@ mod tests {
                 .collect()
         };
         // Cut-off 70: buckets mid 45/55/65 are below it; 75 is within ten points
-        // of it (borderline); 85 is sure; 95 is very sure.
+        // of it (borderline); 85 is clear of the cut-off; 95 is a high score.
         assert_eq!(
             fills(0.70),
             [

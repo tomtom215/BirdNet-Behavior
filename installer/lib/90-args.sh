@@ -23,6 +23,10 @@ Commands (auto-offered as a menu when an existing install is detected):
   reinstall      Re-download the binary and rewrite the unit/config
                  (your data and the model are preserved).
   uninstall      Remove the software (binary, service, tmpfs unit); keep data.
+  reset-password Give the admin account a new random password, print it, and
+                 restart the station. For a lost password, including one
+                 changed in the browser since install. Keeps every detection,
+                 setting and recording; signs every browser out.
 
 Options:
   -v, --version X.Y.Z   Install a specific release (default: latest stable).
@@ -93,7 +97,7 @@ parse_args() {
                 usage
                 exit 0
                 ;;
-            install | update | repair | reinstall | uninstall)
+            install | update | repair | reinstall | uninstall | reset-password)
                 [ -z "${SUBCOMMAND}" ] || fatal "Specify only one command (got '${SUBCOMMAND}' and '$1')."
                 SUBCOMMAND="$1"
                 shift

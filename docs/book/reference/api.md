@@ -1,6 +1,6 @@
 # HTTP & WebSocket API
 
-Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the nineteen token-gated endpoints — eleven writes and eight reads — under [Changing a station](#changing-a-station).
+Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the twenty-one token-gated endpoints — twelve writes and nine reads — under [Changing a station](#changing-a-station).
 
 > Base URL in the examples is `http://localhost:8502`. Adjust for your host, and remember any [reverse-proxy auth](../admin/remote-access.md) you've added.
 
@@ -214,7 +214,9 @@ curl 'http://localhost:8502/api/v2/detections/recent?limit=2'
 | `GET /api/v2/detections/daily` | `days` — per-day counts over the last N days |
 | `GET /api/v2/detections/export` | `format` (`csv` or `json`, default `csv`), `from`, `to` (inclusive `YYYY-MM-DD`) — the detection history as a download (`detections.csv`); more than 1 000 000 rows is a `413` that asks you to narrow the range |
 | `GET /api/v2/detections/models` | `date`, `time`, `sci_name` (all required) and `file_name` (the detection row's clip; needed only when several detections share the first three) — which classifier supplied the detection's answer (`model_id`), how many classifiers cleared their own bar (`model_agreement`), and every classifier's own answer in `models`: its `state` (`heard`, `below_bar`, `no_label`, `failed`), its `score` and the `bar` it was judged against, and the seconds of the recording it listened to. A classifier with no class for the species has no score (`null`), never `0`. Scores are each classifier's own and are never combined. `404` for a detection that does not exist. Two sources hearing one bird in one second are two detections sharing `date`, `time` and `sci_name`: without `file_name` the request is answered when those name one detection, and refused with `409` and the candidate clips (`file_names`) when they name several. An empty `models` is a detection stored without them (one classifier, a source only one classifier listened to, or a row from before the feature), not one nobody heard |
-| `GET /api/v2/detections/export/model-scores` | `format` (`csv` or `json`, default `csv`), `from`, `to` — the same answers for every detection the station stands behind, one row per detection and classifier (`detection-model-scores.csv`: `Date`, `Time`, `Sci_Name`, `File_Name`, `Model_Id`, `State`, `Score`, `Bar`, `Window_Start_Secs`, `Window_End_Secs`), so it joins to the detections export on the first four; `Score` and `Bar` are empty, not zero, where the classifier did not score |
+| `GET /api/v2/detections/export/model-scores` | `format` (`csv` or `json`, default `csv`), `from`, `to` — the same answers for every detection the station stands behind, one row per detection and classifier (`detection-model-scores.csv`: `Date`, `Time`, `Sci_Name`, `File_Name`, `Model_Id`, `State`, `Score`, `Bar`, `Window_Start_Secs`, `Window_End_Secs`, `Padded_Secs`: how much of the window was zero padding past the recording's end, empty for an answer stored before migration 68), so it joins to the detections export on the first four; `Score` and `Bar` are empty, not zero, where the classifier did not score |
+| `GET /api/v2/detections/export/study` | `from`, `to` (at most 366 days), `tolerance_secs`, `sites` — the study bundle, a deterministic ZIP of every table a methods section needs with a `manifest.json` of SHA-256s; see [Research Use](../guides/research.md#the-study-bundle) |
+| `GET /api/v2/detections/export/search` | the `/search` page's query string — every row that search lists, in the detections CSV's columns (`detections-search.csv`) |
 | `GET /api/v2/detections/export/birddb` | `from`, `to` — BirdNET-Pi's semicolon-separated `BirdDB.txt` (`BirdDB.txt`), the twelve BirdNET-Pi columns and nothing more |
 | `GET /api/v2/detections/export/ebird` | `date`, `lat` with `lon`, `location`, `min_confidence`, `protocol`, `observers`, `state`, `country`, `complete`, `verdict` (`confirmed` for only detections a reviewer confirmed; `any`, the default, for every one not rejected) — eBird Record Format (`ebird_export_….csv`) |
 
@@ -310,6 +312,33 @@ These power the charts on the [Analytics](../guide/analytics.md) and time-series
 | `GET /api/v2/analytics/time/succession?start_date=&end_date=&species=&limit=` | The same species' hourly detections as counts: `[{"scientificName", "commonName", "counts", "total"}]`. Default 6 species, at most 10. |
 
 These `insights`, `dashboard` and `analytics/species` endpoints read SQLite directly, so they answer with the analytics engine off. Their parameters, defaults and field names are birdnet-go's, so a client written for either station reads both. A station whose detections cannot be read answers `500` rather than an empty list.
+
+### Events: one call heard by several sources
+
+Two microphones that hear one call write two detections. An **event** is the detections that are, by one rule, the same call: rows of one species at one site, at most one row per source, every member within `tolerance_secs` of every other. Rows are paired nearest first and never chained, so a chorus does not grow into one long event (A at 0 s, B at 3 s and C at 6 s with a tolerance of 4 s are two events). Equal distances go to the earlier row, by instant and then by the row's id, so the answer does not depend on the order rows were stored in. Events are computed when they are read and never stored, so changing the tolerance or the site map rewrites nothing. **An event is a call, not a bird**: one bird singing for a minute is many events.
+
+Each source is its own site until you say otherwise, so by default nothing is merged. `sites=` is the site map, `source:site` pairs separated by commas (`sites=mic-north:yard,cam-1:yard`). A detection's instant is `detected_at_utc`; a detection without one (its local time named no instant, such as the hour a spring-forward night skips) is in no event and is counted in `rows_without_instant`, not placed from its local time. A detection with no recorded source is an event of its own.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/v2/events?from=&to=&tolerance_secs=&sites=` | The events whose first detection falls in `from` to `to` (UTC dates, at most 7 days), each with its `event_id` (a hash of its members and the rule's version), `site`, `sci_name`, `first_utc`, `last_utc` and `members` (`row_id`, `source`, `instant_utc`, `confidence`), plus `total_events` and `sites`, the events and detections per site |
+| `GET /api/v2/events/daily?from=&to=&tolerance_secs=&sites=` | Events per UTC date, site and species over at most 31 days (`days`: `date`, `site`, `sci_name`, `com_name`, `events`, `rows`). Sites are never pooled |
+| `GET /api/v2/effort/sites?from=&to=&sites=` | Each site's listening per local hour over at most 31 local dates. The effort ledger keeps seconds per source, so a site's listening is reported as bounds: `listened_secs_lower_bound` (its best-covered source) and `listened_secs_upper_bound` (the sum, capped at the hour's real length, `hour_capacity_secs`, which is 7200 s in a repeated fall-back hour). `sensor_secs` and `sensor_hours`, the sum over sources, are a per-sensor denominator and not the site's listening. `listened_day_rule` names the one listened-day rule (`half-of-typical-day`) |
+
+`tolerance_secs` defaults to 4, BirdNET V2.4's 3-second window plus one second, and takes 0 to 600. Every event response states what it counted with: `policy.version`, `policy.tolerance_secs`, `policy.site_map` (every source seen, with the site applied) and `rows_without_instant`. `range.edges_settled` is `false` only when detections were still within the tolerance of the edge of a read widened by a day each side, in which case an event at the very edge of the range may pair differently in a wider read. A failed read is a `500`, never zero events; a missing or out-of-range parameter is a `400`.
+
+#### Rates, comparisons and chance levels
+
+These count events, state the rule they used under `policy`, and are exploratory: a rate of acoustic events is not a count of birds, and two species heard together are not shown to interact. Each takes `sites`, `tolerance_secs`, `source` (one source's detections and listening), `min_confidence` (a classifier score from 0 to 1, not a probability) and, where it makes sense, `species` (a scientific name).
+
+| Route | What it returns |
+|---|---|
+| `GET /api/v2/analytics/rates?from=&to=&bin=` | Events per hour of each site's listening, per site, species and bin (`day`, `week` from Monday, or `hour_of_day`), over at most 400 local dates. The denominator is the site's listening as bounds, so a rate is `rate_low` (events over the upper bound) to `rate_high` (over the lower), and a quieter microphone added to a site does not lower it; `ci_lower` and `ci_upper` are the exact Poisson interval over the bounds. A bin with no listening is `status: "no_effort"` with no rate, which is not a rate of 0; events in an hour with no ledger row are `events_outside_listening` and not counted |
+| `GET /api/v2/analytics/rates/compare?days=&end=` | The last `days` complete days (ending `end`, yesterday by default) against the `days` before, per site and per species: a rate ratio with a 95 % interval, and a `direction` that is `busier` or `quieter` only when the interval excludes no change |
+| `GET /api/v2/analytics/sunrise-relative?from=&to=&bin_minutes=` | Each site and species' events by minutes from the sunrise of its own day, from four hours before to eight after. A `409` without station coordinates: there is no clock-hour stand-in |
+| `GET /api/v2/analytics/cooccurrence?days=&limit=&min_shared=&seed=` | Pairs heard in one five-minute block at one site, each with its chance level (`expected_shared`, `chance_overlap`, `lift`) from shifting one species' days within 28-day strata, a permutation `p_value` from the recorded `seed`, a Benjamini–Hochberg `q_value`, and a `verdict`: `stands_out`, `within_chance`, or `too_little_data` |
+
+`analytics/abundance`, `analytics/phenology` and `analytics/retention` also take `source` and `min_confidence`, and their responses now carry `rows`: they count detection rows, not events, and pool every source unless `source` is given.
 
 ### Diagnosing empty analytics dashboards
 
@@ -441,27 +470,51 @@ of audio the detection pipeline analysed and the seconds the source's capture wa
 the upgrade that added this ledger on. `GET /api/v2/detections/export/history?sci_name=&from=&to=&grain=hour|day&min_seconds=`
 is one species' detection history, as `detection-history.csv`, one row per hour or
 day (`Date`, `Hour`, `Seconds_Analysed`, `Detections`, `Detected`). `Detected` is `1`
-when the species was detected, `0` when the station listened and did not detect it,
-and `NA` when no single source analysed at least `min_seconds` of the occasion (by
-default half of it). An hour or a day without effort is `NA`, not `0`. Hours before
+when a source that analysed at least `min_seconds` of the occasion (by default half
+of it) detected the species, `0` when one did and none of those detected it, and
+`NA` when no single source analysed that much. Each source is its own site: a
+detection by a microphone that listened ten seconds does not make a day another
+microphone surveyed a `1`, though `Detections` still counts it. A detection with no
+recorded source (imported history) counts as one on a surveyed source. Add
+`&source=` for one source's history. An hour or a day without effort is `NA`, not `0`. Hours before
 the hourly ledger existed are `NA`. Days read the daily ledger, which counted capture
 uptime until that upgrade. Both take a range of at most 366 days, and read the reviewed set.
 
+The same ledger by UTC hour: `GET /api/v2/effort/export/utc?from=&to=` (UTC dates) is
+`effort-by-utc-hour.csv`, with `Hour_Start_UTC`, `Source`, `Seconds_Analysed`,
+`Seconds_Up` and the time up split by what the system said of its clock while it was
+(`Seconds_Up_Clock_Synced`, `Seconds_Up_Clock_Unsynced`, `Seconds_Up_Clock_Unknown`).
+Keyed on UTC, the repeated autumn hour is two rows, where the local ledger has one.
+It starts at the upgrade that added it; nothing earlier is inferred into it.
+
+The detections export (`/api/v2/detections/export`) ends with four columns that say
+where, with what and under which clock a row was recorded: `Station_Id` (the station's
+UUID), `Deployment_Id` (the deployment an operator stated for the row's source, in force
+at its instant; empty when none was stated), `Source_Device` (which of that source's
+devices it was, from 1; re-adding the same device keeps its number, editing a URL to
+another camera starts a new one) and `Clock_State` (`synced`, `unsynced`, `unknown` or
+`unset`: what the system said of its clock when the row was stamped; `unknown` before
+the station kept that record). All four are empty on an imported row. A detection
+stamped under `unsynced` or `unknown` may be hours or days off on a station without a
+battery-backed clock and without network time.
+
 ## Changing a station
 
-Ten method-and-path pairs, and they are the only ones in `/api/v2` that change
+Twelve method-and-path pairs, and they are the only ones in `/api/v2` that change
 anything.
 They exist so Home Assistant, Node-RED or a shell script can *act* on a station
 rather than only read it — before them, every state change in the product was an
 HTMX form post returning HTML, which is not a contract anyone can build on.
 
-Eight *reads* live behind the same token, because what they return is not public:
+Nine *reads* live behind the same token, because what they return is not public:
 `GET /api/v2/settings` (the configuration, credentials taken out),
 `GET /api/v2/system/capture` and `GET /api/v2/system/jobs` (operational detail
 about the station and its sources), `GET /api/v2/system/network` and
 `GET /api/v2/system/processes` (the network it sits on, and what it is running),
 `GET /api/v2/system/database/overview` (where its database is and what is in
-it), `GET /api/v2/models/catalog`, and `GET /api/v2/detections/comments`.
+it), `GET /api/v2/models/catalog`, `GET /api/v2/detections/comments`, and
+`GET /api/v2/station/record` (the station's id, its deployments with their
+coordinates, each source's devices, and its clock record).
 
 ### Turning them on
 
@@ -472,7 +525,7 @@ environment and restart:
 openssl rand -base64 48
 ```
 
-Until you do, all nineteen answer `404`: the write surface does not exist rather
+Until you do, all twenty-one answer `404`: the write surface does not exist rather
 than existing unprotected. Note this is the opposite default from `CADDY_PWD`,
 where an unset password leaves `/admin` *open* — an unset token leaves the write
 API *closed*. A token shorter than 32 bytes is refused and leaves the API off,

@@ -13,6 +13,18 @@
 //!   axis starts at zero.
 //!
 //! A day the station was not listening is hatched (see `pages::listening`).
+//!
+//! # The usual range (CHT-06)
+//!
+//! "Was today unusual?" needs a picture of usual, on the chart and not in a table two folds
+//! away. The detections chart can draw a band behind the days: for each day, the 10th to
+//! 90th percentile (nearest rank) of the [`RANGE_WINDOW`] listened days before it, from
+//! [`expected_ranges`]; a day outside it is marked and its readout says which side. It is a
+//! percentile band and not mean ± z·sd because daily counts are overdispersed: a z-score
+//! over-flags a busy season. It is descriptive, not a confidence interval, and the chart says
+//! so: about one ordinary day in five falls outside it by chance, and neighbouring days are
+//! not independent (a run of days outside it is one event, not several). A day with fewer
+//! than [`RANGE_MIN_DAYS`] listened days before it has no band: too few to say.
 #![allow(
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
@@ -52,6 +64,66 @@ pub struct TrendOpts<'a> {
     pub prior: &'a [TrendPoint],
     /// Whether the station was listening each day; `None` claims nothing.
     pub listened: Option<&'a [bool]>,
+    /// The usual range of each day, from [`expected_ranges`]; `None` draws no band.
+    pub expected: Option<&'a [Option<(f64, f64)>]>,
+}
+
+/// How many listened days before a day its usual range is made of.
+pub const RANGE_WINDOW: usize = 30;
+
+/// Fewer listened days than this before a day and it has no usual range: too few to say.
+pub const RANGE_MIN_DAYS: usize = 14;
+
+/// The usual range of each day of `values` from index `from` on: the 10th and 90th
+/// percentile (nearest rank) of the last [`RANGE_WINDOW`] listened days strictly before it.
+///
+/// `listened` says which days count (`None`: all of them). A day that was not listened to
+/// has no range, and is not part of any other day's; a day with fewer than
+/// [`RANGE_MIN_DAYS`] listened days before it has none either.
+#[must_use]
+pub fn expected_ranges(
+    values: &[f64],
+    listened: Option<&[bool]>,
+    from: usize,
+) -> Vec<Option<(f64, f64)>> {
+    let on = |i: usize| listened.is_none_or(|l| l.get(i).copied().unwrap_or(false));
+    (from..values.len())
+        .map(|i| {
+            if !on(i) {
+                return None;
+            }
+            let mut window: Vec<f64> = (0..i)
+                .rev()
+                .filter(|&j| on(j) && values[j].is_finite())
+                .take(RANGE_WINDOW)
+                .map(|j| values[j])
+                .collect();
+            if window.len() < RANGE_MIN_DAYS {
+                return None;
+            }
+            window.sort_by(f64::total_cmp);
+            Some((nearest_rank(&window, 0.10), nearest_rank(&window, 0.90)))
+        })
+        .collect()
+}
+
+/// The `q` quantile of a sorted sample by nearest rank: the `ceil(q n)`-th value.
+fn nearest_rank(sorted: &[f64], q: f64) -> f64 {
+    let n = sorted.len();
+    let k = ((q * n as f64).ceil() as usize).clamp(1, n);
+    sorted[k - 1]
+}
+
+/// Which side of its usual range a day's value is on, if it is outside it.
+fn outside(value: f64, range: Option<(f64, f64)>) -> Option<&'static str> {
+    let (lo, hi) = range?;
+    if value > hi {
+        Some("Above")
+    } else if value < lo {
+        Some("Below")
+    } else {
+        None
+    }
 }
 
 fn fmt(v: f64) -> String {
@@ -101,6 +173,7 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
                 .iter()
                 .flat_map(|p| [p.value, p.smooth.unwrap_or(0.0)]),
         )
+        .chain(o.expected.into_iter().flatten().flatten().map(|r| r.1))
         .filter(|v| v.is_finite())
         .fold(0.0_f64, f64::max);
     let top = kit::count_ceiling(top_data);
@@ -135,25 +208,49 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     }
     let label_of =
         |iso: &str| kit::civil_label(iso, 0).unwrap_or_else(|| (iso.to_string(), iso.to_string()));
+    let expected_at = |i: usize| -> Option<(f64, f64)> {
+        if off(i) {
+            return None;
+        }
+        o.expected.and_then(|e| e.get(i).copied().flatten())
+    };
+    let has_band = (0..n).any(|i| expected_at(i).is_some());
     let cols: Vec<Col> = points
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            let mut values = vec![if off(i) { None } else { Some(p.value) }];
+            // A value that is not a number is "too few to say" (a day too quiet to be read at
+            // the chart's common depth, CHT-07): no value in the readout, a gap in the line.
+            let mut values = vec![if off(i) || !p.value.is_finite() {
+                None
+            } else {
+                Some(p.value)
+            }];
             if o.bars && !o.smooth_name.is_empty() {
                 values.push(p.smooth);
             }
             if has_prior {
                 values.push(prior_at(i).and_then(line_of));
             }
+            let range = expected_at(i);
+            let note = if off(i) {
+                Some("The station was not listening".to_string())
+            } else if !p.value.is_finite() {
+                Some("Too few detections to say".to_string())
+            } else {
+                let side = outside(p.value, range).zip(range).map(|(side, (lo, hi))| {
+                    format!("{side} the usual range ({} to {})", fmt(lo), fmt(hi))
+                });
+                let before = prior_at(i).map(|q| format!("Compared with {}", label_of(&q.date).1));
+                match (side, before) {
+                    (Some(a), Some(b)) => Some(format!("{a}. {b}")),
+                    (a, b) => a.or(b),
+                }
+            };
             Col {
                 label: label_of(&p.date).1,
                 values,
-                note: if off(i) {
-                    Some("The station was not listening".to_string())
-                } else {
-                    prior_at(i).map(|q| format!("Compared with {}", label_of(&q.date).1))
-                },
+                note,
             }
         })
         .collect();
@@ -246,6 +343,24 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
         );
     }
 
+    // The usual range, behind the days: one band per run of days that have one.
+    if has_band {
+        let mut run: Vec<(f64, f64, f64)> = Vec::new();
+        let flush = |run: &mut Vec<(f64, f64, f64)>, svg: &mut String| {
+            if !run.is_empty() {
+                svg.push_str(&super::uncertainty::band(run, slot / 2.0));
+                run.clear();
+            }
+        };
+        for i in 0..n {
+            match expected_at(i) {
+                Some((lo, hi)) => run.push((x_at(i), y.at(lo), y.at(hi))),
+                None => flush(&mut run, &mut svg),
+            }
+        }
+        flush(&mut run, &mut svg);
+    }
+
     // The days themselves, thin and neutral, when there is a smoothed line over them.
     if o.bars {
         let bw = (slot * 0.5).clamp(2.0, 14.0);
@@ -311,6 +426,22 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
                 r#"<circle class="ck-ring ck-cink ck-fadein" cx="{:.1}" cy="{:.1}" r="3"/>"#,
                 x_at(i),
                 y.at(p.value)
+            );
+        }
+    }
+
+    // A day outside its usual range: a small open diamond at its value, over everything but
+    // the names of the extremes. What it says is in the readout ("Above the usual range").
+    for (i, p) in points.iter().enumerate() {
+        if outside(p.value, expected_at(i)).is_some() {
+            let (cx, cy) = (x_at(i), y.at(p.value));
+            let _ = write!(
+                svg,
+                r#"<path class="ck-out" d="M{cx:.1},{t:.1} L{r:.1},{cy:.1} L{cx:.1},{b:.1} L{l:.1},{cy:.1} Z"/>"#,
+                t = cy - 4.5,
+                b = cy + 4.5,
+                r = cx + 4.5,
+                l = cx - 4.5,
             );
         }
     }
@@ -413,25 +544,47 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
     if has_prior {
         svg.push_str(r#"<span class="bnb-meta"><i class="ck-keyline ck-keyghost"></i> The period before</span>"#);
     }
+    if has_band {
+        svg.push_str(r#"<span class="bnb-meta"><i class="ck-keyband" aria-hidden="true"></i> Usual range</span><span class="bnb-meta"><i class="ck-keyout" aria-hidden="true"></i> Outside it</span>"#);
+    }
     if (0..n).any(off) {
         svg.push_str(r#"<span class="bnb-meta"><i class="ck-off" aria-hidden="true"></i> Not listening</span>"#);
     }
     svg.push_str("</div>");
+    if has_band {
+        let flagged = (0..n)
+            .filter(|&i| outside(points[i].value, expected_at(i)).is_some())
+            .count();
+        let judged = (0..n).filter(|&i| expected_at(i).is_some()).count();
+        let _ = write!(
+            svg,
+            r#"<p class="bnb-meta ck-method">Usual range: the middle 80% (10th to 90th percentile) of the {RANGE_WINDOW} listened days before each day; a day with fewer than {RANGE_MIN_DAYS} before it has none. {flagged} of {judged} days fall outside it. It describes ordinary variation and is not a confidence interval: about one ordinary day in five falls outside it by chance, and neighbouring days are not independent, so a run of days outside it is one event, not several.</p>"#,
+        );
+    }
     // Click-free text equivalent of the picture.
-    let first = points.first().map_or(0.0, |p| p.value);
-    let last = points.last().map_or(0.0, |p| p.value);
+    let mut read = points
+        .iter()
+        .enumerate()
+        .filter(|(i, p)| !off(*i) && p.value.is_finite());
+    let first = read.clone().next().map(|(_, p)| p);
+    let last = read.next_back().map(|(_, p)| p);
     let _ = write!(
         svg,
         r#"<p class="sr-only viz-readout">{}</p></div>"#,
-        escape_html(&format!(
-            "{} {} per day over {n} days, from {} on {} to {} on {}.",
-            capitalise(o.unit),
-            "",
-            fmt(first),
-            label_of(&points[0].date).1,
-            fmt(last),
-            label_of(&points[n - 1].date).1
-        )),
+        escape_html(&match (first, last) {
+            (Some(f), Some(l)) => format!(
+                "{} per day over {n} days, from {} on {} to {} on {}.",
+                capitalise(o.unit),
+                fmt(f.value),
+                label_of(&f.date).1,
+                fmt(l.value),
+                label_of(&l.date).1
+            ),
+            _ => format!(
+                "{} per day over {n} days: no day to read.",
+                capitalise(o.unit)
+            ),
+        }),
     );
     svg
 }
@@ -481,6 +634,7 @@ mod tests {
             bars,
             prior,
             listened: None,
+            expected: None,
         }
     }
 
@@ -621,5 +775,111 @@ mod tests {
         assert!(!svg.contains("NaN") && !svg.contains("inf"), "{svg}");
         let tiny = trend_chart(&trend(&[0.0, 0.0, 1.0]), &opts(&[], true));
         assert!(tiny.contains(">1<") && tiny.contains(">0<"), "{tiny}");
+    }
+
+    // -----------------------------------------------------------------------
+    // CHT-06: the usual range, on the chart it is about
+    // -----------------------------------------------------------------------
+
+    /// A steady station: Poisson-like days around 30 (a fixed linear congruential sequence, so
+    /// the test is the same every run), 120 of them, every one listened to.
+    fn steady(n: usize) -> Vec<f64> {
+        let mut state: u64 = 0x2545_f491_4f6c_dd1d;
+        (0..n)
+            .map(|_| {
+                // Sum of 30 coin flips weighted to a mean of 30: variance near the mean, as a
+                // count's is.
+                let mut v = 0.0;
+                for _ in 0..60 {
+                    state = state
+                        .wrapping_mul(6_364_136_223_846_793_005)
+                        .wrapping_add(1_442_695_040_888_963_407);
+                    if (state >> 33).is_multiple_of(2) {
+                        v += 1.0;
+                    }
+                }
+                v
+            })
+            .collect()
+    }
+
+    /// CHT-06. On a steady station the band is the middle 80 % of the 30 listened days before
+    /// each day, so about one day in five falls outside it by chance, and no more: the share
+    /// flagged stays under a quarter. A planted day at five times the usual is flagged.
+    #[test]
+    fn a_steady_station_flags_about_its_nominal_share_and_a_planted_day_is_flagged() {
+        let mut v = steady(120);
+        v[100] = 150.0;
+        let ranges = expected_ranges(&v, None, 0);
+        assert_eq!(ranges.len(), 120);
+        assert!(
+            ranges[..RANGE_MIN_DAYS].iter().all(Option::is_none),
+            "too few days before them to say"
+        );
+        assert!(ranges[RANGE_MIN_DAYS].is_some(), "and enough from then on");
+        let judged: Vec<(f64, (f64, f64))> = v
+            .iter()
+            .zip(&ranges)
+            .filter_map(|(x, r)| r.map(|r| (*x, r)))
+            .collect();
+        let outside = judged
+            .iter()
+            .filter(|(x, (lo, hi))| x < lo || x > hi)
+            .count();
+        let share = outside as f64 / judged.len() as f64;
+        assert!(share <= 0.25, "{outside} of {} days flagged", judged.len());
+        assert!(
+            share >= 0.05,
+            "a band that never misses is too wide: {share}"
+        );
+        let (lo, hi) = ranges[100].expect("a range");
+        assert!(150.0 > hi && lo > 15.0, "{lo}..{hi}");
+    }
+
+    /// A day the station was off is not part of anyone's usual range: the window reaches back
+    /// past an outage for its 30 listened days, and an off day gets no range of its own.
+    #[test]
+    fn the_usual_range_is_made_of_listened_days_only() {
+        let mut v = vec![30.0; 80];
+        let mut listened = vec![true; 80];
+        for i in 40..60 {
+            v[i] = 0.0;
+            listened[i] = false;
+        }
+        let ranges = expected_ranges(&v, Some(&listened), 0);
+        assert_eq!(ranges[50], None, "an off day has no range");
+        assert_eq!(ranges[60], Some((30.0, 30.0)), "the zeros are not in it");
+        // `from` keeps only the days shown.
+        assert_eq!(expected_ranges(&v, Some(&listened), 50).len(), 30);
+    }
+
+    /// The band is drawn behind the days, a day outside it is marked and says which side, the
+    /// key names the band, and the method is printed with its caveat. Without ranges there is
+    /// none of it (counterpart).
+    #[test]
+    fn the_band_and_the_days_outside_it_are_drawn_and_named() {
+        let pts = trend(&[30.0, 31.0, 29.0, 90.0, 30.0]);
+        let ranges = [
+            None,
+            Some((25.0, 35.0)),
+            Some((25.0, 35.0)),
+            Some((25.0, 35.0)),
+            Some((25.0, 35.0)),
+        ];
+        let mut o = opts(&[], true);
+        o.expected = Some(&ranges);
+        let svg = trend_chart(&pts, &o);
+        assert_eq!(svg.matches(r#"<path class="ck-band""#).count(), 1, "{svg}");
+        assert_eq!(
+            svg.matches(r#"class="ck-out"#).count(),
+            1,
+            "one day outside"
+        );
+        assert!(svg.contains("Above the usual range (25 to 35)"), "{svg}");
+        assert!(svg.contains("Usual range"));
+        assert!(svg.contains("not a confidence interval"));
+        let plain = trend_chart(&pts, &opts(&[], true));
+        assert!(!plain.contains("ck-band") && !plain.contains("ck-out"));
+        assert!(!plain.contains("Usual range"));
     }
 }

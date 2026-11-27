@@ -89,6 +89,7 @@ fn store_for(
                 bar: own_bar,
                 window_start_secs: Some(0.0),
                 window_end_secs: Some(3.0),
+                padded_secs: Some(0.0),
             },
         )
         .expect("store score");

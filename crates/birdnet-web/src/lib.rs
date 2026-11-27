@@ -15,6 +15,7 @@ pub mod db_pool;
 pub mod diagnostics;
 pub mod display;
 pub mod embed;
+pub mod live_audio;
 pub mod live_sockets;
 pub mod login_throttle;
 pub mod metrics;

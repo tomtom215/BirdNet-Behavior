@@ -333,6 +333,9 @@ drop_legacy_names() {
 acquire_classifier_models() {
     if [ "${BIRDNET_SKIP_MODEL_DOWNLOAD:-}" = "1" ]; then
         log "BIRDNET_SKIP_MODEL_DOWNLOAD=1 — skipping the model install."
+        # MDL-27: the station itself fetches a configured catalogue file that is
+        # missing (at start, then hourly), so say so rather than imply it never will.
+        log "The station fetches missing model files itself once it starts; set BIRDNET_OFFLINE=1 to stop it fetching anything on its own (BIRDNET_MODEL_MIRROR is still used)."
         [ -f "${BIRDNET_MODEL}"  ] || warn "Model not found at ${BIRDNET_MODEL}"
         [ -f "${BIRDNET_LABELS}" ] || warn "Labels not found at ${BIRDNET_LABELS}"
         return 0

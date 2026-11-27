@@ -26,6 +26,52 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/recordings", get(list_recordings))
         .route("/recordings/{filename}", get(serve_recording))
+        .route("/recordings/verify/{detection_uuid}", get(verify_recording))
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/v2/recordings/verify/{detection_uuid}
+// ---------------------------------------------------------------------------
+
+/// Whether the clip of the detection `detection_uuid` names is still the clip
+/// that was written (RES-23): its SHA-256 and length now against those
+/// recorded when it was written.
+///
+/// Answers `{"detection_uuid", "file_name", "recorded", "verification"}`, where
+/// `recorded` is the checksum and length written with the clip (`null`:
+/// unknown) and `verification.state` is `verified`, `altered` (with what was `found`), `missing`,
+/// `pruned`, `unrecorded` (no checksum was recorded, so it is unknown),
+/// `no_clip` or `unreadable`; `404` when no detection has that identifier.
+/// Under `/recordings` so it has the clips' own access rule.
+pub(crate) async fn verify_recording(
+    State(state): State<AppState>,
+    Path(detection_uuid): Path<String>,
+) -> Response {
+    let found = state
+        .run_blocking(move |state| {
+            let record = state
+                .with_read_db(|conn| birdnet_db::sqlite::clip_record(conn, &detection_uuid))?;
+            Ok::<_, birdnet_db::sqlite::DbError>(record.map(|r| {
+                let verdict = birdnet_db::sqlite::verify_clip(&r, &state.recording_dir());
+                (r, verdict)
+            }))
+        })
+        .await;
+    match found {
+        Ok(Some((record, verdict))) => Json(serde_json::json!({
+            "detection_uuid": record.detection_uuid,
+            "file_name": record.file_name,
+            "recorded": record.recorded,
+            "verification": verdict,
+        }))
+        .into_response(),
+        Ok(None) => (StatusCode::NOT_FOUND, "no detection has that identifier").into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            crate::routes::log_internal("internal error", &e),
+        )
+            .into_response(),
+    }
 }
 
 // ---------------------------------------------------------------------------

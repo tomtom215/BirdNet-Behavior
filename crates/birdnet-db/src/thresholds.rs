@@ -79,10 +79,13 @@ impl ThresholdSuggestion {
 
 /// Fewest verdicts before a suggestion is offered at all.
 ///
-/// Five is not a statistical claim; it is the point below which the suggestion
-/// would be visibly arbitrary to the operator reading it. The real guard is
-/// [`MIN_PER_CLASS`].
-pub const MIN_VERDICTS: usize = 5;
+/// Twenty is not a statistical claim either (ACC-08): at five, a cut-off fitted
+/// to three confirmations and two rejections was one click from silencing a
+/// species. The suggestion is still fitted to whatever was reviewed, which is
+/// not a random sample, and can never fall below the threshold the rows were
+/// recorded at, because nothing below it was stored; a validation sample
+/// (`sqlite::queries::validation`) is the instrument for an estimate.
+pub const MIN_VERDICTS: usize = 20;
 
 /// Fewest of *each* verdict before a suggestion is offered.
 ///
@@ -91,7 +94,7 @@ pub const MIN_VERDICTS: usize = 5;
 /// everything". Neither is a threshold; both are what a one-sided review
 /// history looks like, and it is the common case early on — an operator
 /// confirms the interesting birds and never touches the rest.
-pub const MIN_PER_CLASS: usize = 2;
+pub const MIN_PER_CLASS: usize = 5;
 
 /// Suggest a threshold for one species, or `None` if the evidence is too thin.
 ///
@@ -184,16 +187,16 @@ mod tests {
         // that separates them perfectly is the lowest confirmed confidence:
         // any higher would start discarding confirmations for nothing.
         let r = reviews(&[
-            many(3, 0.60, false),
-            many(2, 0.70, false),
-            many(3, 0.85, true),
-            many(2, 0.95, true),
+            many(6, 0.60, false),
+            many(4, 0.70, false),
+            many(6, 0.85, true),
+            many(4, 0.95, true),
         ]);
         let s = suggest_threshold(&r).expect("a suggestion");
         assert!((s.threshold - 0.85).abs() < f64::EPSILON, "{}", s.threshold);
-        assert_eq!(s.confirmed_kept, 5);
+        assert_eq!(s.confirmed_kept, 10);
         assert_eq!(s.confirmed_lost, 0);
-        assert_eq!(s.rejected_caught, 5);
+        assert_eq!(s.rejected_caught, 10);
         assert_eq!(s.rejected_kept, 0);
         assert!(
             (s.youden_j() - 1.0).abs() < f64::EPSILON,
@@ -207,11 +210,11 @@ mod tests {
         // here would make the suggestion disagree with the gate it exists to
         // configure — the operator would apply 0.85, and the 0.85 detections
         // the suggestion counted as kept would be quarantined.
-        let r = reviews(&[many(3, 0.5, false), many(3, 0.85, true)]);
+        let r = reviews(&[many(10, 0.5, false), many(10, 0.85, true)]);
         let s = suggest_threshold(&r).expect("a suggestion");
         assert!((s.threshold - 0.85).abs() < f64::EPSILON);
         assert_eq!(
-            s.confirmed_kept, 3,
+            s.confirmed_kept, 10,
             "detections at exactly the threshold were counted as lost"
         );
     }
@@ -222,7 +225,7 @@ mod tests {
         // (0.5, 0.9] separates perfectly; suggesting 0.9 rather than the
         // lowest such value would needlessly discard any future detection
         // between them.
-        let r = reviews(&[many(3, 0.50, false), many(3, 0.90, true)]);
+        let r = reviews(&[many(10, 0.50, false), many(10, 0.90, true)]);
         let s = suggest_threshold(&r).expect("a suggestion");
         assert!(
             (s.threshold - 0.90).abs() < f64::EPSILON,
@@ -234,13 +237,13 @@ mod tests {
     #[test]
     fn an_overlapping_distribution_trades_the_two_errors() {
         // The realistic case: the classes overlap, so no threshold is perfect
-        // and the answer is a trade. Six rejections at 0.6/0.8, six
+        // and the answer is a trade. Twelve rejections at 0.6/0.8, twelve
         // confirmations at 0.7/0.9.
         let r = reviews(&[
-            many(3, 0.60, false),
-            many(3, 0.80, false),
-            many(3, 0.70, true),
-            many(3, 0.90, true),
+            many(6, 0.60, false),
+            many(6, 0.80, false),
+            many(6, 0.70, true),
+            many(6, 0.90, true),
         ]);
         let s = suggest_threshold(&r).expect("a suggestion");
         // J at 0.70: sens 6/6=1.0, spec 3/6=0.5 → 0.5
@@ -256,25 +259,45 @@ mod tests {
         // The four counts are what the operator decides on. A miscount would
         // make the suggestion look better or worse than it is.
         let r = reviews(&[
-            many(4, 0.60, false),
-            many(2, 0.95, false),
-            many(5, 0.90, true),
-            many(1, 0.40, true),
+            many(8, 0.60, false),
+            many(4, 0.95, false),
+            many(10, 0.90, true),
+            many(2, 0.40, true),
         ]);
         let s = suggest_threshold(&r).expect("a suggestion");
         assert_eq!(
             s.confirmed_kept + s.confirmed_lost + s.rejected_caught + s.rejected_kept,
-            12
+            24
         );
-        assert_eq!(s.confirmed_kept + s.confirmed_lost, 6, "confirmations");
-        assert_eq!(s.rejected_caught + s.rejected_kept, 6, "rejections");
+        assert_eq!(s.confirmed_kept + s.confirmed_lost, 12, "confirmations");
+        assert_eq!(s.rejected_caught + s.rejected_kept, 12, "rejections");
     }
 
     // ── when not to suggest ─────────────────────────────────────────────
 
+    /// ACC-08: five verdicts, three and two, are not enough to fit a cut-off
+    /// that can silence a species, and nineteen are not either.
+    #[test]
+    fn three_and_two_verdicts_suggest_nothing() {
+        let r = reviews(&[many(3, 0.5, false), many(2, 0.9, true)]);
+        assert_eq!(suggest_threshold(&r), None, "5 verdicts fitted a threshold");
+        let r = reviews(&[many(9, 0.5, false), many(10, 0.9, true)]);
+        assert_eq!(
+            suggest_threshold(&r),
+            None,
+            "19 verdicts fitted a threshold"
+        );
+        let r = reviews(&[many(16, 0.9, true), many(4, 0.5, false)]);
+        assert_eq!(
+            suggest_threshold(&r),
+            None,
+            "4 rejections fitted a threshold"
+        );
+    }
+
     #[test]
     fn too_few_verdicts_produces_no_suggestion() {
-        let r = reviews(&[many(2, 0.5, false), many(2, 0.9, true)]);
+        let r = reviews(&[many(9, 0.5, false), many(10, 0.9, true)]);
         assert_eq!(r.len(), MIN_VERDICTS - 1);
         assert_eq!(suggest_threshold(&r), None);
     }
@@ -284,9 +307,9 @@ mod tests {
         // Counterpart, with the literal count rather than the constant: a test
         // written as `MIN_VERDICTS` on both sides moves with any mutation of
         // it and can never fail.
-        assert_eq!(MIN_VERDICTS, 5, "the counts below assume this minimum");
-        let r = reviews(&[many(3, 0.5, false), many(2, 0.9, true)]);
-        assert_eq!(r.len(), 5);
+        assert_eq!(MIN_VERDICTS, 20, "the counts below assume this minimum");
+        let r = reviews(&[many(10, 0.5, false), many(10, 0.9, true)]);
+        assert_eq!(r.len(), 20);
         assert!(suggest_threshold(&r).is_some());
     }
 
@@ -300,10 +323,10 @@ mod tests {
         assert_eq!(suggest_threshold(&many(20, 0.5, false)), None);
 
         // One of a class is still not enough.
-        assert_eq!(MIN_PER_CLASS, 2, "the counts below assume this minimum");
-        let barely = reviews(&[many(9, 0.9, true), many(1, 0.5, false)]);
+        assert_eq!(MIN_PER_CLASS, 5, "the counts below assume this minimum");
+        let barely = reviews(&[many(20, 0.9, true), many(4, 0.5, false)]);
         assert_eq!(suggest_threshold(&barely), None);
-        let enough = reviews(&[many(9, 0.9, true), many(2, 0.5, false)]);
+        let enough = reviews(&[many(20, 0.9, true), many(5, 0.5, false)]);
         assert!(suggest_threshold(&enough).is_some());
     }
 
@@ -315,10 +338,10 @@ mod tests {
         // same way, so the suggestion is worthless and must say so rather than
         // presenting a number as if it separated something.
         let r = reviews(&[
-            many(3, 0.6, false),
-            many(3, 0.9, false),
-            many(3, 0.6, true),
-            many(3, 0.9, true),
+            many(5, 0.6, false),
+            many(5, 0.9, false),
+            many(5, 0.6, true),
+            many(5, 0.9, true),
         ]);
         let s = suggest_threshold(&r).expect("a suggestion");
         assert!(s.youden_j().abs() < 1e-9, "J was {}", s.youden_j());
@@ -328,7 +351,7 @@ mod tests {
     fn youden_j_is_one_for_a_perfect_split() {
         // Counterpart to the gate above: a J that was always zero would pass
         // it, and the UI could never tell a good suggestion from a useless one.
-        let r = reviews(&[many(3, 0.5, false), many(3, 0.9, true)]);
+        let r = reviews(&[many(10, 0.5, false), many(10, 0.9, true)]);
         assert!((suggest_threshold(&r).unwrap().youden_j() - 1.0).abs() < f64::EPSILON);
     }
 

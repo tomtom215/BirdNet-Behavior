@@ -4,7 +4,7 @@
     "title": "BirdNet-Behavior HTTP API",
     "version": "0.19.0",
     "summary": "JSON API for a BirdNet-Behavior acoustic monitoring station: open read-only endpoints, plus a small token-authenticated write surface.",
-    "description": "Everything the dashboard shows is backed by this versioned API under `/api/v2`. Almost every endpoint is a read-only `GET`; the exceptions are the nineteen bearer-token endpoints (eleven writes and eight reads whose contents are not public), each marked `bearerAuth` below.\n\n**Authentication.** The read-only endpoints, the WebSocket stream and the health check are intentionally open to anyone who can reach the port — restrict them at the network layer (VPN / reverse-proxy allow-list) if that matters. This is by design, not a bug.\n\nThe **bearer-token** endpoints are different: each requires `Authorization: Bearer <token>`, where the token is the station's `BNB_API_TOKEN`. A station that has not been given one answers `404` on every one of them — the write surface does not exist until an operator enables it, and it is never covered by the `/admin` password's open-when-unset behaviour. Generate a token with `openssl rand -base64 48`; anything shorter than 32 bytes is refused and leaves the write surface off.\n\n**Not described here.** The live audio stream at `/stream`, RSS/iCal feeds under `/feeds/*`, and per-detection public share pages under `/r/{token}` are part of the surface but are not under `/api/v2`; see the project docs. Every route served under `/api/v2` is described, and a test fails when one is added without being added here. The two live WebSockets (`/ws/detections`, `/ws/spectrogram`) are described with the status that upgrades them, `101`; the messages they then carry are in that response.\n\n**Analytics.** The `/analytics/*` and `/timeseries/*` families are powered by the bundled DuckDB engine, which is on by default. When it is disabled (or not compiled in), those endpoints answer `200` with a body of `{\"status\":\"unavailable\",...}` rather than failing.\n\n**Base URL.** A `GET` to the API root (`/api/v2`, no trailing slash) returns the API name, version and status.",
+    "description": "Everything the dashboard shows is backed by this versioned API under `/api/v2`. Almost every endpoint is a read-only `GET`; the exceptions are the twenty-one bearer-token endpoints (twelve writes and nine reads whose contents are not public), each marked `bearerAuth` below.\n\n**Authentication.** The read-only endpoints, the WebSocket stream and the health check are intentionally open to anyone who can reach the port — restrict them at the network layer (VPN / reverse-proxy allow-list) if that matters. This is by design, not a bug.\n\nThe **bearer-token** endpoints are different: each requires `Authorization: Bearer <token>`, where the token is the station's `BNB_API_TOKEN`. A station that has not been given one answers `404` on every one of them — the write surface does not exist until an operator enables it, and it is never covered by the `/admin` password's open-when-unset behaviour. Generate a token with `openssl rand -base64 48`; anything shorter than 32 bytes is refused and leaves the write surface off.\n\n**Not described here.** The live audio stream at `/stream`, RSS/iCal feeds under `/feeds/*`, and per-detection public share pages under `/r/{token}` are part of the surface but are not under `/api/v2`; see the project docs. Every route served under `/api/v2` is described, and a test fails when one is added without being added here. The two live WebSockets (`/ws/detections`, `/ws/spectrogram`) are described with the status that upgrades them, `101`; the messages they then carry are in that response.\n\n**Analytics.** The `/analytics/*` and `/timeseries/*` families are powered by the bundled DuckDB engine, which is on by default. When it is disabled (or not compiled in), those endpoints answer `200` with a body of `{\"status\":\"unavailable\",...}` rather than failing.\n\n**Base URL.** A `GET` to the API root (`/api/v2`, no trailing slash) returns the API name, version and status.",
     "license": {
       "name": "CC BY-NC-SA 4.0",
       "url": "https://github.com/tomtom215/BirdNet-Behavior/blob/main/LICENSE"
@@ -1930,6 +1930,507 @@
           },
           "404": {
             "description": "No such run."
+          }
+        }
+      }
+    },
+    "/events": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Events: one call heard by several sources, counted once",
+        "description": "The events whose first member is in the range of UTC dates (at most 7 days), from the detections a reviewer has not rejected. Computed when read, never stored: changing the tolerance or the site map changes the events and rewrites nothing. With the default site map every source is its own site, so an event is one row.",
+        "operationId": "listEvents",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First UTC date, `YYYY-MM-DD`, inclusive.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Last UTC date, `YYYY-MM-DD`, inclusive; at most 7 days after `from`.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "tolerance_secs",
+            "in": "query",
+            "description": "Members of an event lie within this many seconds of one another. Default 4 (BirdNET V2.4's 3 s window plus 1 s); 0 to 600.",
+            "schema": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 600,
+              "default": 4
+            }
+          },
+          {
+            "name": "sites",
+            "in": "query",
+            "description": "The site map: `source:site` pairs separated by commas (`mic-north:yard,cam-1:yard`), split at the last colon. A source not named is its own site, which is also the default: nothing is merged across sources until they are put at one site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The events, with how they were counted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "policy": {
+                      "type": "object",
+                      "description": "How the events were counted. An event is the detections of one call (one species, one site, at most one row per source, all within the tolerance of one another, paired nearest first and never chained). It is not an individual bird.",
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "description": "The event rule's version; hashed into every `event_id`."
+                        },
+                        "tolerance_secs": {
+                          "type": "number"
+                        },
+                        "default_tolerance_secs": {
+                          "type": "number"
+                        },
+                        "site_map": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "description": "Every source seen, and every source named, with the site applied."
+                        },
+                        "site_map_default": {
+                          "type": "string"
+                        },
+                        "unit": {
+                          "type": "string"
+                        },
+                        "instant": {
+                          "type": "string"
+                        },
+                        "rows_without_source": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "tolerance_secs",
+                        "site_map",
+                        "unit"
+                      ]
+                    },
+                    "range": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        },
+                        "from_utc": {
+                          "type": "integer"
+                        },
+                        "to_utc": {
+                          "type": "integer",
+                          "description": "Exclusive."
+                        },
+                        "read_from_utc": {
+                          "type": "integer"
+                        },
+                        "read_to_utc": {
+                          "type": "integer"
+                        },
+                        "edges_settled": {
+                          "type": "boolean",
+                          "description": "False when rows were still within the tolerance of the widened read's edge after a day each side: an event at the very edge of the range may then pair differently in a wider read."
+                        }
+                      }
+                    },
+                    "rows_without_instant": {
+                      "type": "integer",
+                      "description": "Rows in the range's dates with no `detected_at_utc`: in no event, never placed from their local time."
+                    },
+                    "total_events": {
+                      "type": "integer"
+                    },
+                    "sites": {
+                      "type": "array",
+                      "description": "Per site (point): events, the rows in them, and the sources.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "site": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Null for rows with no recorded source."
+                          },
+                          "sources": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "events": {
+                            "type": "integer"
+                          },
+                          "rows": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "event_id": {
+                            "type": "string",
+                            "description": "A hash of the sorted member row ids and the policy version."
+                          },
+                          "site": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "sci_name": {
+                            "type": "string"
+                          },
+                          "com_name": {
+                            "type": "string"
+                          },
+                          "first_utc": {
+                            "type": "integer"
+                          },
+                          "last_utc": {
+                            "type": "integer"
+                          },
+                          "members": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "row_id": {
+                                  "type": "string",
+                                  "description": "`Date|Time|Sci_Name|File_Name|chunk_offset_secs`, the table's unique key."
+                                },
+                                "source": {
+                                  "type": [
+                                    "string",
+                                    "null"
+                                  ]
+                                },
+                                "instant_utc": {
+                                  "type": "integer"
+                                },
+                                "confidence": {
+                                  "type": "number"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "policy",
+                    "range",
+                    "rows_without_instant",
+                    "total_events",
+                    "sites",
+                    "events"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter is missing or out of range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The read failed. Never reported as zero events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/events/daily": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Events per day, site and species",
+        "description": "Events per UTC date (of each event's first member), site and species over at most 31 days. Sites are never pooled: two sites hearing one species are two lines.",
+        "operationId": "dailyEvents",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First UTC date, `YYYY-MM-DD`, inclusive.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Last UTC date, `YYYY-MM-DD`, inclusive; at most 31 days after `from`.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "tolerance_secs",
+            "in": "query",
+            "description": "Members of an event lie within this many seconds of one another. Default 4 (BirdNET V2.4's 3 s window plus 1 s); 0 to 600.",
+            "schema": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 600,
+              "default": 4
+            }
+          },
+          {
+            "name": "sites",
+            "in": "query",
+            "description": "The site map: `source:site` pairs separated by commas (`mic-north:yard,cam-1:yard`), split at the last colon. A source not named is its own site, which is also the default: nothing is merged across sources until they are put at one site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The counts, with how they were counted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "policy": {
+                      "type": "object",
+                      "description": "How the events were counted. An event is the detections of one call (one species, one site, at most one row per source, all within the tolerance of one another, paired nearest first and never chained). It is not an individual bird.",
+                      "properties": {
+                        "version": {
+                          "type": "string",
+                          "description": "The event rule's version; hashed into every `event_id`."
+                        },
+                        "tolerance_secs": {
+                          "type": "number"
+                        },
+                        "default_tolerance_secs": {
+                          "type": "number"
+                        },
+                        "site_map": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "description": "Every source seen, and every source named, with the site applied."
+                        },
+                        "site_map_default": {
+                          "type": "string"
+                        },
+                        "unit": {
+                          "type": "string"
+                        },
+                        "instant": {
+                          "type": "string"
+                        },
+                        "rows_without_source": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "version",
+                        "tolerance_secs",
+                        "site_map",
+                        "unit"
+                      ]
+                    },
+                    "range": {
+                      "type": "object",
+                      "properties": {
+                        "from": {
+                          "type": "string"
+                        },
+                        "to": {
+                          "type": "string"
+                        },
+                        "from_utc": {
+                          "type": "integer"
+                        },
+                        "to_utc": {
+                          "type": "integer",
+                          "description": "Exclusive."
+                        },
+                        "read_from_utc": {
+                          "type": "integer"
+                        },
+                        "read_to_utc": {
+                          "type": "integer"
+                        },
+                        "edges_settled": {
+                          "type": "boolean",
+                          "description": "False when rows were still within the tolerance of the widened read's edge after a day each side: an event at the very edge of the range may then pair differently in a wider read."
+                        }
+                      }
+                    },
+                    "rows_without_instant": {
+                      "type": "integer",
+                      "description": "Rows in the range's dates with no `detected_at_utc`: in no event, never placed from their local time."
+                    },
+                    "total_events": {
+                      "type": "integer"
+                    },
+                    "sites": {
+                      "type": "array",
+                      "description": "Per site (point): events, the rows in them, and the sources.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "site": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Null for rows with no recorded source."
+                          },
+                          "sources": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "events": {
+                            "type": "integer"
+                          },
+                          "rows": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    },
+                    "day": {
+                      "type": "string"
+                    },
+                    "days": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "site": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "sci_name": {
+                            "type": "string"
+                          },
+                          "com_name": {
+                            "type": "string"
+                          },
+                          "events": {
+                            "type": "integer"
+                          },
+                          "rows": {
+                            "type": "integer"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "policy",
+                    "range",
+                    "rows_without_instant",
+                    "total_events",
+                    "sites",
+                    "days"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter is missing or out of range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The read failed. Never reported as zero events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -4162,6 +4663,79 @@
         }
       }
     },
+    "/recordings/verify/{detection_uuid}": {
+      "get": {
+        "tags": [
+          "recordings"
+        ],
+        "summary": "Verify a detection's clip",
+        "description": "Whether the clip of the detection `detection_uuid` names is still the clip that was written (RES-23): its SHA-256 and length now, against those recorded when it was written. `recorded` is the checksum and length written with the clip (`null`: unknown). `verification.state` is `verified`, `altered` (with what was `found`), `missing`, `pruned`, `unrecorded` (no checksum was recorded, so it is unknown), `no_clip` or `unreadable`. Has the clips' own access rule.",
+        "operationId": "verifyRecording",
+        "parameters": [
+          {
+            "name": "detection_uuid",
+            "in": "path",
+            "description": "The detection's permanent identifier (`detection_uuid`, `Detection_Id` in the CSV export).",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The recorded checksum and the verdict.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "detection_uuid": {
+                      "type": "string"
+                    },
+                    "file_name": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "recorded": {
+                      "type": [
+                        "object",
+                        "null"
+                      ]
+                    },
+                    "verification": {
+                      "type": "object",
+                      "properties": {
+                        "state": {
+                          "type": "string",
+                          "enum": [
+                            "verified",
+                            "altered",
+                            "missing",
+                            "pruned",
+                            "unrecorded",
+                            "no_clip",
+                            "unreadable"
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No detection has that identifier."
+          },
+          "500": {
+            "description": "The record could not be read."
+          }
+        }
+      }
+    },
     "/spectrogram/{filename}": {
       "get": {
         "tags": [
@@ -4340,13 +4914,30 @@
               "type": "integer",
               "default": 5
             }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "description": "Only this capture source's detections, and for a rate its listening.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min_confidence",
+            "in": "query",
+            "description": "Only detections scoring at least this, 0 to 1. A classifier score, not a probability.",
+            "schema": {
+              "type": "number"
+            }
           }
         ],
         "responses": {
           "200": {
             "$ref": "#/components/responses/AnalyticsResult"
           }
-        }
+        },
+        "description": "Retention analysis The response carries `rows`: these count detection rows, not events (N sources hearing one call are N rows), and pool every source unless `source` is given; the per-site event rate is `/analytics/rates`."
       }
     },
     "/analytics/funnel": {
@@ -4757,7 +5348,7 @@
           "analytics"
         ],
         "summary": "Detection rate (detections per listened hour)",
-        "description": "Detection rate: detections per listened hour, per species per ISO week, with a 95% Poisson interval. It is a vocal-activity rate, not an abundance: it counts detections, which move with a species' call rate, loudness and detectability as well as with its numbers, so compare a species with itself across weeks and years, not with another species. A raw count has no denominator: a solar recording window is six hours longer in June than in December, a week of downtime removes a week of listening, a failed microphone halves the channels. This divides the detections made on days with recorded effort by the station time recorded on those days. `effort_hours` is returned beside `detections_per_hour` so a week with little or no listening is visible as such. A day's listening is the sum of every source's time, because detections are per source (each stream that hears a bird records it): the rate is detections per source-hour, so two co-located microphones that each log the same bird read the same rate as one microphone logging it once. Sources are pooled, not reported separately. A week with recorded listening in which a species was not detected is a row with `raw_count` 0 and a rate of 0, not a missing row; the species filled in are the one named by `species`, or every species detected in that ISO year. A week with neither listening nor a detection has no row. `rate_ci_lower` and `rate_ci_upper` are the exact (Garwood) 95% Poisson interval for `effort_count` over `effort_hours` (Byar's approximation above 100 detections); detections of one bird are clustered, so read it as the least the uncertainty can be. With `min_detections` above 1, rows with fewer detections, zero rows included, are left out. Needs the analytics store (DuckDB); it reads `detections_ts` and `recording_effort`, not the behavioural extension. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
+        "description": "Detection rate: detections per listened hour, per species per ISO week, with a 95% Poisson interval. It is a vocal-activity rate, not an abundance: it counts detections, which move with a species' call rate, loudness and detectability as well as with its numbers, so compare a species with itself across weeks and years, not with another species. A raw count has no denominator: a solar recording window is six hours longer in June than in December, a week of downtime removes a week of listening, a failed microphone halves the channels. This divides the detections made on days with recorded effort by the station time recorded on those days. `effort_hours` is returned beside `detections_per_hour` so a week with little or no listening is visible as such. A day's listening is the sum of every source's time, because detections are per source (each stream that hears a bird records it): the rate is detections per source-hour, so two co-located microphones that each log the same bird read the same rate as one microphone logging it once. Sources are pooled, not reported separately. A week with recorded listening in which a species was not detected is a row with `raw_count` 0 and a rate of 0, not a missing row; the species filled in are the one named by `species`, or every species detected in that ISO year. A week with neither listening nor a detection has no row. `rate_ci_lower` and `rate_ci_upper` are the exact (Garwood) 95% Poisson interval for `effort_count` over `effort_hours` (Byar's approximation above 100 detections); detections of one bird are clustered, so read it as the least the uncertainty can be. With `min_detections` above 1, rows with fewer detections, zero rows included, are left out. Needs the analytics store (DuckDB); it reads `detections_ts` and `recording_effort`, not the behavioural extension. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead. The response carries `rows`: these count detection rows, not events (N sources hearing one call are N rows), and pool every source unless `source` is given; the per-site event rate is `/analytics/rates`.",
         "operationId": "analyticsAbundance",
         "parameters": [
           {
@@ -4790,6 +5381,22 @@
               "format": "int32",
               "minimum": 0,
               "default": 1
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "description": "Only this capture source's detections, and for a rate its listening.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min_confidence",
+            "in": "query",
+            "description": "Only detections scoring at least this, 0 to 1. A classifier score, not a probability.",
+            "schema": {
+              "type": "number"
             }
           }
         ],
@@ -4901,7 +5508,7 @@
           "analytics"
         ],
         "summary": "Species phenology: first and last detection per year",
-        "description": "One row per species per calendar year: the first and last dates it was detected, how many detections that is, and how many days it was present. `first_doy` and `last_doy` are day-of-year numbers on a common 365-day scale (29 February folds onto 28 February), so one calendar date is one number in every year and rows can be compared across years; the ISO dates beside them stay exact. `presence_days` is a span (last minus first, plus one), not an occupancy: a species detected once in January and once in December has 365. `detected_days` is the number of distinct days it was actually detected. A calendar-year window is not a migration window for a resident or an overwintering species. `first_detection` and `last_detection` are the extremes, so one stray (or false) detection moves them; `arrival_q05` and `departure_q95` are the 5th and 95th percentiles of the distinct days the species was detected that year (an actual detection day; with twenty or fewer detection days the 5th percentile is the first day, and with nineteen or fewer the 95th is the last). `effort_gap_before_arrival` is true when any of the 14 days before `arrival_q05` has no recorded listening, false when all of them have some, and null when the station's listening record begins after it. Rows are ordered by year, newest first, then species. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead.",
+        "description": "One row per species per calendar year: the first and last dates it was detected, how many detections that is, and how many days it was present. `first_doy` and `last_doy` are day-of-year numbers on a common 365-day scale (29 February folds onto 28 February), so one calendar date is one number in every year and rows can be compared across years; the ISO dates beside them stay exact. `presence_days` is a span (last minus first, plus one), not an occupancy: a species detected once in January and once in December has 365. `detected_days` is the number of distinct days it was actually detected. A calendar-year window is not a migration window for a resident or an overwintering species. `first_detection` and `last_detection` are the extremes, so one stray (or false) detection moves them; `arrival_q05` and `departure_q95` are the 5th and 95th percentiles of the distinct days the species was detected that year (an actual detection day; with twenty or fewer detection days the 5th percentile is the first day, and with nineteen or fewer the 95th is the last). `effort_gap_before_arrival` is true when any of the 14 days before `arrival_q05` has no recorded listening, false when all of them have some, and null when the station's listening record begins after it. Rows are ordered by year, newest first, then species. In a build without the analytics engine the body is `{\"status\":\"unavailable\", ...}` with HTTP 200 instead. The response carries `rows`: these count detection rows, not events (N sources hearing one call are N rows), and pool every source unless `source` is given; the per-site event rate is `/analytics/rates`.",
         "operationId": "analyticsPhenology",
         "parameters": [
           {
@@ -4946,6 +5553,22 @@
               "format": "int32",
               "minimum": 0,
               "default": 500
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "description": "Only this capture source's detections, and for a rate its listening.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min_confidence",
+            "in": "query",
+            "description": "Only detections scoring at least this, 0 to 1. A classifier score, not a probability.",
+            "schema": {
+              "type": "number"
             }
           }
         ],
@@ -7232,13 +7855,212 @@
         }
       }
     },
+    "/detections/export/study": {
+      "get": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Export a study bundle",
+        "description": "One ZIP for a methods section (RES-08): every column of every detection row of the local dates (rejected ones included), each classifier's answers, the review history, every analysis run with its deciding configuration and taxonomy edition, every classifier of every run, effort per source and per site (as bounds), events with their policy version, weather with its provenance where recorded, a README and a manifest.json with the format version, generator version, parameters, policies and the SHA-256 of every other member. Deterministic: the same database and parameters give a byte-identical archive. Real numbers are written in their shortest round-trip form. No licence is applied; the manifest says so.",
+        "operationId": "exportStudyBundle",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/From"
+          },
+          {
+            "$ref": "#/components/parameters/To"
+          },
+          {
+            "name": "tolerance_secs",
+            "in": "query",
+            "required": false,
+            "description": "Event tolerance, seconds, 0 to 600 (default 4).",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "sites",
+            "in": "query",
+            "required": false,
+            "description": "Site map, `source:site` pairs separated by commas; a source not named is its own site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The bundle.",
+            "content": {
+              "application/zip": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "413": {
+            "description": "A table of the range holds more than 1,000,000 rows."
+          }
+        }
+      }
+    },
+    "/detections/export/search": {
+      "get": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Export the rows a detection-log search lists",
+        "description": "Takes the `/search` page's query string (`q`, `species`, `from`, `to`, `hour_from`, `hour_to`, `conf_min`, `conf_max` as percentages, `source`, `verdict`, `locked`, `category`, `sort`) and answers every matching row, not one page, in the detections CSV's columns and the page's order (UIC-10). Reads the raw table, so a search for rejected rows exports them.",
+        "operationId": "exportSearch",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "hour_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "hour_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "conf_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "conf_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "verdict",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "locked",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "category",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "As on the `/search` page."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The matching rows.",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "More than 1,000,000 rows match."
+          }
+        }
+      }
+    },
     "/detections/export/history": {
       "get": {
         "tags": [
           "export"
         ],
         "summary": "Export one species' detection history",
-        "description": "One row per hour or day of the range (`Date`, `Hour`, `Seconds_Analysed`, `Detections`, `Detected`), as CSV. `Detected` is `1` when the species was detected, `0` when the station listened and did not detect it, and `NA` when no single source analysed at least `min_seconds` of the occasion: an occasion without effort is not an absence. Reads the reviewed set. Hours before the hourly ledger existed are `NA`; days read the daily ledger, which counted capture uptime before migration 63. The range is at most 366 days.",
+        "description": "One row per hour or day of the range (`Date`, `Hour`, `Seconds_Analysed`, `Detections`, `Detected`), as CSV. `Detected` is `1` when a source that analysed at least `min_seconds` of the occasion detected the species, `0` when one listened and none of those detected it, and `NA` when no single source analysed at least `min_seconds` of the occasion: an occasion without effort is not an absence. `Detections` counts every detection, including one on a source that did not survey the occasion; a detection with no recorded source counts as one on a surveyed source. Reads the reviewed set. Hours before the hourly ledger existed are `NA`; days read the daily ledger, which counted capture uptime before migration 63. The range is at most 366 days.",
         "operationId": "exportDetectionHistory",
         "parameters": [
           {
@@ -7290,6 +8112,15 @@
             "description": "Audio analysed below which an occasion is `NA`; default half the occasion (1800 for an hour, 43200 for a day).",
             "schema": {
               "type": "number"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "description": "One source's history, its effort and its detections only, as the `Source` the detections and the effort ledger name it. Absent: the station, where an occasion is `1` only when a source that itself listened for `min_seconds` detected the species.",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -7353,6 +8184,167 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/effort/sites": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Each site's listening per hour, as bounds",
+        "description": "From the hourly effort ledger, which keeps seconds of audio analysed per local hour and source, so a site's listening (the union of its sources' intervals) is not recoverable. It is reported as a lower bound (the best-covered source) and an upper bound (the sum, capped at the hour's real length on the station's local clock: 7200 s in a repeated fall-back hour), with sensor time (the sum) apart. At most 31 local dates.",
+        "operationId": "siteEffort",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First Local date, `YYYY-MM-DD`, inclusive.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Last Local date, `YYYY-MM-DD`, inclusive; at most 31 days after `from`.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "sites",
+            "in": "query",
+            "description": "The site map: `source:site` pairs separated by commas (`mic-north:yard,cam-1:yard`), split at the last colon. A source not named is its own site, which is also the default: nothing is merged across sources until they are put at one site.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The hours.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "site_map": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "description": "Every source seen, and every source named, with the site applied."
+                    },
+                    "site_map_default": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "dates": {
+                      "type": "string"
+                    },
+                    "bounds": {
+                      "type": "string"
+                    },
+                    "listened_day_rule": {
+                      "type": "string",
+                      "description": "The one listened-day rule's name (`half-of-typical-day`)."
+                    },
+                    "hours": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string",
+                            "format": "date"
+                          },
+                          "hour": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "maximum": 23
+                          },
+                          "site": {
+                            "type": "string"
+                          },
+                          "sources": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "listened_secs_lower_bound": {
+                            "type": "number"
+                          },
+                          "listened_secs_upper_bound": {
+                            "type": "number"
+                          },
+                          "sensor_secs": {
+                            "type": "number",
+                            "description": "The sum over sources: not the site's listening."
+                          },
+                          "sensor_hours": {
+                            "type": "number"
+                          },
+                          "hour_capacity_secs": {
+                            "type": [
+                              "number",
+                              "null"
+                            ],
+                            "description": "The hour's real length; null when the local clock skips it (the upper bound is then the sum)."
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "site_map",
+                    "bounds",
+                    "hours"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter is missing or out of range.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The read failed. Never reported as zero events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
           }
         }
       }
@@ -8479,6 +9471,1070 @@
           }
         }
       }
+    },
+    "/station/record": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "The station's identity, deployments, source devices and clock record",
+        "description": "The station's UUID (minted once, kept across restarts); every deployment an operator stated (`start_utc`/`end_utc` Unix seconds, coordinates, height, orientation, microphone and the rest, as stated: nothing here measured them); every device record (`device_seq` numbers a source's distinct devices: the same device string keeps its number, a changed one gets a new one; `from_utc` null means the device began before this was recorded and the start is unknown; URL credentials redacted); and the newest 50 clock observations, newest first (`state` synced, unsynced, unknown or unset; `reason` first, changed, boot or step; `step_secs` how far the wall clock moved against the boot clock). A clock state between two observations is the earlier one's; an instant before the first is unknown. Token-gated: deployments hold coordinates and device records hold camera URLs.",
+        "operationId": "getStationRecord",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "station_uuid": {
+                      "type": "string"
+                    },
+                    "deployments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "source_devices": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "clock_observations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "notes": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          },
+          "500": {
+            "description": "The record could not be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/deployments": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "State a deployment of one source",
+        "description": "Opens a deployment of `source_id` from `start_utc` (Unix seconds) and closes the source's open deployment there. Every other field is optional and is what the operator states: `latitude`/`longitude` (together or not at all), `coord_uncertainty_m`, `elevation_m`, `height_m`, `orientation_deg` (0 to below 360, clockwise from true north), `microphone`, `recorder`, `enclosure`, `habitat`, `notes`. A deployment is a record: it is never rewritten or deleted; a mistake is corrected by stating the next one.",
+        "operationId": "openDeployment",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "source_id",
+                  "start_utc"
+                ],
+                "properties": {
+                  "source_id": {
+                    "type": "string"
+                  },
+                  "start_utc": {
+                    "type": "integer"
+                  },
+                  "latitude": {
+                    "type": "number"
+                  },
+                  "longitude": {
+                    "type": "number"
+                  },
+                  "coord_uncertainty_m": {
+                    "type": "number"
+                  },
+                  "elevation_m": {
+                    "type": "number"
+                  },
+                  "height_m": {
+                    "type": "number"
+                  },
+                  "orientation_deg": {
+                    "type": "number"
+                  },
+                  "microphone": {
+                    "type": "string"
+                  },
+                  "recorder": {
+                    "type": "string"
+                  },
+                  "enclosure": {
+                    "type": "string"
+                  },
+                  "habitat": {
+                    "type": "string"
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Stated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deployment": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A value out of range, an unknown source, or a start not after the open deployment's.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          },
+          "409": {
+            "description": "It would overlap a deployment already stated for this source.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Nothing was written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/effort/export/utc": {
+      "get": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Export the effort ledger by UTC hour",
+        "description": "Per UTC hour and source: the seconds of audio analysed (by the instant the audio began) and the seconds the source's capture was up, split by what the system said of its clock while it was, as CSV (`Hour_Start_UTC`, `Source`, `Seconds_Analysed`, `Seconds_Up`, `Seconds_Up_Clock_Synced`, `Seconds_Up_Clock_Unsynced`, `Seconds_Up_Clock_Unknown`). Keyed on UTC, so the repeated autumn hour is two rows. Hours are recorded from the upgrade that added this ledger on; an hour stamped under an unsynchronised clock is only as right as that clock. The range is at most 366 days.",
+        "operationId": "exportEffortByUtcHour",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "description": "First UTC date (YYYY-MM-DD).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "description": "Last UTC date (YYYY-MM-DD), inclusive.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ledger.",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/analytics/rates": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Events per hour of each site's listening",
+        "description": "The event rate per site, species and bin (`day`, `week` Monday first, or `hour_of_day` pooled over the range). The numerator is events (N sources at one site hearing one call is one event); the denominator is the site's listening as bounds (at least its best-covered source, at most the sum capped at the hour), so a rate is a range from `rate_low` to `rate_high`, and adding a quieter microphone to a site does not lower it. Sites are never pooled. The interval is the exact Poisson interval of the events over the bounds. A point with no listening has status `no_effort` and no rate; a listened bin with no events has a rate of 0. Exploratory: not a count of birds. At most 400 local dates.",
+        "operationId": "eventRates",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First local date, inclusive.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Last local date, inclusive; at most 400 days after `from`.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "bin",
+            "in": "query",
+            "description": "How points are binned.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "day",
+                "week",
+                "hour_of_day"
+              ]
+            }
+          },
+          {
+            "name": "tolerance_secs",
+            "in": "query",
+            "description": "Event tolerance in seconds, 0 to 600; defaults to the model window plus one second (4).",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "sites",
+            "in": "query",
+            "description": "The site map: `source:site` pairs separated by commas (`mic-north:yard,cam-1:yard`), split at the last colon. A source not named is its own site, which is also the default: nothing is merged across sources until they are put at one site.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "description": "Only this capture source's detections (and, for a rate, its listening).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min_confidence",
+            "in": "query",
+            "description": "Only detections scoring at least this, 0 to 1. A classifier score, not a probability.",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "description": "Only this species, by scientific name.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The points.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "policy": {
+                      "type": "object",
+                      "description": "The rate method, event policy version, tolerance, site map, filter, bin, unit, numerator, denominator and interval this response used, and that it is exploratory."
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "dates": {
+                      "type": "string"
+                    },
+                    "rows_without_instant": {
+                      "type": "integer"
+                    },
+                    "edges_settled": {
+                      "type": "boolean"
+                    },
+                    "points": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "site": {
+                            "type": "string"
+                          },
+                          "sci_name": {
+                            "type": "string"
+                          },
+                          "com_name": {
+                            "type": "string"
+                          },
+                          "bin": {
+                            "type": "string",
+                            "description": "A local date, a week's Monday, or an hour `00`-`23`."
+                          },
+                          "events": {
+                            "type": "integer"
+                          },
+                          "rows": {
+                            "type": "integer"
+                          },
+                          "events_outside_listening": {
+                            "type": "integer",
+                            "description": "Events in hours of the bin with no ledger row: not counted."
+                          },
+                          "listened_lower_secs": {
+                            "type": "number"
+                          },
+                          "listened_upper_secs": {
+                            "type": "number"
+                          },
+                          "sensor_secs": {
+                            "type": "number",
+                            "description": "Summed over sources: not the site's listening, never the denominator."
+                          },
+                          "rate_low": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "rate_high": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "ci_lower": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "ci_upper": {
+                            "type": [
+                              "number",
+                              "null"
+                            ]
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "measured",
+                              "no_effort"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter is malformed or out of range."
+          },
+          "500": {
+            "description": "The read failed."
+          }
+        }
+      }
+    },
+    "/analytics/rates/compare": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "This period's event rate against the one before",
+        "description": "The last `days` complete local days (ending `end`, yesterday by default, so a day under way is never compared) against the `days` before them: per site for all species together and per species, the ratio of event rates per hour of listening with a 95 % interval (conditional binomial, Wilson, each end at the listening bounds that push it outwards). `direction` is `busier` or `quieter` only when the interval excludes 1, `no_clear_change` when it does not, `cannot_tell` without listening or events. Also the listened days and species heard in each window. Exploratory: a change is not shown to have a cause.",
+        "operationId": "compareEventRates",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "description": "Days per window, 1 to 200; default 30.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "description": "The last day of the recent window.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "tolerance_secs",
+            "in": "query",
+            "description": "Event tolerance in seconds, 0 to 600; defaults to the model window plus one second (4).",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "sites",
+            "in": "query",
+            "description": "The site map: `source:site` pairs separated by commas (`mic-north:yard,cam-1:yard`), split at the last colon. A source not named is its own site, which is also the default: nothing is merged across sources until they are put at one site.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "description": "Only this capture source's detections (and, for a rate, its listening).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min_confidence",
+            "in": "query",
+            "description": "Only detections scoring at least this, 0 to 1. A classifier score, not a probability.",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "description": "Only this species, by scientific name.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The comparison.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "policy": {
+                      "type": "object",
+                      "description": "The rate method, event policy version, tolerance, site map, filter, bin, unit, numerator, denominator and interval this response used, and that it is exploratory."
+                    },
+                    "windows": {
+                      "type": "object"
+                    },
+                    "ratio_method": {
+                      "type": "string"
+                    },
+                    "sites": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "site": {
+                            "type": "string"
+                          },
+                          "all_species": {
+                            "type": "object",
+                            "properties": {
+                              "recent_events": {
+                                "type": "integer"
+                              },
+                              "earlier_events": {
+                                "type": "integer"
+                              },
+                              "recent_listened": {
+                                "type": "array",
+                                "items": {
+                                  "type": "number"
+                                },
+                                "description": "Lower and upper bound, seconds."
+                              },
+                              "earlier_listened": {
+                                "type": "array",
+                                "items": {
+                                  "type": "number"
+                                }
+                              },
+                              "ratio": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              },
+                              "ratio_lower": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              },
+                              "ratio_upper": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              }
+                            }
+                          },
+                          "direction": {
+                            "type": "string",
+                            "enum": [
+                              "busier",
+                              "quieter",
+                              "no_clear_change",
+                              "cannot_tell"
+                            ]
+                          },
+                          "listened_days": {
+                            "type": "object"
+                          },
+                          "species_heard": {
+                            "type": "object"
+                          }
+                        }
+                      }
+                    },
+                    "species": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "site": {
+                            "type": "string"
+                          },
+                          "sci_name": {
+                            "type": "string"
+                          },
+                          "com_name": {
+                            "type": "string"
+                          },
+                          "ratio": {
+                            "type": "object",
+                            "properties": {
+                              "recent_events": {
+                                "type": "integer"
+                              },
+                              "earlier_events": {
+                                "type": "integer"
+                              },
+                              "recent_listened": {
+                                "type": "array",
+                                "items": {
+                                  "type": "number"
+                                },
+                                "description": "Lower and upper bound, seconds."
+                              },
+                              "earlier_listened": {
+                                "type": "array",
+                                "items": {
+                                  "type": "number"
+                                }
+                              },
+                              "ratio": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              },
+                              "ratio_lower": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              },
+                              "ratio_upper": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              }
+                            }
+                          },
+                          "direction": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter is malformed or out of range."
+          },
+          "500": {
+            "description": "The read failed."
+          }
+        }
+      }
+    },
+    "/analytics/sunrise-relative": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Events by minutes from each day's own sunrise",
+        "description": "Each site and species' events placed against the sunrise of their own day (the nearest sunrise to the event, from the station's coordinates), from four hours before to eight after, in bins of `bin_minutes` (default 10). Not clock hours, and not today's sunrise across the whole range. A day without a sunrise places nothing and is counted. 409 when the station has no coordinates. UTC dates, at most 400.",
+        "operationId": "sunriseRelative",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "description": "First UTC date, inclusive.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "description": "Last UTC date, inclusive.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            },
+            "required": true
+          },
+          {
+            "name": "bin_minutes",
+            "in": "query",
+            "description": "Bin width, 1 to 120 minutes.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "tolerance_secs",
+            "in": "query",
+            "description": "Event tolerance in seconds, 0 to 600; defaults to the model window plus one second (4).",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "sites",
+            "in": "query",
+            "description": "The site map: `source:site` pairs separated by commas (`mic-north:yard,cam-1:yard`), split at the last colon. A source not named is its own site, which is also the default: nothing is merged across sources until they are put at one site.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "description": "Only this capture source's detections (and, for a rate, its listening).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min_confidence",
+            "in": "query",
+            "description": "Only detections scoring at least this, 0 to 1. A classifier score, not a probability.",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "species",
+            "in": "query",
+            "description": "Only this species, by scientific name.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The histograms.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "policy": {
+                      "type": "object",
+                      "description": "The rate method, event policy version, tolerance, site map, filter, bin, unit, numerator, denominator and interval this response used, and that it is exploratory."
+                    },
+                    "method": {
+                      "type": "string"
+                    },
+                    "axis": {
+                      "type": "string"
+                    },
+                    "counting": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "dates": {
+                      "type": "string"
+                    },
+                    "rows_without_instant": {
+                      "type": "integer"
+                    },
+                    "species": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "site": {
+                            "type": [
+                              "string",
+                              "null"
+                            ]
+                          },
+                          "sci_name": {
+                            "type": "string"
+                          },
+                          "com_name": {
+                            "type": "string"
+                          },
+                          "events": {
+                            "type": "integer"
+                          },
+                          "histogram": {
+                            "type": "object",
+                            "properties": {
+                              "method": {
+                                "type": "string"
+                              },
+                              "bin_minutes": {
+                                "type": "integer"
+                              },
+                              "from_minutes": {
+                                "type": "integer"
+                              },
+                              "counts": {
+                                "type": "array",
+                                "items": {
+                                  "type": "integer"
+                                }
+                              },
+                              "outside": {
+                                "type": "integer"
+                              },
+                              "no_sunrise": {
+                                "type": "integer"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter is malformed or out of range."
+          },
+          "500": {
+            "description": "The read failed."
+          },
+          "409": {
+            "description": "The station has no coordinates."
+          }
+        }
+      }
+    },
+    "/analytics/cooccurrence": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Species heard together, against chance",
+        "description": "Pairs heard in the same five-minute block at the same site over the last `days` days, each with its chance level from a null that shifts one species' days circularly within 28-day strata (keeping prevalence, time of day, season and persistence), a one-sided permutation p-value from a recorded `seed`, a Benjamini-Hochberg q-value over every pair tested, and a verdict: `stands_out`, `within_chance`, or `too_little_data` when no pair could reach the false-discovery rate with these days. Exploratory and associational: two species heard together are not shown to interact.",
+        "operationId": "cooccurrence",
+        "parameters": [
+          {
+            "name": "days",
+            "in": "query",
+            "description": "Days, 1 to 365; default 90.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Pairs returned, at most 400; default 50.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "min_shared",
+            "in": "query",
+            "description": "Shared blocks a pair needs to be tested; default 3.",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "sites",
+            "in": "query",
+            "description": "The site map: `source:site` pairs separated by commas (`mic-north:yard,cam-1:yard`), split at the last colon. A source not named is its own site, which is also the default: nothing is merged across sources until they are put at one site.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "description": "Only this capture source's detections (and, for a rate, its listening).",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "min_confidence",
+            "in": "query",
+            "description": "Only detections scoring at least this, 0 to 1. A classifier score, not a probability.",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "seed",
+            "in": "query",
+            "description": "The null's seed; the default is recorded in the response.",
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The analysis.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "days": {
+                      "type": "integer"
+                    },
+                    "limit": {
+                      "type": "integer"
+                    },
+                    "min_shared": {
+                      "type": "integer"
+                    },
+                    "together": {
+                      "type": "string"
+                    },
+                    "chance": {
+                      "type": "string"
+                    },
+                    "verdicts": {
+                      "type": "string"
+                    },
+                    "exploratory": {
+                      "type": "string"
+                    },
+                    "analysis": {
+                      "type": "object",
+                      "properties": {
+                        "pairs": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "species_a": {
+                                "type": "string"
+                              },
+                              "species_b": {
+                                "type": "string"
+                              },
+                              "site": {
+                                "type": [
+                                  "string",
+                                  "null"
+                                ]
+                              },
+                              "shared_blocks": {
+                                "type": "integer"
+                              },
+                              "blocks_a": {
+                                "type": "integer"
+                              },
+                              "blocks_b": {
+                                "type": "integer"
+                              },
+                              "overlap": {
+                                "type": "number"
+                              },
+                              "expected_shared": {
+                                "type": "number",
+                                "description": "The chance level of shared blocks."
+                              },
+                              "chance_overlap": {
+                                "type": "number"
+                              },
+                              "lift": {
+                                "type": [
+                                  "number",
+                                  "null"
+                                ]
+                              },
+                              "p_value": {
+                                "type": "number"
+                              },
+                              "q_value": {
+                                "type": "number"
+                              },
+                              "verdict": {
+                                "type": "string",
+                                "enum": [
+                                  "stands_out",
+                                  "within_chance",
+                                  "too_little_data"
+                                ]
+                              }
+                            }
+                          }
+                        },
+                        "method": {
+                          "type": "string"
+                        },
+                        "null_method": {
+                          "type": "string"
+                        },
+                        "seed": {
+                          "type": "integer"
+                        },
+                        "draws": {
+                          "type": "integer"
+                        },
+                        "stratum_days": {
+                          "type": "integer"
+                        },
+                        "pairs_tested": {
+                          "type": "integer"
+                        },
+                        "pairs_untested": {
+                          "type": "integer"
+                        },
+                        "eligible_days": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "integer"
+                          }
+                        },
+                        "stands_out": {
+                          "type": "integer"
+                        },
+                        "too_little_data": {
+                          "type": "boolean"
+                        },
+                        "fdr_alpha": {
+                          "type": "number"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A parameter is malformed or out of range."
+          },
+          "500": {
+            "description": "The read failed."
+          }
+        }
+      }
     }
   },
   "components": {
@@ -8913,6 +10969,15 @@
               ]
             },
             "description": "What the boot journal found changed since the last start; non-empty is a strict fault."
+          },
+          "clock": {
+            "type": "string",
+            "enum": [
+              "synced",
+              "unsynced",
+              "unknown"
+            ],
+            "description": "What the system last said of its clock, as the station-health poll read it; `unknown` when nothing could answer. Not a status-code fault."
           }
         }
       },
@@ -9518,7 +11583,14 @@
               "number",
               "null"
             ],
-            "description": "Where it ended. Classifiers' windows differ in length."
+            "description": "Where it ended. Classifiers' windows differ in length. On the last chunk of a recording, the end of the audio that exists."
+          },
+          "padded_secs": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "description": "How much of this classifier's window was zero padding past the recording's end, seconds. Null for an answer stored before migration 68, when it was not recorded."
           }
         },
         "required": [

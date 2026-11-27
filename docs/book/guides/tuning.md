@@ -191,6 +191,18 @@ per species. Off by default, since turning it
 on changes how many rows your station records and puts a visible step in every
 chart on the day you do it.
 
+**Overlap multiplies rows too.** A row is a *positive window*: with
+`OVERLAP=1.5` a recording is cut into windows every 1.5 seconds instead of
+every 3, so a bird singing through a 15-second recording is nine rows instead
+of five. Row counts from two stations, or from one station before and after you
+change `OVERLAP`, are not comparable. The detection core has a read-side rule
+for a count that is (`birdnet_core::detection::window_slots`, policy
+`slots-1`): each row is placed in the 3-second slot its window starts in, and
+distinct slots per recording, source and species are counted. At `OVERLAP=0`
+that count is the row count exactly. It is not a count of birds or of calls,
+and nothing stored changes; the views that will offer it beside the row count
+are not wired yet.
+
 **One species louder than the rest.** A tawny owl calling all night will drown
 the log long before a blackbird does. *Settings → Capture → Which birds count → Per-Species
 Minimum Interval* gives a single species its own interval in seconds (1 to

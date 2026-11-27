@@ -72,6 +72,14 @@ impl StationLedger {
         Ok(Self { daily, typical })
     }
 
+    /// A ledger of `daily` seconds per date, summed over sources, for the tests of the
+    /// figures that read one.
+    #[cfg(test)]
+    pub fn from_daily(daily: BTreeMap<String, f64>) -> Self {
+        let typical = typical_day(daily.values().copied());
+        Self { daily, typical }
+    }
+
     /// The typical day, in seconds; `None` when no date has any audio.
     pub const fn typical(&self) -> Option<f64> {
         self.typical

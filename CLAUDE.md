@@ -94,8 +94,8 @@ manual's link check, rustdoc's `private-intra-doc-links` (`answers_sql`'s doc
 linked a private function; clippy passes over it, and the first run of the
 workflow's rustdoc command on that branch found it), and five tokens `typos` flagged in files from earlier
 commits on the same branch. Everything the script needs installs here
-(`cargo install --locked typos-cli --version 1.52.0`; crates.io and PyPI are
-reachable, GitHub release downloads are not), so "could not run it in this
+(`cargo install --locked typos-cli --version 1.52.0`, `pip install shellcheck-py`;
+crates.io and PyPI are reachable, GitHub release downloads are not), so "could not run it in this
 container" is not a reason, and the script fails on a missing tool instead of
 skipping it. Three more rules it encodes: run the **whole workspace** at **every
 feature set CI builds** (clippy on `-p birdnet-web` is not clippy on the

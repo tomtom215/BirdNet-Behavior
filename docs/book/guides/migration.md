@@ -11,6 +11,12 @@ Three things are different from BirdNET-Pi on the first day, whatever you import
    ```bash
    sudo systemctl stop birdnet_*
    ```
+   To install this station on that machine, also keep BirdNET-Pi from starting at boot and move its configuration link out of the way, or the installer stops (it never writes BirdNET-Pi's files):
+   ```bash
+   sudo systemctl disable --now birdnet_recording.service birdnet_analysis.service
+   sudo mv /etc/birdnet/birdnet.conf /etc/birdnet/birdnet.conf.birdnet-pi
+   ```
+   BirdNET-Pi's own `~/BirdNET-Pi/birdnet.conf` stays where it is, for the import below.
 3. **Find the files.** In BirdNET-Pi's folder, `~/BirdNET-Pi`:
 
    | File | Holds |

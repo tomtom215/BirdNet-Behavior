@@ -149,6 +149,14 @@ pub fn start_disk_manager(
 
     let mut handles = Vec::new();
 
+    // `AppState::recording_dir` is deliberately the source of truth here: it is
+    // the exact directory the detection daemon extracts clips into and the web
+    // serves them from. Keying off the config's `RECS_DIR` instead would
+    // monitor a directory nothing necessarily writes to.
+    let recordings_dir = state.recording_dir();
+    let already_monitored = cli.watch_dir.as_ref().is_some_and(|w| *w == recordings_dir);
+    let holds_clips = already_monitored;
+
     // ── Transient stream dir: drain by age and size ────────────────────────
     if let Some(stream_dir) = cli.watch_dir.clone() {
         let retention = if cli.stream_retention_secs > 0 {
@@ -180,14 +188,17 @@ pub fn start_disk_manager(
                 locked_file_names: Vec::new(),
                 // The segments the pipeline is reading right now (PR-1 / S-3):
                 // the drain, the size cap and the disk-full purge all skip
-                // them. The database's locked clips live in the recordings
-                // dir and never name a raw segment, so they are not consulted
-                // here.
-                locked_provider: Some({
-                    let in_flight = in_flight.clone();
-                    std::sync::Arc::new(move || Some(in_flight.names()))
-                }),
-                ineffective_flag: Some(state.metrics().purge_ineffective_flag()),
+                // them; and, when this directory is the recordings directory,
+                // the clips the database keeps back (N25-11).
+                locked_provider: Some(stream_protected(
+                    in_flight,
+                    state,
+                    cli.retain_reviewed_audio,
+                    holds_clips,
+                )),
+                // Its own flag (N25-10): the recordings manager below holds
+                // the other, and one shared flag said whichever wrote last.
+                ineffective_flag: Some(state.metrics().stream_purge_ineffective_flag()),
                 stream_retention_secs: retention,
                 stream_max_bytes: max_mb.saturating_mul(1024 * 1024),
                 // Raw segments carry no species; oldest-first is right here.
@@ -209,13 +220,6 @@ pub fn start_disk_manager(
     }
 
     // ── Persistent recordings dir: disk-full backstop only ─────────────────
-    //
-    // `AppState::recording_dir` is deliberately the source of truth here: it is
-    // the exact directory the detection daemon extracts clips into and the web
-    // serves them from. Keying off the config's `RECS_DIR` instead would
-    // monitor a directory nothing necessarily writes to.
-    let recordings_dir = state.recording_dir();
-    let already_monitored = cli.watch_dir.as_ref().is_some_and(|w| *w == recordings_dir);
     if let Some(notice) =
         super::startup_notices::keep_overridden_by_watch_dir(full_disk_action, already_monitored)
     {
@@ -308,6 +312,33 @@ pub fn resolve_full_disk_action(
 /// `None` rather than an empty list: the disk manager reads "nothing is
 /// locked" as licence to delete, so a busy or failing database must not be
 /// able to say it (see `LockedFilesProvider`).
+/// What the stream manager may not delete: the segments the pipeline is
+/// reading now and, when its directory is the recordings directory
+/// (`holds_clips`), the clips the database keeps back too (N25-11).
+///
+/// Without the second half a station run with `--watch-dir` equal to its
+/// recordings directory had every locked and reviewed clip drained once it was
+/// older than `STREAM_RETENTION_SECS`, and the disk-full purge took the oldest
+/// with no regard for locks. A failed database read protects nothing it can
+/// name, so the cycle deletes nothing (`None`), as the recordings manager's
+/// own provider does.
+fn stream_protected(
+    in_flight: &birdnet_core::detection::daemon::InFlight,
+    state: &birdnet_web::state::AppState,
+    retain_reviewed: bool,
+    holds_clips: bool,
+) -> birdnet_core::audio::capture::LockedFilesProvider {
+    let in_flight = in_flight.clone();
+    let state = state.clone();
+    std::sync::Arc::new(move || {
+        let mut names = in_flight.names();
+        if holds_clips {
+            names.extend(locked_clips(&state, retain_reviewed)?);
+        }
+        Some(names)
+    })
+}
+
 fn locked_clips(
     state: &birdnet_web::state::AppState,
     retain_reviewed: bool,
@@ -503,7 +534,7 @@ mod tests {
     use super::{
         DEFAULT_PURGE_THRESHOLD, DEFAULT_STREAM_MAX_MB, DEFAULT_STREAM_RETENTION_SECS,
         avahi_written_message, locked_clips, maybe_install_avahi_service, resolve_full_disk_action,
-        start_disk_manager,
+        start_disk_manager, stream_protected,
     };
     use crate::helpers::test_support::{config_with, default_cli, test_state_in};
     use birdnet_core::audio::capture::FullDiskAction;
@@ -532,6 +563,50 @@ mod tests {
         assert_eq!(resolve_full_disk_action(Some(&cfg)), FullDiskAction::Purge);
         let cfg = config_with(&[("FULL_DISK", "")]);
         assert_eq!(resolve_full_disk_action(Some(&cfg)), FullDiskAction::Purge);
+    }
+
+    /// N25-11: with the watch directory equal to the recordings directory,
+    /// the stream manager's drain and purge skip the clips the database keeps
+    /// back, and a failed read of them deletes nothing that cycle.
+    /// Counterpart: with the two apart it protects only what is in flight,
+    /// as before.
+    #[test]
+    fn a_stream_dir_that_holds_clips_protects_the_locked_ones() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = test_state_in(dir.path());
+        state
+            .with_db(|conn| {
+                conn.execute_batch(
+                    "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name, is_locked)
+                     VALUES ('2026-05-19', '09:00:00', 'Pica pica', 'Magpie', 0.9, 'kept.wav', 1),
+                            ('2026-05-19', '09:00:05', 'Pica pica', 'Magpie', 0.9, 'free.wav', 0);",
+                )
+            })
+            .expect("seed");
+        let in_flight = birdnet_core::detection::daemon::InFlight::default();
+        let _reading = in_flight.claim(std::path::Path::new("/stream/segment.wav"));
+        let holds = stream_protected(&in_flight, &state, false, true)().expect("readable");
+        assert!(
+            holds.iter().any(|n| n == "kept.wav"),
+            "a locked clip in the stream directory is not protected: {holds:?}"
+        );
+        assert!(
+            holds.iter().any(|n| n.ends_with("segment.wav")),
+            "{holds:?}"
+        );
+        assert!(!holds.iter().any(|n| n == "free.wav"), "{holds:?}");
+
+        let apart = stream_protected(&in_flight, &state, false, false)().expect("readable");
+        assert!(!apart.iter().any(|n| n == "kept.wav"), "{apart:?}");
+
+        state
+            .with_db(|conn| conn.execute_batch("DROP TABLE detections;"))
+            .expect("break the database");
+        assert_eq!(
+            stream_protected(&in_flight, &state, false, true)(),
+            None,
+            "a failed read of the locked clips must delete nothing, not everything"
+        );
     }
 
     #[test]

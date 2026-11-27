@@ -37,6 +37,7 @@ phone bottom bar): **Today**, **Species**, **Patterns**, **Recordings**,
 - [Running More Than One Classifier](./admin/classifiers.md)
 - [Audio & Microphones](./admin/audio.md)
 - [Recording & Retention](./admin/recording.md)
+- [Analysing Long Recordings](./admin/ingesting-recordings.md)
 - [Notifications & Integrations](./admin/notifications.md)
 - [Remote Access & Security](./admin/remote-access.md)
 - [Backups & Recovery](./admin/backups.md)
@@ -47,6 +48,8 @@ phone bottom bar): **Today**, **Species**, **Patterns**, **Recordings**,
 
 - [Tuning Detection Accuracy](./guides/tuning.md)
 - [Same audio, same detections](./guides/parity.md)
+- [Measuring the Station](./guides/evaluation.md)
+- [Research Use](./guides/research.md)
 - [Common Tasks](./guides/recipes.md)
 - [Migrating from BirdNET-Pi](./guides/migration.md)
 - [FAQ](./guides/faq.md)

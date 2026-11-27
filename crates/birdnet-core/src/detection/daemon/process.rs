@@ -4,7 +4,9 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::detection::ChunkFilters;
-use crate::detection::pipeline::{self, PipelineConfig, PreparedChunk};
+use crate::detection::pipeline::{
+    self, ChannelAnalysis, OccurrenceWeek, PipelineConfig, PreparedChunk,
+};
 use crate::detection::types::ChunkPrediction;
 use crate::inference::health::ErrorClass;
 use crate::inference::registry::ClassifierRegistry;
@@ -195,10 +197,16 @@ fn record_window(
 /// against its own threshold, agreement counted rather than folded into the
 /// confidence.
 ///
-/// The human score is the **highest** any classifier reported, not the
-/// primary's. It drives the privacy gate, and if any model heard speech the
-/// safe reading is that there was speech: erring towards suppressing a bird is
-/// recoverable, erring towards publishing a conversation is not.
+/// Each answering classifier's own human score, human rank and loudest noise
+/// are carried in [`ChunkPrediction::by_classifier`], and the privacy and
+/// noise filters judge each against its own rule, flagging the chunk when
+/// **any** classifier's rule fires (review F09): if any model heard speech the
+/// safe reading is that there was speech, and erring towards suppressing a
+/// bird is recoverable where erring towards publishing a conversation is not.
+/// Scores are never compared across classifiers for that verdict; the
+/// highest score, best rank and loudest noise kept beside them are summaries
+/// for a reader of one number. With no per-classifier rule the verdict is the
+/// one the summaries gave against the station's rule.
 fn infer_chunk(
     registry: &mut ClassifierRegistry,
     route: &[usize],
@@ -219,6 +227,9 @@ fn infer_chunk(
     let mut human_score = 0.0_f32;
     let mut human_rank: Option<usize> = None;
     let mut loudest_noise = None;
+    let mut by_classifier = Vec::with_capacity(route.len());
+    // Whether a classifier able to hear people failed this window (F08).
+    let mut privacy_unassessed = false;
     // The first classifier error, returned only if no routed classifier
     // answered: one model failing must not silence the others (`e853776`).
     let mut first_error = None;
@@ -253,6 +264,7 @@ fn infer_chunk(
                 "no audio was prepared at {rate} Hz for classifier `{model_id}`"
             ));
             record_window(registered, Err((ErrorClass::Inference, Some(&e))), now);
+            privacy_unassessed |= registered.model.has_human_labels();
             first_error.get_or_insert(e);
             windows.push((idx, false));
             continue;
@@ -280,12 +292,26 @@ fn infer_chunk(
             }
             Err(e) => {
                 record_window(registered, Err((ErrorClass::Inference, Some(&e))), now);
+                privacy_unassessed |= registered.model.has_human_labels();
                 first_error.get_or_insert(e);
                 windows.push((idx, false));
                 continue;
             }
         };
         windows.push((idx, true));
+        // Each classifier's own evidence, on its own scale, for filters that
+        // judge each by its own rule (review F09). The summaries below are
+        // kept for readers of one number; no filter decides on them while
+        // this is filled.
+        by_classifier.push(crate::detection::types::ClassifierEvidence {
+            model_id: model_id.clone(),
+            human_score: prediction.human_score,
+            human_rank: prediction.human_rank,
+            loudest_noise: prediction.loudest_noise.clone().map(|mut noise| {
+                noise.model_id = Some(model_id.clone());
+                noise
+            }),
+        });
         human_score = human_score.max(prediction.human_score);
         human_rank = match (human_rank, prediction.human_rank) {
             (Some(a), Some(b)) => Some(a.min(b)),
@@ -314,11 +340,18 @@ fn infer_chunk(
         return Err(e.into());
     }
 
-    let mut detections = crate::detection::merge::merge_verdicts(&verdicts);
-    // One name per species on the station, the primary's (MMP-10). Only a
-    // station that ran more than one classifier on this chunk can differ.
+    // Two names of one species are one species (MMP-09).
+    let mut detections =
+        crate::detection::merge::merge_verdicts_with(&verdicts, registry.synonyms());
+    // One name per species on the station, the primary's (MMP-10, MMP-09). Only
+    // a station that ran more than one classifier on this chunk can differ.
     if verdicts.len() > 1 {
         let primary = registry.primary().model.labels();
+        crate::detection::merge::name_synonyms_as_primary(
+            &mut detections,
+            registry.synonyms(),
+            |sci| primary.iter().any(|l| l.scientific_name == sci),
+        );
         crate::detection::merge::name_as_primary(&mut detections, |sci| {
             primary
                 .iter()
@@ -326,12 +359,19 @@ fn infer_chunk(
                 .map(|l| l.common_name.as_str())
         });
     }
-    attach_answers(registry, &windows, chunk.start_secs, &mut detections);
+    attach_answers(
+        registry,
+        &windows,
+        (chunk.start_secs, chunk.end_secs),
+        &mut detections,
+    );
     Ok(ChunkPrediction {
         detections,
         human_score,
         human_rank,
+        privacy_unassessed,
         loudest_noise,
+        by_classifier,
     })
 }
 
@@ -355,7 +395,7 @@ type Lookup<'a> = Box<dyn Fn(&str) -> crate::detection::answers::ClassScore + 'a
 fn attach_answers(
     registry: &ClassifierRegistry,
     windows: &[(usize, bool)],
-    chunk_start_secs: f32,
+    (chunk_start_secs, chunk_end_secs): (f32, f32),
     detections: &mut [crate::detection::types::Detection],
 ) {
     use crate::detection::answers::{WindowOutcome, answers_for};
@@ -369,28 +409,209 @@ fn attach_answers(
     if listening.len() < 2 {
         return;
     }
+    let synonyms = registry.synonyms();
     let lookups: Vec<Option<Lookup<'_>>> = listening
         .iter()
         .map(|&(registered, answered)| {
             answered.then(|| {
-                Box::new(move |name: &str| registered.model.score_of_last_window(name))
-                    as Lookup<'_>
+                // A classifier that names the species by the other name of a
+                // pair is asked under that name (MMP-09), so its answer is
+                // its score and not "no class".
+                Box::new(
+                    move |name: &str| match registered.model.score_of_last_window(name) {
+                        crate::detection::answers::ClassScore::NoClass => synonyms
+                            .other_name(name)
+                            .map_or(crate::detection::answers::ClassScore::NoClass, |other| {
+                                registered.model.score_of_last_window(other)
+                            }),
+                        score => score,
+                    },
+                ) as Lookup<'_>
             })
         })
         .collect();
     let outcomes: Vec<WindowOutcome<'_>> = listening
         .iter()
         .zip(&lookups)
-        .map(|(&(registered, _), lookup)| WindowOutcome {
-            model_id: &registered.id,
-            bar: registered.own_threshold,
-            window_start_secs: chunk_start_secs,
-            window_end_secs: chunk_start_secs + registered.spec.window_secs(),
-            scores: lookup.as_deref(),
+        .map(|(&(registered, _), lookup)| {
+            let (window_end_secs, padded_secs) = crate::detection::answers::window_support(
+                chunk_start_secs,
+                registered.spec.window_secs(),
+                chunk_end_secs,
+            );
+            WindowOutcome {
+                model_id: &registered.id,
+                bar: registered.own_threshold,
+                window_start_secs: chunk_start_secs,
+                window_end_secs,
+                padded_secs,
+                scores: lookup.as_deref(),
+            }
         })
         .collect();
     for detection in detections {
         detection.model_scores = answers_for(&outcomes, &detection.scientific_name);
+    }
+}
+
+/// Every window's prediction, by `infer`, and how many failed (review F18).
+///
+/// A window no routed classifier answered is kept as an empty prediction, so
+/// the windows around it keep theirs, and counted; when the station can hear
+/// people (`can_hear_people`) it is marked unassessed for speech, so a privacy
+/// filter masks it. Only when every window failed is the file an error, as a
+/// file the pipeline could not analyse at all.
+fn infer_windows<F>(
+    chunks: &[crate::detection::pipeline::PreparedChunk],
+    can_hear_people: bool,
+    mut infer: F,
+) -> Result<(Vec<ChunkPrediction>, u64), DaemonError>
+where
+    F: FnMut(&crate::detection::pipeline::PreparedChunk) -> Result<ChunkPrediction, DaemonError>,
+{
+    let mut out = Vec::with_capacity(chunks.len());
+    let mut failed = 0_u64;
+    let mut first_error = None;
+    for chunk in chunks {
+        match infer(chunk) {
+            Ok(prediction) => out.push(prediction),
+            Err(e) => {
+                failed += 1;
+                first_error.get_or_insert(e);
+                out.push(ChunkPrediction {
+                    privacy_unassessed: can_hear_people,
+                    ..ChunkPrediction::default()
+                });
+            }
+        }
+    }
+    match first_error {
+        Some(e) if failed == chunks.len() as u64 => Err(e),
+        _ => Ok((out, failed)),
+    }
+}
+
+/// What the occurrence filter and the operator's lists made of one detection.
+#[derive(Debug, Clone, Copy)]
+enum Verdict {
+    /// A sound or person class, not a species: not recorded (MMP-04).
+    Sound,
+    /// Held back by the operator's lists: counted only.
+    Lists,
+    /// Held back because the occurrence model does not score the species.
+    Unscored,
+    /// Kept: a detection (`None`), or an out-of-range record for the
+    /// quarantine with the occurrence model's score (ACC-01).
+    Keep(Option<f32>),
+}
+
+/// The species the filter admits for one week: the primary's, and those only
+/// another routed classifier knows.
+struct WeekSets {
+    /// The primary's admitted species.
+    primary: std::collections::HashSet<String>,
+    /// Admitted species no primary label names.
+    elsewhere: std::collections::HashSet<String>,
+    /// Why the occurrence model failed for the primary, if it did.
+    geo_failure: Option<crate::inference::model::InferenceError>,
+}
+
+impl WeekSets {
+    /// Whether a detection of `sci` is admitted this week.
+    fn allows(&self, primary_names: &std::collections::HashSet<&str>, sci: &str) -> bool {
+        if primary_names.contains(sci) {
+            self.primary.contains(sci)
+        } else {
+            self.elsewhere.contains(sci)
+        }
+    }
+}
+
+/// Build [`WeekSets`] for `week`.
+///
+/// A metadata model that fails *here*, at run time, falls back to the
+/// operator's lists — the same thing a model that fails to load does. This was
+/// a `?`, which failed every file for as long as the fault lasted: a station
+/// that recorded nothing, rather than one that recorded without an occurrence
+/// filter.
+///
+/// Species only another routed classifier knows are judged in that
+/// classifier's own vocabulary: the occurrence model by name where it scores
+/// the species, nothing where it does not (unless whitelisted), and the
+/// operator's lists (MMP-03). They used to get the lists alone, so a station
+/// with its range filter on recorded extralimital birds, frogs and insects
+/// from Perch unfiltered. A model failing here falls back to the lists, as it
+/// does for the primary.
+fn week_sets(
+    species_filter: &mut SpeciesFilter,
+    registry: &ClassifierRegistry,
+    route: &[usize],
+    location: Option<(f64, f64)>,
+    week: u32,
+    primary_labels: &crate::inference::labels::LabelSet,
+    primary_names: &std::collections::HashSet<&str>,
+) -> WeekSets {
+    let (primary, geo_failure) = match species_filter.filter_species(location, week, primary_labels)
+    {
+        Ok(set) => (set, None),
+        Err(e) => {
+            report_species_filter_failure(&e);
+            (species_filter.allowed_by_lists(primary_labels), Some(e))
+        }
+    };
+    let mut elsewhere = std::collections::HashSet::new();
+    for m in route
+        .iter()
+        .filter(|&&idx| idx != 0)
+        .filter_map(|&idx| registry.model(idx))
+    {
+        let set = species_filter
+            .filter_species_of(&m.id, location, week)
+            .unwrap_or_else(|e| {
+                report_species_filter_failure(&e);
+                species_filter.allowed_by_lists(m.model.labels())
+            });
+        elsewhere.extend(
+            set.into_iter()
+                .filter(|name| !primary_names.contains(name.as_str())),
+        );
+    }
+    WeekSets {
+        primary,
+        elsewhere,
+        geo_failure,
+    }
+}
+
+/// Each distinct value of `weeks`, in the order it first appears.
+fn distinct_in_order(weeks: &[u32]) -> Vec<u32> {
+    let mut out: Vec<u32> = Vec::new();
+    for &w in weeks {
+        if !out.contains(&w) {
+            out.push(w);
+        }
+    }
+    out
+}
+
+/// The occurrence week one window is scored against (review F13).
+///
+/// [`OccurrenceWeek::PerFile`], the default, is BirdNET-Pi's rule: the week of
+/// the date in the recording's filename, `file_week`, for every window. With
+/// [`OccurrenceWeek::PerWindow`] it is the week of the window's own capture
+/// date, the recording's start shifted by the window's start
+/// ([`crate::civil::birdnet_week_at`]), so a window past midnight on the last
+/// day of a week bin is scored in the next bin. A recording date or time that
+/// does not parse keeps `file_week`.
+fn window_week(chunk: &PreparedChunk, mode: OccurrenceWeek, file_week: u32) -> u32 {
+    match mode {
+        OccurrenceWeek::PerFile => file_week,
+        OccurrenceWeek::PerWindow => crate::civil::birdnet_week_at(
+            &chunk.recording.date,
+            &chunk.recording.time,
+            f64::from(chunk.start_secs),
+        )
+        .unwrap_or(file_week),
     }
 }
 
@@ -404,7 +625,10 @@ fn attach_answers(
 /// # Errors
 ///
 /// Returns `DaemonError` if any stage fails.
-#[allow(clippy::cast_possible_truncation, clippy::too_many_arguments)]
+///
+/// [`ChannelAnalysis::Each`] gives one result per channel and is refused here
+/// with [`DaemonError::Config`]; [`process_and_infer_channels`] gives it.
+#[allow(clippy::too_many_arguments)]
 pub fn process_and_infer_filtered(
     path: &Path,
     pipeline_config: &PipelineConfig,
@@ -417,9 +641,115 @@ pub fn process_and_infer_filtered(
     lon: Option<f64>,
     correlation_id: &str,
 ) -> Result<super::FilteredFile, DaemonError> {
-    let start = Instant::now();
+    if pipeline_config.channels == ChannelAnalysis::Each {
+        return Err(DaemonError::Config(
+            "each channel analysed on its own gives one result per channel; call \
+             process_and_infer_channels"
+                .to_owned(),
+        ));
+    }
+    let mut files = process_and_infer_channels(
+        path,
+        pipeline_config,
+        registry,
+        route,
+        chunk_filters,
+        species_filter,
+        model_state,
+        lat,
+        lon,
+        correlation_id,
+    )?;
+    files
+        .pop()
+        .ok_or_else(|| DaemonError::Config("the pipeline returned no channel".to_owned()))
+}
 
-    let (chunks, source_rate_hz) = pipeline::process_file_with_source_rate(path, pipeline_config)?;
+/// [`process_and_infer_filtered`] under every [`ChannelAnalysis`] (review F12).
+///
+/// One [`super::FilteredFile`] for the mean or the chosen channel, and
+/// one per channel, in channel order, for [`ChannelAnalysis::Each`], each
+/// tagged with its channel ([`super::FilteredFile::channel`]).
+///
+/// Each channel is analysed as its own recording, through its own filters:
+/// the privacy filter's neighbours, the noise filter's window and the
+/// corroboration count never reach across channels. The channels are still
+/// **one station**: one place, one clock, one recorder, and a bird heard on
+/// both is one bird, not two. A caller storing these must map each channel
+/// to the station's identity (and keep the channel as provenance), never to a
+/// station of its own, and must not count a minute of listening once per
+/// channel.
+///
+/// # Errors
+///
+/// As [`process_and_infer_filtered`]; a channel whose every window failed
+/// fails the call.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the same inputs as process_and_infer_filtered, which it serves"
+)]
+pub fn process_and_infer_channels(
+    path: &Path,
+    pipeline_config: &PipelineConfig,
+    registry: &mut ClassifierRegistry,
+    route: &[usize],
+    chunk_filters: &ChunkFilters,
+    species_filter: &mut SpeciesFilter,
+    model_state: Option<&crate::detection::daemon::ModelStateObserver>,
+    lat: Option<f64>,
+    lon: Option<f64>,
+    correlation_id: &str,
+) -> Result<Vec<super::FilteredFile>, DaemonError> {
+    let start = Instant::now();
+    let (groups, source_rate_hz, provenance) =
+        pipeline::process_file_channels(path, pipeline_config)?;
+    groups
+        .into_iter()
+        .map(|group| {
+            let mut file = analyse_chunks(
+                path,
+                group.chunks,
+                source_rate_hz,
+                start,
+                pipeline_config,
+                registry,
+                route,
+                chunk_filters,
+                species_filter,
+                model_state,
+                lat,
+                lon,
+                correlation_id,
+            )?;
+            file.channel = group.channel;
+            file.channels = Some(provenance.clone());
+            Ok(file)
+        })
+        .collect()
+}
+
+/// One stream's chunks through inference and every filter.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::too_many_arguments,
+    clippy::needless_pass_by_value,
+    reason = "the chunks are this stream's, handed over whole as the old body owned them"
+)]
+fn analyse_chunks(
+    path: &Path,
+    chunks: Vec<PreparedChunk>,
+    source_rate_hz: u32,
+    start: Instant,
+    pipeline_config: &PipelineConfig,
+    registry: &mut ClassifierRegistry,
+    route: &[usize],
+    chunk_filters: &ChunkFilters,
+    species_filter: &mut SpeciesFilter,
+    model_state: Option<&crate::detection::daemon::ModelStateObserver>,
+    lat: Option<f64>,
+    lon: Option<f64>,
+    correlation_id: &str,
+) -> Result<super::FilteredFile, DaemonError> {
     let pipeline_elapsed = start.elapsed();
 
     tracing::debug!(
@@ -430,19 +760,31 @@ pub fn process_and_infer_filtered(
         "audio pipeline complete"
     );
 
-    // One week per file: every chunk carries the same `recording`, because the
-    // date comes from the filename rather than from the chunk's offset within
-    // it. Deriving it once says so, and leaves one place for it to be wrong.
-    let week = chunks
+    // One week per file by default, as BirdNET-Pi scores one: every chunk
+    // carries the same `recording`, and the date comes from the filename. With
+    // `OccurrenceWeek::PerWindow` each window's own capture date decides its
+    // week instead (review F13); see `window_week`.
+    let file_week = chunks
         .first()
         .map_or(1, |c| geomodel_week(&c.recording.date, path));
+    let mode = pipeline_config.occurrence_week;
+    let weeks: Vec<u32> = chunks
+        .iter()
+        .map(|c| window_week(c, mode, file_week))
+        .collect();
 
     // Run inference on all chunks first to collect raw predictions
     let mut all_predictions: Vec<ChunkPrediction> = Vec::with_capacity(chunks.len());
 
-    for chunk in &chunks {
-        all_predictions.push(infer_chunk(registry, route, chunk, week)?);
-    }
+    let can_hear_people = route.iter().any(|&idx| {
+        registry
+            .model(idx)
+            .is_some_and(|m| m.model.has_human_labels())
+    });
+    let (predictions, failed_windows) = infer_windows(&chunks, can_hear_people, |chunk| {
+        infer_chunk(registry, route, chunk, window_week(chunk, mode, file_week))
+    })?;
+    all_predictions.extend(predictions);
 
     // Apply the whole-chunk filters: human speech, then non-bird noise, then
     // corroboration — which needs to know where each chunk sits in the
@@ -450,6 +792,27 @@ pub fn process_and_infer_filtered(
     let starts: Vec<f32> = chunks.iter().map(|c| c.start_secs).collect();
     let (filtered_predictions, mut tally) = chunk_filters.apply_tallied(&starts, &all_predictions);
     tally.date = chunks.first().map_or_default(|c| c.recording.date.clone());
+    tally.failed_windows = failed_windows;
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "a window's end is a non-negative number of seconds far below u64's range"
+    )]
+    {
+        tally.decoded_ms = chunks.last().map_or(0, |c| {
+            (f64::from(c.end_secs.max(0.0)) * 1000.0).round() as u64
+        });
+    }
+    if failed_windows > 0 {
+        tracing::warn!(
+            correlation_id,
+            file = %path.display(),
+            failed_windows,
+            windows = chunks.len(),
+            "no classifier answered some of this file's windows; the rest are kept, and the \
+             failed windows are not counted as listening"
+        );
+    }
 
     // Build the allowed species set from the species filter.
     //
@@ -468,104 +831,105 @@ pub fn process_and_infer_filtered(
         }
     }
     let primary_labels = registry.primary().model.labels();
-    //
-    // A metadata model that fails *here*, at run time, falls back to the
-    // operator's lists — the same thing a model that fails to load does. This
-    // was a `?`, which failed every file for as long as the fault lasted: a
-    // station that recorded nothing, rather than one that recorded without an
-    // occurrence filter.
-    let (allowed_species, geo_failure) =
-        match species_filter.filter_species(lat.zip(lon), week, primary_labels) {
-            Ok(set) => (set, None),
-            Err(e) => {
-                report_species_filter_failure(&e);
-                (species_filter.allowed_by_lists(primary_labels), Some(e))
-            }
-        };
-    // Species only another routed classifier knows, judged in that
-    // classifier's own vocabulary: the occurrence model by name where it
-    // scores the species, nothing where it does not (unless whitelisted), and
-    // the operator's lists (MMP-03). They used to get the lists alone, so a
-    // station with its range filter on recorded extralimital birds, frogs and
-    // insects from Perch unfiltered. A model failing here falls back to the
-    // lists, as it does for the primary.
     let primary_names: std::collections::HashSet<&str> = primary_labels
         .iter()
         .map(|l| l.scientific_name.as_str())
         .collect();
-    let mut allowed_elsewhere: std::collections::HashSet<String> = std::collections::HashSet::new();
-    for m in route
+
+    // What the filter decided for each detection, by chunk, filled one week at
+    // a time: `rejection` reads the scores of the week the filter last ran
+    // for, so each week's detections are judged right after its sets are
+    // built. One file has one week unless `OccurrenceWeek::PerWindow` is on,
+    // and then at most a handful (a midnight inside it); each distinct week is
+    // asked once per file, and the filter's own cache keeps the last.
+    let mut verdicts: Vec<Vec<Verdict>> = filtered_predictions
         .iter()
-        .filter(|&&idx| idx != 0)
-        .filter_map(|&idx| registry.model(idx))
-    {
-        let set = species_filter
-            .filter_species_of(&m.id, lat.zip(lon), week)
-            .unwrap_or_else(|e| {
-                report_species_filter_failure(&e);
-                species_filter.allowed_by_lists(m.model.labels())
-            });
-        allowed_elsewhere.extend(
-            set.into_iter()
-                .filter(|name| !primary_names.contains(name.as_str())),
+        .map(|d| vec![Verdict::Keep(None); d.len()])
+        .collect();
+    for week in distinct_in_order(&weeks) {
+        let sets = week_sets(
+            species_filter,
+            registry,
+            route,
+            lat.zip(lon),
+            week,
+            primary_labels,
+            &primary_names,
         );
-    }
-    let allowed = |sci: &str| {
-        if primary_names.contains(sci) {
-            allowed_species.contains(sci)
-        } else {
-            allowed_elsewhere.contains(sci)
+        // Only a filter that runs here reports, so a filter that start-up
+        // found off (no model, or no position: MDL-04) keeps the reason it was
+        // given. Reported for the file's own week, which is every week unless
+        // the per-window mode is on.
+        if week == weeks.first().copied().unwrap_or(file_week)
+            && let Some(observer) = model_state
+            && species_filter.has_model()
+            && lat.zip(lon).is_some()
+        {
+            observer.filter(&filter_state_after_file(
+                sets.geo_failure.as_ref(),
+                sets.primary.len() as u64,
+            ));
         }
-    };
-    // Only a filter that runs here reports, so a filter that start-up found
-    // off (no model, or no position: MDL-04) keeps the reason it was given.
-    if let Some(observer) = model_state
-        && species_filter.has_model()
-        && lat.zip(lon).is_some()
-    {
-        observer.filter(&filter_state_after_file(
-            geo_failure.as_ref(),
-            allowed_species.len() as u64,
-        ));
+        for (i, detections) in filtered_predictions.iter().enumerate() {
+            if weeks[i] != week {
+                continue;
+            }
+            for (j, detection) in detections.iter().enumerate() {
+                // A sound or a person, not a species (MMP-04): it has done its
+                // work in the chunk filters above and is not recorded.
+                if crate::detection::sound_class::is_sound_class(
+                    &detection.scientific_name,
+                    &detection.common_name,
+                ) {
+                    verdicts[i][j] = Verdict::Sound;
+                    continue;
+                }
+                // Held back here is counted, and an out-of-range bird the
+                // model scored goes to the "Unlikely here" quarantine with that
+                // score (ACC-01): a vagrant is the record most worth having,
+                // and it vanished without a trace at any confidence. The
+                // operator's lists are an instruction and are only counted; a
+                // species the model does not score is held back as the
+                // maintainer decided (MMP-03).
+                if !sets.allows(&primary_names, &detection.scientific_name) {
+                    verdicts[i][j] = match species_filter.rejection(&detection.scientific_name) {
+                        crate::inference::species_filter::Rejection::Lists => Verdict::Lists,
+                        crate::inference::species_filter::Rejection::Unscored => Verdict::Unscored,
+                        crate::inference::species_filter::Rejection::Score(p) => {
+                            Verdict::Keep(Some(p))
+                        }
+                    };
+                }
+            }
+        }
     }
 
-    // Collect events, applying species filter
+    // Collect events, in chunk order.
     let mut events = Vec::new();
     let total_ms = start.elapsed().as_millis() as u64;
 
-    for (chunk, detections) in chunks.iter().zip(filtered_predictions.iter()) {
-        for detection in detections {
-            // A sound or a person, not a species (MMP-04): it has done its work
-            // in the chunk filters above and is not recorded.
-            if crate::detection::sound_class::is_sound_class(
-                &detection.scientific_name,
-                &detection.common_name,
-            ) {
-                continue;
-            }
-            // Held back here is counted, and an out-of-range bird the model
-            // scored goes to the "Unlikely here" quarantine with that score
-            // (ACC-01): a vagrant is the record most worth having, and it
-            // vanished without a trace at any confidence. The operator's lists
-            // are an instruction and are only counted; a species the model
-            // does not score is held back as the maintainer decided (MMP-03).
-            let mut out_of_range = None;
-            if !allowed(&detection.scientific_name) {
-                match species_filter.rejection(&detection.scientific_name) {
-                    crate::inference::species_filter::Rejection::Lists => {
-                        tally.species_list_detections += 1;
-                        continue;
-                    }
-                    crate::inference::species_filter::Rejection::Unscored => {
-                        tally.occurrence_detections += 1;
-                        continue;
-                    }
-                    crate::inference::species_filter::Rejection::Score(p) => {
-                        tally.occurrence_detections += 1;
-                        out_of_range = Some(p);
-                    }
+    for ((chunk, detections), verdicts) in chunks
+        .iter()
+        .zip(filtered_predictions.iter())
+        .zip(&verdicts)
+    {
+        for (detection, verdict) in detections.iter().zip(verdicts) {
+            let out_of_range = match *verdict {
+                Verdict::Sound => continue,
+                Verdict::Lists => {
+                    tally.species_list_detections += 1;
+                    continue;
                 }
-            }
+                Verdict::Unscored => {
+                    tally.occurrence_detections += 1;
+                    continue;
+                }
+                Verdict::Keep(Some(p)) => {
+                    tally.occurrence_detections += 1;
+                    Some(p)
+                }
+                Verdict::Keep(None) => None,
+            };
 
             // Apply per-species confidence threshold (checked in event_processor instead)
             // The daemon produces raw events; threshold filtering is done downstream.
@@ -610,6 +974,8 @@ pub fn process_and_infer_filtered(
         events,
         tally,
         source_rate_hz,
+        channel: None,
+        channels: None,
     })
 }
 
@@ -747,6 +1113,17 @@ mod tests {
         bars: (Option<f32>, Option<f32>),
         shared: usize,
     ) -> ClassifierRegistry {
+        two_classifiers_naming(dir, bars, shared, None)
+    }
+
+    /// As [`two_classifiers_with`], the primary's first class named
+    /// `primary_first` when given (a human class, for the privacy tests).
+    fn two_classifiers_naming(
+        dir: &Path,
+        bars: (Option<f32>, Option<f32>),
+        shared: usize,
+        primary_first: Option<&str>,
+    ) -> ClassifierRegistry {
         use crate::inference::model::ModelConfig;
         use crate::inference::registry::ModelSpec;
         const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
@@ -758,7 +1135,16 @@ mod tests {
                 .join("\n")
         };
         let labels = dir.join("labels.txt");
-        std::fs::write(&labels, names(11)).unwrap();
+        let primary_names = primary_first.map_or_else(
+            || names(11),
+            |first| {
+                std::iter::once(first.to_owned())
+                    .chain((1..11).map(|i| format!("Species{i} bird_Bird {i}")))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            },
+        );
+        std::fs::write(&labels, primary_names).unwrap();
         // The second classifier shares the primary's first `shared` species;
         // its other classes are species the primary does not have. Always one
         // name per class it scores: a labels file of another length is
@@ -816,6 +1202,7 @@ mod tests {
             .unwrap(),
             silent: false,
             at_rates: Vec::new(),
+            channel: None,
         }
     }
 
@@ -1103,6 +1490,84 @@ mod tests {
         }
     }
 
+    /// MMP-09, end to end through two ONNX sessions and the registry's own
+    /// table: the primary calls class 0 *Anthus lutescens* and the second
+    /// classifier calls it *Anthus chii*, a pair of the bundled table. Both hear
+    /// it: one detection, agreed by two, under the primary's name, and each
+    /// classifier's answer is its own score rather than "no class".
+    #[test]
+    fn one_bird_two_classifiers_name_differently_is_one_agreed_detection() {
+        use crate::detection::types::AnswerState::Heard;
+        use crate::inference::model::ModelConfig;
+        use crate::inference::registry::ModelSpec;
+        const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
+        const TINY_V30: &[u8] = include_bytes!("../../testdata/tiny_v30_test.onnx");
+        let tmp = tempfile::tempdir().unwrap();
+        let spec = |id: &str, bytes: &[u8], first: &str| {
+            let path = tmp.path().join(format!("{id}.onnx"));
+            std::fs::write(&path, bytes).unwrap();
+            let labels = tmp.path().join(format!("{id}.txt"));
+            let lines: Vec<String> = std::iter::once(first.to_owned())
+                .chain((1..11).map(|i| format!("Species{i} bird_Bird {i}")))
+                .collect();
+            std::fs::write(&labels, lines.join("\n")).unwrap();
+            ModelSpec {
+                id: id.to_owned(),
+                model_path: path,
+                labels_path: labels,
+                threshold: Some(0.5),
+                sample_rate: Some(48_000),
+                output_scale: None,
+            }
+        };
+        let mut registry = ClassifierRegistry::load(
+            &[
+                spec("birdnet", TINY_V24, "Anthus lutescens_Yellowish Pipit"),
+                spec("v3", TINY_V30, "Anthus chii_Pipit"),
+            ],
+            &std::collections::HashMap::new(),
+            &ModelConfig {
+                confidence_threshold: 0.0,
+                ..ModelConfig::default()
+            },
+        )
+        .expect("both load");
+        assert_eq!(
+            registry.synonyms().other_name("Anthus chii"),
+            Some("Anthus lutescens"),
+            "precondition: the loaded label sets keep the bundled pair"
+        );
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk_scoring(&[0.9]), 20).unwrap();
+        let pipits: Vec<_> = out
+            .detections
+            .iter()
+            .filter(|d| d.scientific_name.starts_with("Anthus"))
+            .collect();
+        assert_eq!(pipits.len(), 1, "one bird, one row: {pipits:?}");
+        let pipit = pipits[0];
+        assert_eq!(
+            pipit.scientific_name, "Anthus lutescens",
+            "the primary's name"
+        );
+        assert_eq!(pipit.common_name, "Yellowish Pipit");
+        assert_eq!(pipit.agreeing_models, Some(2));
+        assert_eq!(answer_of(pipit, "birdnet").state, Heard);
+        let v3 = answer_of(pipit, "v3");
+        assert_eq!(v3.state, Heard, "asked under its own name: {v3:?}");
+        assert!((v3.score.unwrap() - 0.9).abs() < 1e-6);
+
+        // The counterpart: with no table the same chunk is two species.
+        let mut apart = registry.with_synonyms(crate::inference::synonyms::SynonymTable::empty());
+        let out = infer_chunk(&mut apart, &[0, 1], &chunk_scoring(&[0.9]), 20).unwrap();
+        let names: Vec<&str> = out
+            .detections
+            .iter()
+            .filter(|d| d.scientific_name.starts_with("Anthus"))
+            .map(|d| d.scientific_name.as_str())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+    }
+
     /// A classifier that has no class for the species is `NoLabel`, with no
     /// score and no bar, and not a score of zero.
     #[test]
@@ -1163,6 +1628,8 @@ mod tests {
         let mut registry = two_classifiers_with(tmp.path(), (Some(0.60), Some(0.70)), 11);
         let mut chunk = chunk_scoring(&[0.9]);
         chunk.start_secs = 6.0;
+        // A whole chunk, as the pipeline cuts one: it ends a chunk later.
+        chunk.end_secs = 9.0;
         let out = infer_chunk(&mut registry, &[0, 1], &chunk, 20).unwrap();
         let d = &out.detections[0];
         // birdnet: 144 000 samples at 48 kHz = 3 s. v3: 96 000 declared at 48 kHz = 2 s.
@@ -1174,6 +1641,53 @@ mod tests {
         let v = answer_of(d, "v3");
         assert!(
             (v.window_start_secs - 6.0).abs() < 1e-6 && (v.window_end_secs - 8.0).abs() < 1e-6,
+            "{v:?}"
+        );
+    }
+
+    /// Review F09: on the zero-padded last chunk of a recording a classifier's
+    /// window runs past the audio. Its answer records the audio that exists
+    /// (clamped to the recording's end, as the detection row is) and how much
+    /// of its window was padding. A 7 s recording's chunk at 6 s holds one
+    /// second of audio: birdnet's 3 s window is 2 s padding, v3's 2 s window 1 s.
+    ///
+    /// Counterpart: a whole chunk (ending at 9 s) is clamped nowhere and padded
+    /// nowhere, so the clamp is the recording's end and not a property of the
+    /// windows.
+    #[test]
+    fn a_padded_tail_window_records_the_audio_that_exists_and_its_padding() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers_with(tmp.path(), (Some(0.60), Some(0.70)), 11);
+        let mut tail = chunk_scoring(&[0.9]);
+        tail.start_secs = 6.0;
+        tail.end_secs = 7.0;
+        let out = infer_chunk(&mut registry, &[0, 1], &tail, 20).unwrap();
+        let d = &out.detections[0];
+        let close = |a: f32, b: f32| (a - b).abs() < 1e-6;
+        let b = answer_of(d, "birdnet");
+        assert!(
+            close(b.window_end_secs, 7.0) && close(b.padded_secs, 2.0),
+            "birdnet's answer claims audio past the recording's end: {b:?}"
+        );
+        let v = answer_of(d, "v3");
+        assert!(
+            close(v.window_end_secs, 7.0) && close(v.padded_secs, 1.0),
+            "v3's answer claims audio past the recording's end: {v:?}"
+        );
+
+        let mut whole = chunk_scoring(&[0.9]);
+        whole.start_secs = 6.0;
+        whole.end_secs = 9.0;
+        let out = infer_chunk(&mut registry, &[0, 1], &whole, 20).unwrap();
+        let d = &out.detections[0];
+        let b = answer_of(d, "birdnet");
+        assert!(
+            close(b.window_end_secs, 9.0) && close(b.padded_secs, 0.0),
+            "{b:?}"
+        );
+        let v = answer_of(d, "v3");
+        assert!(
+            close(v.window_end_secs, 8.0) && close(v.padded_secs, 0.0),
             "{v:?}"
         );
     }
@@ -1256,6 +1770,305 @@ mod tests {
         infer_chunk(&mut registry, &[0], &chunk_of(144_000), 20).unwrap();
         assert_eq!(registry.primary().model.last_non_finite_scores(), 0);
         assert_eq!(registry.health()[0].1.consecutive_failures, 0);
+    }
+
+    /// Review F08: a window that a classifier able to hear people failed has
+    /// not been judged for speech, whatever the others said, and a privacy
+    /// filter masks it rather than keep audio nobody assessed. The primary
+    /// here names a human class and fails the window (V2.4 refuses a 60 000
+    /// value chunk); the second, which names none, answers it.
+    ///
+    /// Counterparts: with the privacy filter off nothing is masked, and the
+    /// same failure of a primary that cannot hear people masks nothing.
+    #[test]
+    fn a_window_a_classifier_that_hears_people_failed_is_masked() {
+        use crate::detection::privacy::PrivacyFilter;
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers_naming(
+            tmp.path(),
+            (None, None),
+            11,
+            Some("Human vocal_Human vocal"),
+        );
+        assert!(
+            registry.primary().model.has_human_labels(),
+            "precondition: the primary can hear people"
+        );
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk_of(60_000), 20)
+            .expect("the second classifier answers");
+        assert_eq!(
+            registry.health()[0].1.consecutive_failures,
+            1,
+            "precondition: the primary failed the window"
+        );
+        assert_eq!(
+            PrivacyFilter::new(0.03).masked_windows(std::slice::from_ref(&out)),
+            [true],
+            "a window no classifier able to hear people judged was kept"
+        );
+        assert_eq!(PrivacyFilter::new(0.0).masked_windows(&[out]), [false]);
+
+        let other = tempfile::tempdir().unwrap();
+        let mut deaf = two_classifiers(other.path());
+        assert!(!deaf.primary().model.has_human_labels(), "precondition");
+        let out = infer_chunk(&mut deaf, &[0, 1], &chunk_of(60_000), 20).unwrap();
+        assert_eq!(deaf.health()[0].1.consecutive_failures, 1, "precondition");
+        assert_eq!(
+            PrivacyFilter::new(0.03).masked_windows(&[out]),
+            [false],
+            "a failure that cost no privacy coverage masked the window"
+        );
+    }
+
+    /// Review F09, end to end through two real ONNX sessions: each answering
+    /// classifier's own human evidence is carried, so a privacy rule named for
+    /// a classifier is read against that classifier's score. The primary names
+    /// a human class and scores it sigmoid(0.9) = 0.71; v3 has none. A
+    /// station threshold of 0.80 masks nothing; a 0.50 rule for birdnet masks
+    /// the chunk; the same rule for v3, which heard nobody, does not.
+    #[test]
+    fn each_classifier_s_own_human_evidence_reaches_the_privacy_rule() {
+        use crate::detection::privacy::{ClassifierPrivacyRule, PrivacyFilter};
+        let tmp = tempfile::tempdir().unwrap();
+        let mut registry = two_classifiers_naming(
+            tmp.path(),
+            (None, None),
+            11,
+            Some("Human vocal_Human vocal"),
+        );
+        let out = infer_chunk(&mut registry, &[0, 1], &chunk_scoring(&[0.9]), 20).unwrap();
+        let ids: Vec<&str> = out
+            .by_classifier
+            .iter()
+            .map(|e| e.model_id.as_str())
+            .collect();
+        assert_eq!(
+            ids,
+            ["birdnet", "v3"],
+            "each answering classifier, in route order"
+        );
+        assert!(
+            (out.by_classifier[0].human_score - 0.710_949_5).abs() < 1e-4,
+            "{:?}",
+            out.by_classifier
+        );
+        assert_eq!(
+            out.by_classifier[1].human_rank, None,
+            "v3 has no human class"
+        );
+        let rule = ClassifierPrivacyRule {
+            threshold: Some(0.50),
+            rank_cutoff: None,
+        };
+        let masks = |f: PrivacyFilter| f.masked_windows(std::slice::from_ref(&out))[0];
+        assert!(!masks(PrivacyFilter::new(0.80)), "precondition");
+        assert!(masks(
+            PrivacyFilter::new(0.80).with_classifier_rule("birdnet", rule)
+        ));
+        assert!(!masks(
+            PrivacyFilter::new(0.80).with_classifier_rule("v3", rule)
+        ));
+    }
+
+    /// Review F12, through the daemon's entry point: antiphase stereo
+    /// analysed as its mean is silence, so nothing is classified; analysed
+    /// channel by channel each channel is classified and its result says which
+    /// channel it was. The one-result entry point refuses per-channel analysis
+    /// rather than merge two channels' events into one file's.
+    #[test]
+    fn each_channel_s_result_is_tagged_with_its_channel() {
+        use crate::detection::corroboration::ConfirmationLevel;
+        use crate::detection::noise::NoiseFilter;
+        use crate::detection::pipeline::ChannelAnalysis;
+        use crate::detection::privacy::PrivacyFilter;
+        use crate::inference::labels::LabelSet;
+        use crate::inference::model::{BirdNetModel, ModelConfig};
+        use crate::inference::species_filter::SpeciesFilterConfig;
+        const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
+        let tmp = tempfile::tempdir().unwrap();
+        let model_path = tmp.path().join("m.onnx");
+        std::fs::write(&model_path, TINY_V24).unwrap();
+        let labels = LabelSet::from_entries(
+            (0..11)
+                .map(|i| (format!("Species{i} bird"), format!("Bird {i}")))
+                .collect(),
+        );
+        let model = BirdNetModel::load(
+            &model_path,
+            labels,
+            ModelConfig {
+                confidence_threshold: 0.0,
+                ..ModelConfig::default()
+            },
+        )
+        .unwrap();
+        let mut registry = ClassifierRegistry::single("birdnet", model);
+        let mut species_filter = SpeciesFilter::new_passthrough(SpeciesFilterConfig::default());
+        let wav = crate::detection::pipeline::channel_tests::write_channels(tmp.path(), &[1, -1]);
+        let filters = ChunkFilters {
+            privacy: PrivacyFilter::new(0.0),
+            noise: NoiseFilter::new(0.0, Vec::new()),
+            confirmation: ConfirmationLevel::Off,
+        };
+        let mut run = |channels| {
+            let config = PipelineConfig {
+                raw_audio_input: true,
+                target_sample_rate: 48_000,
+                chunk_duration_secs: 3.0,
+                channels,
+                ..PipelineConfig::default()
+            };
+            process_and_infer_channels(
+                &wav,
+                &config,
+                &mut registry,
+                &[0],
+                &filters,
+                &mut species_filter,
+                None,
+                None,
+                None,
+                "",
+            )
+            .unwrap()
+        };
+        let mean = run(ChannelAnalysis::Mean);
+        assert_eq!(mean.len(), 1);
+        assert_eq!(mean[0].channel, None);
+        assert!(
+            mean[0].events.is_empty(),
+            "the mean of antiphase stereo is silence"
+        );
+        assert!(
+            mean[0]
+                .channels
+                .as_ref()
+                .is_some_and(crate::audio::decode::ChannelProvenance::cancellation_suspected)
+        );
+
+        let each = run(ChannelAnalysis::Each);
+        let tags: Vec<Option<u16>> = each.iter().map(|f| f.channel).collect();
+        assert_eq!(tags, [Some(0), Some(1)]);
+        for f in &each {
+            assert!(
+                !f.events.is_empty(),
+                "channel {:?} was classified",
+                f.channel
+            );
+            assert_eq!(f.tally.windows, 2, "each channel is its own six seconds");
+        }
+
+        let config = PipelineConfig {
+            raw_audio_input: true,
+            target_sample_rate: 48_000,
+            chunk_duration_secs: 3.0,
+            channels: ChannelAnalysis::Each,
+            ..PipelineConfig::default()
+        };
+        assert!(matches!(
+            process_and_infer_filtered(
+                &wav,
+                &config,
+                &mut registry,
+                &[0],
+                &filters,
+                &mut species_filter,
+                None,
+                None,
+                None,
+                "",
+            ),
+            Err(DaemonError::Config(_))
+        ));
+    }
+
+    /// Review F18: a window no classifier answered costs that window, not the
+    /// file. The two before it and the one after are kept, the failed one is
+    /// counted and, on a station that can hear people, unassessed for speech;
+    /// a file whose every window failed is still an error.
+    #[test]
+    fn windows_answered_around_a_failed_one_are_kept() {
+        use crate::detection::types::Detection;
+        let chunks: Vec<PreparedChunk> = (0..4).map(|_| chunk_of(10)).collect();
+        let answered = |i: usize| ChunkPrediction {
+            detections: vec![Detection {
+                date: "2026-05-19".into(),
+                time: "09:00:00".into(),
+                scientific_name: format!("Species{i}"),
+                common_name: format!("Bird {i}"),
+                confidence: 0.9,
+                start: 0.0,
+                stop: 3.0,
+                week: 20,
+                file_name_extr: None,
+                model_id: None,
+                agreeing_models: None,
+                model_scores: Vec::new(),
+            }],
+            ..ChunkPrediction::default()
+        };
+        let mut n = 0;
+        let (out, failed) = infer_windows(&chunks, true, |_| {
+            n += 1;
+            if n == 3 {
+                Err(DaemonError::Inference(
+                    crate::inference::model::InferenceError::Shape("refused".into()),
+                ))
+            } else {
+                Ok(answered(n))
+            }
+        })
+        .expect("three windows answered");
+        assert_eq!(failed, 1);
+        assert_eq!(out.len(), 4);
+        let names: Vec<&str> = out
+            .iter()
+            .flat_map(|p| p.detections.iter().map(|d| d.scientific_name.as_str()))
+            .collect();
+        assert_eq!(names, ["Species1", "Species2", "Species4"]);
+        assert!(out[2].privacy_unassessed && !out[0].privacy_unassessed);
+        let every_window_failed = infer_windows(&chunks[..2], false, |_| {
+            Err(DaemonError::Inference(
+                crate::inference::model::InferenceError::Shape("refused".into()),
+            ))
+        });
+        assert!(
+            every_window_failed.is_err(),
+            "every window failed: the file is an error"
+        );
+        let mut m = 0;
+        let (out, failed) = infer_windows(&chunks[..2], false, |_| {
+            m += 1;
+            if m == 1 {
+                Ok(answered(1))
+            } else {
+                Err(DaemonError::Inference(
+                    crate::inference::model::InferenceError::Shape("refused".into()),
+                ))
+            }
+        })
+        .unwrap();
+        assert_eq!(failed, 1);
+        assert!(
+            !out[1].privacy_unassessed,
+            "nothing could hear people to miss"
+        );
+    }
+
+    /// Review F10: the tally says how much audio decoded, which the effort
+    /// ledger credits instead of the header's claim; here a whole 3 s file,
+    /// every window answered.
+    #[test]
+    fn a_files_tally_says_how_much_audio_decoded() {
+        let file = analysed_with(
+            &[],
+            &SECOND_ONLY,
+            None,
+            crate::inference::species_filter::SpeciesFilterConfig::default(),
+            crate::detection::noise::NoiseFilter::new(0.0, Vec::new()),
+        );
+        assert_eq!(file.tally.decoded_ms, 3000, "{:?}", file.tally);
+        assert_eq!(file.tally.failed_windows, 0);
     }
 
     /// The counterpart: when no routed classifier answers, the window is still
@@ -1444,6 +2257,185 @@ mod tests {
     }
 
     const BERLIN: Option<(f64, f64)> = Some((52.52, 13.405));
+
+    /// Review F13: one file through the pipeline, the tiny V2.4 model the only
+    /// classifier (its first class `Pica pica`), and a geomodel whose magpie
+    /// score depends on the week alone: `sigmoid(4 x week - 38)`, 0.12 in week
+    /// 9 (held back at 0.5), 0.88 in week 10, about 0 in week 1 and about 1 in
+    /// week 48 (`tiny_meta_week_test.onnx`, the same graph as
+    /// `tiny_meta_test.onnx` with one weight set). Returns each magpie window's
+    /// `(start, week, admitted)`.
+    fn magpie_weeks(name: &str, secs: usize, mode: OccurrenceWeek) -> Vec<(f32, u32, bool)> {
+        use crate::detection::corroboration::ConfirmationLevel;
+        use crate::detection::noise::NoiseFilter;
+        use crate::detection::privacy::PrivacyFilter;
+        use crate::inference::labels::LabelSet;
+        use crate::inference::model::{BirdNetModel, ModelConfig};
+        use crate::inference::species_filter::SpeciesFilterConfig;
+        const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
+        const WEEKLY_META: &[u8] = include_bytes!("../../testdata/tiny_meta_week_test.onnx");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        std::fs::write(dir.join("v24.onnx"), TINY_V24).unwrap();
+        std::fs::write(dir.join("meta.onnx"), WEEKLY_META).unwrap();
+        let labels = LabelSet::from_entries(
+            std::iter::once(("Pica pica".to_owned(), "Eurasian Magpie".to_owned()))
+                .chain((1..11).map(|i| (format!("Species{i} bird"), format!("Bird {i}"))))
+                .collect(),
+        );
+        let model = BirdNetModel::load(
+            &dir.join("v24.onnx"),
+            labels.clone(),
+            ModelConfig {
+                confidence_threshold: 0.0,
+                top_n: 100,
+                ..ModelConfig::default()
+            },
+        )
+        .unwrap();
+        let mut registry = ClassifierRegistry::single("birdnet", model);
+        let meta = LabelSet::from_entries(
+            [
+                ("Pica pica", "Eurasian Magpie"),
+                ("Parus major", "Great Tit"),
+                ("Corvus corax", "Common Raven"),
+                ("Turdus merula", "Eurasian Blackbird"),
+                ("Erithacus rubecula", "European Robin"),
+            ]
+            .iter()
+            .map(|(s, c)| ((*s).to_owned(), (*c).to_owned()))
+            .collect(),
+        );
+        let mut species_filter = SpeciesFilter::load_with_vocabulary(
+            &dir.join("meta.onnx"),
+            Some(meta),
+            &labels,
+            &std::collections::HashMap::new(),
+            SpeciesFilterConfig {
+                sf_thresh: 0.5,
+                ..SpeciesFilterConfig::default()
+            },
+        )
+        .expect("the weekly geomodel loads");
+        let wav = dir.join(name);
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 48_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&wav, spec).unwrap();
+        let mut x: u32 = 1;
+        for _ in 0..48_000 * secs {
+            x = x.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            w.write_sample(((x >> 16) as i16) / 8).unwrap();
+        }
+        w.finalize().unwrap();
+        let filters = ChunkFilters {
+            privacy: PrivacyFilter::new(0.0),
+            noise: NoiseFilter::new(0.0, Vec::new()),
+            confirmation: ConfirmationLevel::Off,
+        };
+        let pipeline_config = PipelineConfig {
+            raw_audio_input: true,
+            target_sample_rate: 48_000,
+            chunk_duration_secs: 3.0,
+            occurrence_week: mode,
+            ..PipelineConfig::default()
+        };
+        let file = process_and_infer_filtered(
+            &wav,
+            &pipeline_config,
+            &mut registry,
+            &[0],
+            &filters,
+            &mut species_filter,
+            None,
+            BERLIN.map(|l| l.0),
+            BERLIN.map(|l| l.1),
+            "",
+        )
+        .expect("the file is processed");
+        file.events
+            .iter()
+            .filter(|e| e.detection.scientific_name == "Pica pica")
+            .map(|e| {
+                (
+                    e.detection.start,
+                    e.detection.week,
+                    e.out_of_range.is_none(),
+                )
+            })
+            .collect()
+    }
+
+    /// Review F13: a 15 s recording starting 2026-03-07 23:59:55 crosses into
+    /// 03-08, and so from week bin 9 (days 1-7 of March) into bin 10. In the
+    /// per-window mode the windows at 6, 9 and 12 s are scored in bin 10, and
+    /// the occurrence filter, asked about bin 10 for them, admits the magpie
+    /// it holds back in bin 9.
+    ///
+    /// Counterpart: the default, BirdNET-Pi's one week per file, scores every
+    /// window in the file's bin 9 and holds the magpie back in all five.
+    #[test]
+    fn a_window_past_midnight_is_scored_in_its_own_week_only_when_asked() {
+        let name = "2026-03-07-birdnet-23:59:55.wav";
+        let per_window = magpie_weeks(name, 15, OccurrenceWeek::PerWindow);
+        assert_eq!(
+            per_window,
+            [
+                (0.0, 9, false),
+                (3.0, 9, false),
+                (6.0, 10, true),
+                (9.0, 10, true),
+                (12.0, 10, true)
+            ],
+            "per-window mode: each window's own capture date"
+        );
+        let per_file = magpie_weeks(name, 15, OccurrenceWeek::default());
+        assert_eq!(
+            per_file,
+            [
+                (0.0, 9, false),
+                (3.0, 9, false),
+                (6.0, 9, false),
+                (9.0, 9, false),
+                (12.0, 9, false)
+            ],
+            "the default is one week per file"
+        );
+    }
+
+    /// The same at the year's end: 2026-12-31 23:59:55 is bin 48, and the
+    /// windows after midnight are 2027-01-01, bin 1, where the weekly geomodel
+    /// holds the magpie back.
+    #[test]
+    fn a_window_past_new_year_is_scored_in_week_one_only_when_asked() {
+        let name = "2026-12-31-birdnet-23:59:55.wav";
+        let per_window: Vec<(u32, bool)> = magpie_weeks(name, 15, OccurrenceWeek::PerWindow)
+            .into_iter()
+            .map(|(_, w, a)| (w, a))
+            .collect();
+        assert_eq!(
+            per_window,
+            [(48, true), (48, true), (1, false), (1, false), (1, false)]
+        );
+        let per_file: Vec<(u32, bool)> = magpie_weeks(name, 15, OccurrenceWeek::PerFile)
+            .into_iter()
+            .map(|(_, w, a)| (w, a))
+            .collect();
+        assert_eq!(per_file, [(48, true); 5]);
+    }
+
+    /// Each distinct week of a file is asked about once, in the order it first
+    /// appears.
+    #[test]
+    fn each_distinct_week_is_asked_once_in_order() {
+        assert_eq!(distinct_in_order(&[9, 9, 10, 10, 10]), [9, 10]);
+        assert_eq!(distinct_in_order(&[48, 1, 1]), [48, 1]);
+        assert_eq!(distinct_in_order(&[20; 5]), [20]);
+        assert!(distinct_in_order(&[]).is_empty());
+    }
 
     fn no_lists() -> crate::inference::species_filter::SpeciesFilterConfig {
         crate::inference::species_filter::SpeciesFilterConfig::default()

@@ -54,11 +54,16 @@ pub mod disposition;
 mod duplicate;
 mod local_offset;
 mod occurrence;
+mod one_per_event;
 mod processor;
 pub mod repair;
 mod run;
 mod spool;
 
+// Under `tests/` so the repository's source scans read it as test code.
+#[cfg(test)]
+#[path = "tests/replay.rs"]
+mod replay_tests;
 #[cfg(test)]
 mod test_support;
 
@@ -138,9 +143,6 @@ fn throughput_observer(
                     // still claimed here, and this is the data rate.
                     if let Some(secs) = birdnet_core::audio::decode::probe_duration_secs(path) {
                         metrics.add_audio_analysed(&source, secs);
-                        // And the effort ledger's numerator's denominator:
-                        // only audio analysed is listening (RES-01).
-                        crate::integrations::effort::note_analysed(&state, path, secs);
                     }
                 }
             })
@@ -180,8 +182,53 @@ fn throughput_observer(
             // counters, and the day's tally per source in `filter_discards`.
             .with_filtered({
                 let state = state.clone();
-                move |path, tally| record_discards(&state, path, tally)
+                move |path, tally| {
+                    // The effort ledger's denominator: only audio analysed is
+                    // listening (RES-01), and a window no classifier answered
+                    // was not analysed (review F18).
+                    // The audio that decoded, not what the header claims
+                    // (review F10); the header only where that is not known.
+                    let secs = if tally.decoded_ms > 0 {
+                        Some(decoded_secs(tally))
+                    } else {
+                        birdnet_core::audio::decode::probe_duration_secs(path)
+                    };
+                    if let Some(secs) = secs {
+                        crate::integrations::effort::note_analysed(
+                            &state,
+                            path,
+                            secs * answered_share(tally),
+                        );
+                    }
+                    record_discards(&state, path, tally);
+                }
             })
+}
+
+/// The share of a file's windows some classifier answered: `1.0` for a file
+/// with none failed or no windows counted, which is every file the daemon
+/// analysed before failed windows were kept (review F18).
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "window counts are far below 2^52"
+)]
+fn answered_share(tally: &birdnet_core::detection::FilterTally) -> f64 {
+    // With none failed the division below is exactly 1.0, so only an empty
+    // tally needs its own answer: a second condition here was one no test
+    // could tell from its absence (a surviving mutant, PR #313).
+    if tally.windows == 0 {
+        return 1.0;
+    }
+    tally.windows.saturating_sub(tally.failed_windows) as f64 / tally.windows as f64
+}
+
+/// [`birdnet_core::detection::FilterTally::decoded_ms`] in seconds.
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "milliseconds of one recording are far below 2^52"
+)]
+fn decoded_secs(tally: &birdnet_core::detection::FilterTally) -> f64 {
+    tally.decoded_ms as f64 / 1000.0
 }
 
 /// The segments whose speech the human-sound rule masked (RES-28): marked
@@ -377,7 +424,7 @@ pub fn start_detection_daemon(
         model_path,
         labels_path,
     };
-    let extraction = extraction_config(cli, config, &state, &settings);
+    let extraction = extraction_config(cli, config, &state, &settings, &planned.privacy_rules);
     let model_thresholds = planned.model_thresholds.clone();
     let daemon_config = daemon_config(
         cli,
@@ -431,6 +478,12 @@ struct Settings {
     noise_remember_secs: f32,
     confirmation: birdnet_core::detection::corroboration::ConfirmationLevel,
     overlap: f32,
+    /// `OCCURRENCE_WEEK` (review F13).
+    occurrence_week: birdnet_core::detection::pipeline::OccurrenceWeek,
+    /// `ANALYSIS_CHANNELS` (review F12).
+    channels: birdnet_core::detection::pipeline::ChannelAnalysis,
+    /// `SOURCE_SITES` (MSC-07).
+    source_sites: birdnet_db::sqlite::queries::events::SiteMap,
     species_thresholds: std::collections::HashMap<String, f64>,
     species_lists: birdnet_core::inference::species_filter::SpeciesLists,
     species_lists_provider: birdnet_core::inference::species_filter::SpeciesListsProvider,
@@ -533,6 +586,9 @@ impl Settings {
                 0.0,
                 config.and_then(|c| c.get_parsed::<f32>("OVERLAP").ok()),
             ),
+            occurrence_week: config::resolve_occurrence_week(config),
+            channels: config::resolve_channel_analysis(config),
+            source_sites: config::resolve_source_sites(config),
             species_thresholds,
             species_lists,
             species_lists_provider,
@@ -604,6 +660,13 @@ struct Planned {
     model_thresholds: std::collections::HashMap<String, f32>,
     routes: std::collections::HashMap<String, Vec<String>>,
     observer: birdnet_core::detection::daemon::ModelStateObserver,
+    /// Each classifier's own privacy rule (review F09).
+    privacy_rules: Vec<(
+        String,
+        birdnet_core::detection::privacy::ClassifierPrivacyRule,
+    )>,
+    /// Each classifier's own noise threshold (review F09).
+    noise_rules: Vec<(String, f32)>,
 }
 
 /// Which classifiers this machine can actually afford (`G-10` Stage 2). The
@@ -640,6 +703,8 @@ fn plan_classifiers(
         model_thresholds,
         routes: model_plan.routes,
         observer,
+        privacy_rules: model_plan.privacy_rules,
+        noise_rules: model_plan.noise_rules,
     }
 }
 
@@ -674,6 +739,8 @@ fn daemon_config(
         extra_models,
         routes,
         observer,
+        privacy_rules,
+        noise_rules,
         ..
     } = planned;
     birdnet_core::detection::daemon::DaemonConfig {
@@ -688,7 +755,11 @@ fn daemon_config(
         primary_sample_rate: primary.sample_rate,
         primary_output_scale: primary.output_scale,
         model_routes: routes,
-        pipeline: build_pipeline_config(watch_dir, settings.overlap),
+        pipeline: birdnet_core::detection::pipeline::PipelineConfig {
+            occurrence_week: settings.occurrence_week,
+            channels: settings.channels,
+            ..build_pipeline_config(watch_dir, settings.overlap)
+        },
         model: build_model_config(settings.sensitivity, settings.load_confidence),
         process_existing: cli.process_existing,
         metadata_model_path: settings.metadata_model_path.clone(),
@@ -707,6 +778,9 @@ fn daemon_config(
         on_file_analysed: Some(throughput_observer(state)),
         // The stream directory's purge honours these claims (PR-1 / S-3).
         in_flight: Some(in_flight),
+        // A recording too long for a live segment, moved out of the purge's
+        // reach for `--ingest-recordings` (review F11).
+        refused_dir: Some(crate::ingest::ingest_dir(state.db_path()).join("refused")),
         // One segment in two while the queue is deep or the board is at its
         // thermal limit (PR-2); the thermal condition and this read the same
         // sensor and the same line, so the notification and the shed agree.
@@ -721,6 +795,8 @@ fn daemon_config(
         privacy_clip_reach,
         noise_threshold: settings.noise_threshold,
         noise_classes: settings.noise_classes.clone(),
+        classifier_privacy: privacy_rules,
+        classifier_noise: noise_rules,
         noise_remember_secs: settings.noise_remember_secs,
         confirmation: settings.confirmation,
         latitude: settings.latitude,
@@ -736,18 +812,27 @@ fn daemon_config(
 /// With the privacy filter on, a clip stays inside its own segment, and the
 /// filter is told how far a clip reaches so it can clear the whole of it
 /// (PIPE7); "on" is the filter's own rule, so clips are kept in their segment
-/// exactly when the filter runs.
+/// exactly when the filter runs: a classifier's own rule (review F09) turns it
+/// on as the station's does, so it counts here too.
 fn extraction_config(
     cli: &Cli,
     config: Option<&birdnet_core::config::Config>,
     state: &birdnet_web::state::AppState,
     settings: &Settings,
+    privacy_rules: &[(
+        String,
+        birdnet_core::detection::privacy::ClassifierPrivacyRule,
+    )],
 ) -> birdnet_core::audio::extraction::ExtractionConfig {
     let mut extraction = build_extraction_config(cli, config, &state.recording_dir());
-    extraction.own_segment_only =
-        birdnet_core::detection::privacy::PrivacyFilter::new(settings.privacy_threshold)
-            .with_rank_cutoff(settings.privacy_rank)
-            .is_enabled();
+    extraction.own_segment_only = privacy_rules
+        .iter()
+        .fold(
+            birdnet_core::detection::privacy::PrivacyFilter::new(settings.privacy_threshold)
+                .with_rank_cutoff(settings.privacy_rank),
+            |filter, (id, rule)| filter.with_classifier_rule(id.clone(), *rule),
+        )
+        .is_enabled();
     extraction
 }
 
@@ -815,7 +900,11 @@ fn run_and_process(
             tokio::task::spawn_blocking(move || {
                 // No run, no rows: returning here drops the receiver, the
                 // daemon stops on its next send, and `?strict=1` says so.
-                let Some(provenance) = run::provenance_for(&state, &manifest) else {
+                let Some(provenance) = run::provenance_for_with(
+                    &state,
+                    &manifest,
+                    &deciding_config(&settings, &daemon_config),
+                ) else {
                     return;
                 };
                 event_processor(
@@ -900,7 +989,76 @@ fn run_manifest(
         lat: settings.latitude,
         lon: settings.longitude,
         model_thresholds,
+        primary_id: daemon_config.primary_id.clone(),
+        source_sites: settings.source_sites.clone(),
+        extra_classifiers: daemon_config
+            .extra_models
+            .iter()
+            .map(|m| (m.id.clone(), m.model_path.clone(), m.labels_path.clone()))
+            .collect(),
     }
+}
+
+/// The resolved settings that decided what this run recorded and the run
+/// manifest does not carry (RES-11): recorded with the run, canonical and
+/// hashed. Enumerations are recorded by their `Debug` names, and lists sorted,
+/// so the same configuration gives the same record.
+fn deciding_config(
+    settings: &Settings,
+    daemon_config: &birdnet_core::detection::daemon::DaemonConfig,
+) -> birdnet_db::sqlite::queries::run_config::RunConfig {
+    let mut species: Vec<String> = settings
+        .species_thresholds
+        .iter()
+        .map(|(sci, t)| format!("{sci}={t}"))
+        .collect();
+    species.sort();
+    let mut privacy: Vec<String> = daemon_config
+        .classifier_privacy
+        .iter()
+        .map(|(id, r)| format!("{id}:{:?}:{:?}", r.threshold, r.rank_cutoff))
+        .collect();
+    privacy.sort();
+    let mut noise: Vec<String> = daemon_config
+        .classifier_noise
+        .iter()
+        .map(|(id, t)| format!("{id}:{t}"))
+        .collect();
+    noise.sort();
+    let mut noise_classes = settings.noise_classes.clone();
+    noise_classes.sort();
+    let sites: Vec<String> = settings
+        .source_sites
+        .explicit()
+        .iter()
+        .map(|(source, site)| format!("{source}:{site}"))
+        .collect();
+    birdnet_db::sqlite::queries::run_config::RunConfig::new()
+        .set_f32("load_confidence", settings.load_confidence)
+        .set_f32("model_confidence", settings.model_confidence)
+        .set_f32("privacy_threshold", settings.privacy_threshold)
+        .set_i64(
+            "privacy_rank",
+            i64::try_from(settings.privacy_rank).unwrap_or(i64::MAX),
+        )
+        .set_str("classifier_privacy", &privacy.join(","))
+        .set_f32("noise_threshold", settings.noise_threshold)
+        .set_str("noise_classes", &noise_classes.join(","))
+        .set_str("classifier_noise", &noise.join(","))
+        .set_f32("noise_remember_secs", settings.noise_remember_secs)
+        .set_i64("duplicate_interval_secs", settings.duplicate_interval_secs)
+        .set_str("confirmation", &format!("{:?}", settings.confirmation))
+        .set_str("dynamic_threshold", &format!("{:?}", settings.dynamic))
+        .set_str(
+            "occurrence_week",
+            &format!("{:?}", daemon_config.pipeline.occurrence_week),
+        )
+        .set_str(
+            "analysis_channels",
+            &format!("{:?}", daemon_config.pipeline.channels),
+        )
+        .set_str("source_sites", &sites.join(","))
+        .set_str("species_thresholds", &species.join(";"))
 }
 
 /// Why the detector is not set up, naming each setting that is missing.
@@ -1078,10 +1236,115 @@ mod settings_tests {
         ] {
             let cli = cli(args);
             let settings = Settings::resolve(&cli, None, &state);
-            let extraction = extraction_config(&cli, None, &state, &settings);
+            let extraction = extraction_config(&cli, None, &state, &settings, &[]);
             assert_eq!(extraction.own_segment_only, own_segment, "{args:?}");
             assert_eq!(extraction.output_dir, state.recording_dir(), "{args:?}");
         }
+        // Review F09: with the station's rules off, one classifier's own rule
+        // runs the filter, so its clips stay in their segment too.
+        let cli = cli(&["--privacy-rank", "0"]);
+        let settings = Settings::resolve(&cli, None, &state);
+        let rule = birdnet_core::detection::privacy::ClassifierPrivacyRule {
+            threshold: Some(0.4),
+            rank_cutoff: None,
+        };
+        let extraction =
+            extraction_config(&cli, None, &state, &settings, &[("perch".to_owned(), rule)]);
+        assert!(
+            extraction.own_segment_only,
+            "a classifier's own privacy rule runs the filter"
+        );
+    }
+
+    /// RES-11: the run records the resolved settings that decided what it
+    /// recorded, including the review's new ones (week mode, channel, site
+    /// map, each classifier's own rules), the same way each time.
+    #[test]
+    fn a_run_records_the_settings_that_decided_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let model = tmp.path().join("model.onnx");
+        let labels = tmp.path().join("labels.txt");
+        let config = config(
+            "OCCURRENCE_WEEK=window\nANALYSIS_CHANNELS=left\nSOURCE_SITES=north:yard,south:yard\n\
+             MODEL_ID=v24\nMODEL_PRIVACY_THRESHOLD=0.3\n",
+        );
+        let cli = cli(&[]);
+        let settings = Settings::resolve(&cli, Some(&config), &state);
+        let planned = plan_classifiers(Some(&config), &state, &model, &labels);
+        let daemon = daemon_config(
+            &cli,
+            &state,
+            Paths {
+                watch_dir: tmp.path().join("recs"),
+                model_path: model,
+                labels_path: labels,
+            },
+            &settings,
+            planned,
+            birdnet_core::detection::daemon::InFlight::new(),
+            birdnet_core::detection::privacy::ClipReach::default(),
+        );
+        let recorded = deciding_config(&settings, &daemon);
+        let text = |k: &str| recorded.get(k).and_then(|v| v.as_str()).map(str::to_owned);
+        assert_eq!(text("occurrence_week").as_deref(), Some("PerWindow"));
+        assert_eq!(text("analysis_channels").as_deref(), Some("Only(0)"));
+        assert_eq!(
+            text("source_sites").as_deref(),
+            Some("north:yard,south:yard")
+        );
+        assert_eq!(
+            text("classifier_privacy").as_deref(),
+            Some("v24:Some(0.3):None")
+        );
+        assert!(recorded.get("privacy_rank").is_some());
+        assert_eq!(
+            recorded.canonical_json(),
+            deciding_config(&settings, &daemon).canonical_json(),
+            "the same configuration gives the same record"
+        );
+    }
+
+    /// The configuration's per-window week, chosen channel and per-classifier
+    /// privacy and noise rules (review F09, F12, F13) reach the configuration
+    /// the daemon runs with, not only the settings they are read into.
+    #[test]
+    fn the_review_s_analysis_settings_reach_the_daemon() {
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let model = tmp.path().join("model.onnx");
+        let labels = tmp.path().join("labels.txt");
+        let config = config(
+            "STATION_PROFILE=research\nANALYSIS_CHANNELS=right\nMODEL_ID=v24\n\
+             MODEL_PRIVACY_THRESHOLD=0.3\nMODEL_NOISE_THRESHOLD=0.6\n",
+        );
+        let cli = cli(&[]);
+        let settings = Settings::resolve(&cli, Some(&config), &state);
+        let planned = plan_classifiers(Some(&config), &state, &model, &labels);
+        let daemon = daemon_config(
+            &cli,
+            &state,
+            Paths {
+                watch_dir: tmp.path().join("recs"),
+                model_path: model,
+                labels_path: labels,
+            },
+            &settings,
+            planned,
+            birdnet_core::detection::daemon::InFlight::new(),
+            birdnet_core::detection::privacy::ClipReach::default(),
+        );
+        assert_eq!(
+            daemon.pipeline.occurrence_week,
+            birdnet_core::detection::pipeline::OccurrenceWeek::PerWindow
+        );
+        assert_eq!(
+            daemon.pipeline.channels,
+            birdnet_core::detection::pipeline::ChannelAnalysis::Only(1)
+        );
+        assert_eq!(daemon.classifier_privacy.len(), 1);
+        assert_eq!(daemon.classifier_privacy[0].0, "v24");
+        assert_eq!(daemon.classifier_noise, [("v24".to_owned(), 0.6)]);
     }
 
     /// The Species page is handed the daemon's range model, so a configured
@@ -1267,6 +1530,25 @@ mod liveness_mirror_tests {
 
 #[cfg(test)]
 mod tests {
+    /// The share of a file's windows answered, and its seconds decoded, as the
+    /// effort ledger credits them (review F10, F18; mutation survivors in
+    /// `answered_share` and `decoded_secs`, PR #313).
+    #[test]
+    fn a_file_is_credited_the_windows_answered_and_the_audio_decoded() {
+        use birdnet_core::detection::FilterTally;
+        let tally = |windows, failed_windows, decoded_ms| FilterTally {
+            windows,
+            failed_windows,
+            decoded_ms,
+            ..FilterTally::default()
+        };
+        assert!((super::answered_share(&tally(10, 3, 0)) - 0.7).abs() < 1e-12);
+        assert!((super::answered_share(&tally(10, 0, 0)) - 1.0).abs() < f64::EPSILON);
+        assert!((super::answered_share(&tally(0, 0, 0)) - 1.0).abs() < f64::EPSILON);
+        assert!((super::decoded_secs(&tally(0, 0, 1_500)) - 1.5).abs() < f64::EPSILON);
+        assert!(super::decoded_secs(&tally(0, 0, 0)).abs() < f64::EPSILON);
+    }
+
     /// A 15 s, 48 kHz mono silent WAV at `path`.
     fn write_segment(path: &std::path::Path) {
         let spec = hound::WavSpec {
@@ -1286,6 +1568,99 @@ mod tests {
     /// the hour it was recorded in, not the time a source's gauge read "up".
     /// Twenty 15 s segments, half shed under a thermal limit, in one five-minute
     /// tick with the source up the whole time: 150 s of effort, not 300.
+    #[test]
+    fn a_file_whose_windows_partly_failed_is_credited_the_share_answered() {
+        // Review F18: a file of five windows, two of which no classifier
+        // answered, is 9 s of listening of its 15, not 15.
+        use birdnet_db::audio_sources::{AudioSourceStore as _, NewAudioSource, SourceKind};
+        let tmp = tempfile::tempdir().unwrap();
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        // The ledger credits a source the station has.
+        state
+            .with_db(|c| {
+                c.insert(&NewAudioSource::defaults(
+                    "src_a",
+                    SourceKind::UsbAlsa,
+                    "hw:1,0",
+                ))
+            })
+            .unwrap();
+        let observer = super::throughput_observer(&state);
+        let path = tmp.path().join("2026-05-19-birdnet-src_a-09:00:00.wav");
+        write_segment(&path);
+        observer.analysed(&path);
+        observer.filtered(
+            &path,
+            &birdnet_core::detection::FilterTally {
+                windows: 5,
+                failed_windows: 2,
+                ..birdnet_core::detection::FilterTally::default()
+            },
+        );
+        // Credits are held until the ledger's tick writes them.
+        crate::integrations::effort::tick(&state, 0.0);
+        let total: f64 = state.with_db(|c| {
+            c.query_row(
+                "SELECT COALESCE(SUM(seconds), 0) FROM recording_effort WHERE source = 'src_a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert!((total - 9.0).abs() < 1e-6, "credited {total} s, not 9 s");
+        // Counterpart: a file with none failed is credited whole.
+        let whole = tmp.path().join("2026-05-19-birdnet-src_a-09:00:15.wav");
+        write_segment(&whole);
+        observer.analysed(&whole);
+        observer.filtered(
+            &whole,
+            &birdnet_core::detection::FilterTally {
+                windows: 5,
+                ..birdnet_core::detection::FilterTally::default()
+            },
+        );
+        // Credits are held until the ledger's tick writes them.
+        crate::integrations::effort::tick(&state, 0.0);
+        let total: f64 = state.with_db(|c| {
+            c.query_row(
+                "SELECT COALESCE(SUM(seconds), 0) FROM recording_effort WHERE source = 'src_a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert!(
+            (total - 24.0).abs() < 1e-6,
+            "credited {total} s, not 9 + 15"
+        );
+        // Review F10: a file whose header claims 15 s and of which 1 s decoded
+        // (a WAV cut short) is 1 s of listening.
+        let cut = tmp.path().join("2026-05-19-birdnet-src_a-09:00:30.wav");
+        write_segment(&cut);
+        observer.analysed(&cut);
+        observer.filtered(
+            &cut,
+            &birdnet_core::detection::FilterTally {
+                windows: 1,
+                decoded_ms: 1000,
+                ..birdnet_core::detection::FilterTally::default()
+            },
+        );
+        crate::integrations::effort::tick(&state, 0.0);
+        let total: f64 = state.with_db(|c| {
+            c.query_row(
+                "SELECT COALESCE(SUM(seconds), 0) FROM recording_effort WHERE source = 'src_a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        assert!(
+            (total - 25.0).abs() < 1e-6,
+            "credited {total} s: the header's 15 s, not the 1 s that decoded"
+        );
+    }
+
     #[test]
     fn effort_is_the_audio_analysed_not_the_time_a_source_was_up() {
         use birdnet_db::audio_sources::{AudioSourceStore as _, NewAudioSource, SourceKind};
@@ -1310,7 +1685,10 @@ mod tests {
             ));
             write_segment(&path);
             if i % 2 == 0 {
+                // As `run.rs` reports an analysed file: analysed, then what its
+                // filters did.
                 observer.analysed(&path);
+                observer.filtered(&path, &birdnet_core::detection::FilterTally::default());
             } else {
                 observer.shed(&path, birdnet_core::detection::daemon::ShedReason::Thermal);
             }
