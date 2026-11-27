@@ -118,6 +118,34 @@ impl SiteMap {
         self.explicit.get(source).map_or(source, String::as_str)
     }
 
+    /// Parse `source:site` pairs, comma-separated, split at the last colon so a
+    /// source name may contain one. A source named twice with different sites
+    /// is refused. The form `/api/v2/events?sites=` and `SOURCE_SITES` share.
+    ///
+    /// # Errors
+    ///
+    /// A message naming the entry that is not `source:site`, or the source
+    /// given two sites.
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        let mut map = Self::identity();
+        for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
+            let Some((source, site)) = entry.rsplit_once(':') else {
+                return Err(format!("sites entry {entry:?} is not source:site"));
+            };
+            let (source, site) = (source.trim(), site.trim());
+            if source.is_empty() || site.is_empty() {
+                return Err(format!("sites entry {entry:?} is not source:site"));
+            }
+            if let Some(prev) = map.explicit.get(source)
+                && prev != site
+            {
+                return Err(format!("source {source:?} is given two sites"));
+            }
+            map = map.with(source, site);
+        }
+        Ok(map)
+    }
+
     /// The entries an owner gave; every other source is its own site.
     #[must_use]
     pub const fn explicit(&self) -> &BTreeMap<String, String> {
@@ -211,7 +239,10 @@ fn whole_seconds(tolerance_secs: f64) -> i64 {
     }
     // Bounded above by MAX_TOLERANCE_SECS at the API; a larger value is
     // clamped to a day, which no plausible tolerance reaches.
-    #[allow(clippy::cast_possible_truncation)]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "clamped to a day of seconds above, far inside i64"
+    )]
     let secs = tolerance_secs.min(86_400.0).floor() as i64;
     secs
 }

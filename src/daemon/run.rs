@@ -46,6 +46,8 @@ pub(super) struct RunManifest {
     /// recorded with the run so an export can name the file each row's
     /// classifier loaded (review F19, MMP-08).
     pub extra_classifiers: Vec<(String, PathBuf, PathBuf)>,
+    /// Which sources share a site (`SOURCE_SITES`, MSC-07).
+    pub source_sites: birdnet_db::sqlite::queries::events::SiteMap,
 }
 
 /// A run that exists in the database.
@@ -196,6 +198,7 @@ pub(super) fn provenance_for(
             sensitivity: manifest.sensitivity,
             overlap: manifest.overlap,
             model_thresholds: manifest.model_thresholds.clone(),
+            source_sites: manifest.source_sites.clone(),
         }),
         Err(e) => {
             tracing::error!(
@@ -231,6 +234,7 @@ mod tests {
             model_thresholds: std::collections::HashMap::new(),
             primary_id: "birdnet".to_owned(),
             extra_classifiers: Vec::new(),
+            source_sites: birdnet_db::sqlite::queries::events::SiteMap::identity(),
         }
     }
 

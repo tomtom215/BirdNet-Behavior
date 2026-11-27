@@ -166,6 +166,7 @@ pub const KNOWN_CONFIG_KEYS: &[&str] = &[
     "SENSITIVITY",
     "SF_THRESH",
     "SITENAME",
+    "SOURCE_SITES",
     "SPECIES_ALIASES_PATH",
     "STATION_HEALTH_ALERTS",
     "STATION_NAME",

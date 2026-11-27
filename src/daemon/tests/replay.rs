@@ -147,6 +147,7 @@ fn provenance(run_id: i64) -> super::processor::RunProvenance {
         sensitivity: 1.25,
         overlap: 1.5,
         model_thresholds: HashMap::new(),
+        source_sites: birdnet_db::sqlite::queries::events::SiteMap::identity(),
     }
 }
 

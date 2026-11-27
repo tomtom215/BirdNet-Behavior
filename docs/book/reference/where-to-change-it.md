@@ -287,6 +287,7 @@ Every key `birdnet.conf` can carry (`KNOWN_CONFIG_KEYS`). A settings key bridged
 | `SENSITIVITY` | Settings → Capture → Detection Settings → Sensitivity (0.5–1.5) (`sensitivity`) | |
 | `SF_THRESH` | Settings → Capture → Detection Settings → Species Frequency Threshold (0–1) (`sf_thresh`) | |
 | `SITENAME` | Settings → General → System & Display → Site Name (`site_name`) | |
+| `SOURCE_SITES` | — | Says which microphones are in one place, decided once with the hardware laid out; it changes what is counted as one event and what BirdWeather is sent, so it is set beside the sources it names. |
 | `SPECIES_ALIASES_PATH` | — | A tab-separated file of legacy names kept by hand over months; it needs a file on the station's disk. |
 | `STATION_HEALTH_ALERTS` | Settings → Alerts → Alert limits → Tell me when the station has a problem (`station_health_alerts`) | |
 | `STATION_NAME` | Settings → Capture → Location & Recording Schedule → Station Name (`station_name`) | |

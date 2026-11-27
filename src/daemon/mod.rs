@@ -54,6 +54,7 @@ pub mod disposition;
 mod duplicate;
 mod local_offset;
 mod occurrence;
+mod one_per_event;
 mod processor;
 pub mod repair;
 mod run;
@@ -481,6 +482,8 @@ struct Settings {
     occurrence_week: birdnet_core::detection::pipeline::OccurrenceWeek,
     /// `ANALYSIS_CHANNELS` (review F12).
     channels: birdnet_core::detection::pipeline::ChannelAnalysis,
+    /// `SOURCE_SITES` (MSC-07).
+    source_sites: birdnet_db::sqlite::queries::events::SiteMap,
     species_thresholds: std::collections::HashMap<String, f64>,
     species_lists: birdnet_core::inference::species_filter::SpeciesLists,
     species_lists_provider: birdnet_core::inference::species_filter::SpeciesListsProvider,
@@ -585,6 +588,7 @@ impl Settings {
             ),
             occurrence_week: config::resolve_occurrence_week(config),
             channels: config::resolve_channel_analysis(config),
+            source_sites: config::resolve_source_sites(config),
             species_thresholds,
             species_lists,
             species_lists_provider,
@@ -982,6 +986,7 @@ fn run_manifest(
         lon: settings.longitude,
         model_thresholds,
         primary_id: daemon_config.primary_id.clone(),
+        source_sites: settings.source_sites.clone(),
         extra_classifiers: daemon_config
             .extra_models
             .iter()
@@ -1428,6 +1433,7 @@ mod tests {
         assert!((super::decoded_secs(&tally(0, 0, 1_500)) - 1.5).abs() < f64::EPSILON);
         assert!(super::decoded_secs(&tally(0, 0, 0)).abs() < f64::EPSILON);
     }
+
     /// A 15 s, 48 kHz mono silent WAV at `path`.
     fn write_segment(path: &std::path::Path) {
         let spec = hound::WavSpec {

@@ -84,26 +84,7 @@ fn internal<E: std::fmt::Display>(e: &E) -> Response {
 /// so a source name may contain one. A source named twice with different sites
 /// is refused.
 fn parse_sites(raw: Option<&str>) -> Result<SiteMap, String> {
-    let mut map = SiteMap::identity();
-    let Some(raw) = raw else {
-        return Ok(map);
-    };
-    for entry in raw.split(',').map(str::trim).filter(|e| !e.is_empty()) {
-        let Some((source, site)) = entry.rsplit_once(':') else {
-            return Err(format!("sites entry {entry:?} is not source:site"));
-        };
-        let (source, site) = (source.trim(), site.trim());
-        if source.is_empty() || site.is_empty() {
-            return Err(format!("sites entry {entry:?} is not source:site"));
-        }
-        if let Some(prev) = map.explicit().get(source)
-            && prev != site
-        {
-            return Err(format!("source {source:?} is given two sites"));
-        }
-        map = map.with(source, site);
-    }
-    Ok(map)
+    raw.map_or_else(|| Ok(SiteMap::identity()), SiteMap::parse)
 }
 
 /// `from..=to` as dates no more than `max_days` apart, as the epoch days of each.

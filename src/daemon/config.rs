@@ -318,6 +318,27 @@ pub(super) fn resolve_channel_analysis(
     }
 }
 
+/// `SOURCE_SITES`: which sources share a site (MSC-07), as `source:site`
+/// pairs, comma-separated: the form `/api/v2/events?sites=` takes. Unset,
+/// every source is its own site and nothing is grouped. A value that does not
+/// parse warns and groups nothing.
+#[must_use]
+pub(super) fn resolve_source_sites(
+    config: Option<&birdnet_core::config::Config>,
+) -> birdnet_db::sqlite::queries::events::SiteMap {
+    use birdnet_db::sqlite::queries::events::SiteMap;
+    let Some(raw) = config.and_then(|c| c.get("SOURCE_SITES")) else {
+        return SiteMap::identity();
+    };
+    SiteMap::parse(raw).unwrap_or_else(|e| {
+        tracing::warn!(
+            error = %e,
+            "SOURCE_SITES does not parse; every source is its own site"
+        );
+        SiteMap::identity()
+    })
+}
+
 /// Build the [`ModelConfig`] used by ML inference.
 ///
 /// Pins `sensitivity` and `confidence_threshold` from CLI/config; every

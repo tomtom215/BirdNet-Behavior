@@ -574,6 +574,9 @@ pub(super) struct RunProvenance {
     /// Each classifier's own confidence threshold, by id, for those that set
     /// one; the rest are held to the station's.
     pub model_thresholds: std::collections::HashMap<String, f32>,
+    /// Which sources share a site (`SOURCE_SITES`): one `BirdWeather` post
+    /// per event at a site (MSC-07). Every source its own site by default.
+    pub source_sites: birdnet_db::sqlite::queries::events::SiteMap,
 }
 
 impl RunProvenance {
@@ -1038,6 +1041,11 @@ pub(super) fn event_processor(
     // stages (review F11): a detection from one is stored and announced to no
     // one.
     let import_marks = crate::ingest::marker_dir(state.db_path());
+    // One BirdWeather post per event where sources share a site (MSC-07).
+    let mut one_post = crate::daemon::one_per_event::OnePerEvent::new(
+        provenance.source_sites.clone(),
+        crate::daemon::one_per_event::TOLERANCE_SECS,
+    );
     let mut threshold_cache = ThresholdCache::new(species_thresholds).publishing(threshold_floor);
     // Asked about every detection, so it must not wait on the client: a send
     // holds the client's lock for its whole round trip (see
@@ -2213,6 +2221,12 @@ pub(super) fn event_processor(
                 );
                 None
             })
+            // Several sources at one site heard one call: posted once (MSC-07).
+            && one_post.first_of_event(
+                record.source,
+                &detection.scientific_name,
+                record.detected_at_utc,
+            )
         {
             // The station's local wall clock with the offset in force — what
             // both references send. `Date`/`Time` labelled `Z` was a lie by
@@ -2606,6 +2620,7 @@ mod tests {
             sensitivity: 1.0,
             overlap: 0.0,
             model_thresholds: HashMap::from([("v3".to_owned(), 0.5_f32)]),
+            source_sites: birdnet_db::sqlite::queries::events::SiteMap::identity(),
         };
         let kept_by = |model: &str| {
             let mut event = make_event(
@@ -5355,6 +5370,7 @@ mod tests {
             sensitivity: 1.25,
             overlap: 1.5,
             model_thresholds: HashMap::new(),
+            source_sites: birdnet_db::sqlite::queries::events::SiteMap::identity(),
         }
     }
 
@@ -5541,6 +5557,76 @@ mod tests {
         assert!(
             next_attempt_at > now + 60,
             "the parked upload is open to the drainer while the live attempt runs"
+        );
+    }
+
+    /// MSC-07: two sources the owner put at one site hear one call; it is one
+    /// event, and BirdWeather gets one post. Without the site map each source
+    /// is its own site, and each detection is posted, as before.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn one_call_heard_at_one_site_is_posted_once() {
+        async fn parked_with(sites: birdnet_db::sqlite::queries::events::SiteMap) -> (i64, i64) {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            std::thread::spawn(move || {
+                // Held open, never answered.
+                let _held: Vec<_> = listener.incoming().flatten().collect();
+            });
+            let tmp = tempfile::tempdir().unwrap();
+            let client = birdnet_integrations::birdweather::Client::new("tok", 51.48, -0.13)
+                .unwrap()
+                .with_base_url(&format!("http://127.0.0.1:{port}"));
+            let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+            let mut provenance = test_provenance(&state);
+            provenance.source_sites = sites;
+            let heard = |source: &str, id: &str| {
+                make_event(
+                    "Pica pica",
+                    "Eurasian Magpie",
+                    0.95,
+                    tmp.path()
+                        .join(format!("2026-05-19-birdnet-{source}-09:00:00.wav")),
+                    id,
+                )
+            };
+            run_processor_integrated(
+                &state,
+                vec![heard("north", "c1"), heard("south", "c2")],
+                HashMap::new(),
+                0.25,
+                0,
+                crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+                birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                    birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+                ),
+                provenance,
+                Some(client),
+                Extractor::new(ExtractionConfig::default()),
+            )
+            .await;
+            state.with_db(|c| {
+                c.query_row(
+                    "SELECT (SELECT COUNT(*) FROM detections), (SELECT COUNT(*) FROM outbound_queue)",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap()
+            })
+        }
+        use birdnet_db::sqlite::queries::events::SiteMap;
+        let (rows, parked) = parked_with(
+            SiteMap::identity()
+                .with("north", "yard")
+                .with("south", "yard"),
+        )
+        .await;
+        assert_eq!(rows, 2, "both sources' rows are stored");
+        assert_eq!(parked, 1, "one call at one site is one BirdWeather post");
+        let (rows, parked) = parked_with(SiteMap::identity()).await;
+        assert_eq!(
+            (rows, parked),
+            (2, 2),
+            "without a site map, each source is posted"
         );
     }
 
