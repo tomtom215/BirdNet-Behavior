@@ -159,6 +159,28 @@ async fn drive(
     provenance: super::processor::RunProvenance,
     extractor: Extractor,
 ) {
+    drive_with(
+        state,
+        events,
+        HashMap::new(),
+        global_confidence,
+        duplicate_interval_secs,
+        provenance,
+        extractor,
+    )
+    .await;
+}
+
+/// [`drive`], with per-species thresholds.
+async fn drive_with(
+    state: &birdnet_web::state::AppState,
+    events: Vec<DetectionEvent>,
+    species_thresholds: HashMap<String, f64>,
+    global_confidence: f32,
+    duplicate_interval_secs: i64,
+    provenance: super::processor::RunProvenance,
+    extractor: Extractor,
+) {
     let (tx, rx) = mpsc::channel();
     for e in events {
         tx.send(e).unwrap();
@@ -184,7 +206,7 @@ async fn drive(
             filter,
             template,
             rt,
-            HashMap::new(),
+            species_thresholds,
             global_confidence,
             extractor,
             duplicate_interval_secs,
@@ -629,4 +651,215 @@ async fn a_stop_keeps_only_the_audio_of_the_clip_on_a_privacy_filtered_station()
         decoded.samples[from..to].iter().all(|s| *s != 0.0),
         "the clip's own audio was kept"
     );
+}
+
+/// Rows stored without the answers they were written with.
+fn rows_without_answers(state: &birdnet_web::state::AppState) -> i64 {
+    state.with_db(|c| {
+        c.query_row(
+            "SELECT COUNT(*) FROM detections d WHERE NOT EXISTS (
+                 SELECT 1 FROM detection_model_scores s
+                  WHERE s.Date = d.Date AND s.Time = d.Time AND s.Sci_Name = d.Sci_Name
+                    AND s.File_Name = COALESCE(d.File_Name, ''))",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    })
+}
+
+fn heard(det: &mut Detection) {
+    det.model_scores = vec![birdnet_core::detection::types::ModelAnswer {
+        model_id: "birdnet".into(),
+        state: birdnet_core::detection::types::AnswerState::Heard,
+        score: Some(det.confidence),
+        bar: Some(0.25),
+        window_start_secs: det.start,
+        window_end_secs: det.stop,
+    }];
+}
+
+/// Review F15, second batch. A row and the classifiers' answers it was stored
+/// with are one piece of evidence: when the answers cannot be written, the row
+/// is not committed without them, and the detection is kept for the next
+/// start, which stores both.
+#[tokio::test(flavor = "current_thread")]
+async fn a_row_is_never_stored_without_its_answers() {
+    let (tmp, state, _db) = station();
+    let now = register_run(&state, &"b".repeat(64));
+    let src = tmp.path().join(SEG);
+    wav(&src, 15, 8_000);
+    let mut det = detection("Pica pica", "09:00:00", 0.9, 0.0);
+    heard(&mut det);
+    state.with_db(|c| {
+        c.execute_batch(
+            "CREATE TRIGGER refuse_answers BEFORE INSERT ON detection_model_scores
+             BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END;",
+        )
+        .unwrap();
+    });
+    drive(
+        &state,
+        vec![live_event(det, src, "c1")],
+        0.25,
+        0,
+        provenance(now),
+        extractor_into(&tmp.path().join("clips"), false),
+    )
+    .await;
+    assert_eq!(
+        rows_without_answers(&state),
+        0,
+        "a row was committed without the answers it was stored with"
+    );
+    state.with_db(|c| c.execute_batch("DROP TRIGGER refuse_answers").unwrap());
+    drive(
+        &state,
+        vec![],
+        0.25,
+        0,
+        provenance(now),
+        extractor_into(&tmp.path().join("clips"), false),
+    )
+    .await;
+    assert_eq!(
+        rows(&state).len(),
+        1,
+        "the detection was not kept for the next start"
+    );
+    assert_eq!(rows_without_answers(&state), 0);
+}
+
+/// Review F02, second batch. A live detection the database refuses is kept,
+/// as one a stop leaves is, and the next start stores it.
+#[tokio::test(flavor = "current_thread")]
+async fn a_live_detection_the_database_refuses_is_kept_for_the_next_start() {
+    let (tmp, state, _db) = station();
+    let now = register_run(&state, &"b".repeat(64));
+    let src = tmp.path().join(SEG);
+    wav(&src, 15, 8_000);
+    state.with_db(|c| {
+        c.execute_batch(
+            "CREATE TRIGGER refuse BEFORE INSERT ON detections
+             BEGIN SELECT RAISE(ABORT, 'database is locked'); END;",
+        )
+        .unwrap();
+    });
+    drive(
+        &state,
+        vec![live_event(
+            detection("Pica pica", "09:00:00", 0.9, 0.0),
+            src,
+            "c1",
+        )],
+        0.25,
+        0,
+        provenance(now),
+        extractor_into(&tmp.path().join("clips"), false),
+    )
+    .await;
+    assert!(rows(&state).is_empty());
+    state.with_db(|c| c.execute_batch("DROP TRIGGER refuse").unwrap());
+    drive(
+        &state,
+        vec![],
+        0.25,
+        0,
+        provenance(now),
+        extractor_into(&tmp.path().join("clips"), false),
+    )
+    .await;
+    let got = rows(&state);
+    assert_eq!(
+        got.len(),
+        1,
+        "a live detection the database refused was lost"
+    );
+    assert_eq!(got[0].1, Some(now), "it keeps the run that analysed it");
+}
+
+/// Review F03, second batch, end to end: a detection quarantined at replay is
+/// still reviewable, and approvable with its audio, after its batch is
+/// settled and removed and the station restarts. And the same for one
+/// quarantined live (the counterpart): the review needs a clip in the
+/// recordings directory, which is the only place the player looks.
+#[tokio::test(flavor = "current_thread")]
+async fn a_quarantined_detection_keeps_its_audio_through_review_and_approval() {
+    for replayed in [true, false] {
+        let (tmp, state, db) = station();
+        let now = register_run(&state, &"b".repeat(64));
+        let det = detection("Pica pica", "09:00:00", 0.6, 3.0);
+        let mut species = HashMap::new();
+        species.insert("Pica pica".to_owned(), 0.95);
+        let events = if replayed {
+            let line = serde_json::json!({
+                "v": 2,
+                "detection": det,
+                "source": SEG,
+                "latency_ms": 5,
+                "correlation_id": "c1",
+                "out_of_range": null,
+                "run": {"run_id": now, "algorithm": null, "lat": null, "lon": null,
+                        "sensitivity": 1.0, "overlap": 0.0, "model_thresholds": {}},
+                "policy": {"species_bar": 0.95, "global_bar": 0.25},
+            })
+            .to_string();
+            write_batch(&db, "000000000000000000000001-0", &[line], &[SEG]);
+            Vec::new()
+        } else {
+            let src = tmp.path().join(SEG);
+            wav(&src, 15, 8_000);
+            vec![live_event(det, src, "c1")]
+        };
+        let recordings = state.recording_dir();
+        drive_with(
+            &state,
+            events,
+            species,
+            0.25,
+            0,
+            provenance(now),
+            extractor_into(&recordings, false),
+        )
+        .await;
+        assert!(
+            !db.parent()
+                .unwrap()
+                .join("clip-queue")
+                .join("000000000000000000000001-0")
+                .exists(),
+            "precondition: the batch was settled and removed"
+        );
+        // A restart: a new state over the same database.
+        let state = birdnet_web::state::AppState::new(db.clone()).unwrap();
+        let (id, file): (i64, Option<String>) = state.with_db(|c| {
+            c.query_row("SELECT id, file_name FROM quarantine", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap()
+        });
+        let file = file.expect("the quarantine row names its audio");
+        let base = Path::new(&file).file_name().unwrap().to_owned();
+        assert!(
+            state.recording_dir().join(&base).is_file(),
+            "replayed={replayed}: the quarantined detection's audio is not in the recordings \
+             directory, where review plays it: {file}"
+        );
+        assert!(
+            state
+                .with_db(|c| birdnet_db::sqlite::approve_quarantine(c, id))
+                .unwrap()
+        );
+        let approved: String = state.with_db(|c| {
+            c.query_row("SELECT File_Name FROM detections", [], |r| r.get(0))
+                .unwrap()
+        });
+        assert!(
+            state
+                .recording_dir()
+                .join(Path::new(&approved).file_name().unwrap())
+                .is_file(),
+            "replayed={replayed}: the approved detection names a clip that is not there: {approved}"
+        );
+    }
 }

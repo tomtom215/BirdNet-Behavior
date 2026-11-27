@@ -708,12 +708,104 @@ fn freeze_for_queue(
     }
 }
 
-/// Mark the replayed detection in hand, if there is one, as finished with.
-const fn settled(
+/// Mark the detection in hand as finished with: a replayed one's ticket is
+/// settled, and a live one is not kept for the next start.
+fn settled(
     pending: &mut Option<(crate::daemon::spool::Ticket, crate::daemon::spool::Outcome)>,
+    live: &mut Option<Box<crate::daemon::spool::Kept>>,
 ) {
     if let Some((_, outcome)) = pending {
         *outcome = crate::daemon::spool::Outcome::Settled;
+    }
+    *live = None;
+}
+
+/// Whether every commit so far is on the disk (review F04/F17, second batch),
+/// which the stop queue asks before acknowledging what it settled. With
+/// `synchronous=FULL` each commit is; with the default `NORMAL` the WAL is
+/// synced at a checkpoint, so a full checkpoint that no reader held back is
+/// the answer. A failed or partial checkpoint is "not yet": the queue offers
+/// those detections again after a crash, and nothing is written twice.
+fn commits_are_durable(state: &birdnet_web::state::AppState) -> bool {
+    let answer = state.with_db(|c| {
+        let level: i64 = c.query_row("PRAGMA synchronous", [], |r| r.get(0))?;
+        if level >= 2 {
+            return Ok(true);
+        }
+        let busy: i64 = c.query_row("PRAGMA wal_checkpoint(FULL)", [], |r| r.get(0))?;
+        Ok::<_, rusqlite::Error>(busy == 0)
+    });
+    match answer {
+        Ok(durable) => durable,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not checkpoint the database before acknowledging kept detections");
+            false
+        }
+    }
+}
+
+/// Whether a quarantine row for this detection, from this source, is already
+/// there: a replay of one quarantined before a crash must not be quarantined,
+/// or its clip cut, twice. An unreadable answer is "not known to be there".
+fn quarantine_already_recorded(
+    state: &birdnet_web::state::AppState,
+    detection: &birdnet_core::detection::types::Detection,
+    source: &str,
+) -> bool {
+    match state.with_read_db(|conn| {
+        birdnet_db::sqlite::quarantine_recorded(
+            conn,
+            &detection.date,
+            &detection.time,
+            &detection.scientific_name,
+            source,
+        )
+    }) {
+        Ok(found) => found,
+        Err(e) => {
+            tracing::warn!(error = %e, "could not tell whether a detection was already quarantined");
+            false
+        }
+    }
+}
+
+/// The clip a quarantined detection is reviewed by, cut into the recordings
+/// directory the review page plays from (review F03, second batch). Without
+/// it the row named its source recording: a stream segment the purge drains
+/// in minutes, or a stop's batch file removed once settled, neither of which
+/// the player can reach. `None` when the clip could not be cut; the row then
+/// names the source, as before.
+fn quarantine_clip(
+    extractor: &Extractor,
+    event: &birdnet_core::detection::daemon::DetectionEvent,
+) -> Option<std::path::PathBuf> {
+    match extractor.extract_detection_clip(&event.source_file, &event.detection) {
+        Ok(clip) => Some(clip.path),
+        Err(e) => {
+            tracing::warn!(error = %e, species = %event.detection.common_name, "the quarantined detection's clip could not be cut");
+            None
+        }
+    }
+}
+
+/// The `file_name` a quarantine row records: the clip's name when one was cut,
+/// else the source recording's path.
+fn quarantine_file_name(
+    clip: Option<&std::path::Path>,
+    event: &birdnet_core::detection::daemon::DetectionEvent,
+) -> String {
+    clip.and_then(|c| c.file_name()).map_or_else(
+        || event.source_file.to_string_lossy().into_owned(),
+        |n| n.to_string_lossy().into_owned(),
+    )
+}
+
+/// Remove a clip cut for a quarantine row that was not written.
+fn discard_quarantine_clip(clip: Option<&std::path::Path>) {
+    if let Some(path) = clip
+        && let Err(e) = std::fs::remove_file(path)
+    {
+        tracing::debug!(error = %e, path = %path.display(), "could not remove an unrecorded quarantine clip");
     }
 }
 
@@ -969,10 +1061,12 @@ pub(super) fn event_processor(
     // What the last stop kept is processed first; once this station stops,
     // what is left is kept for the next start rather than worked through
     // past the unit's stop timeout (`spool`).
+    let durable_state = state.clone();
     let mut inbox = crate::daemon::spool::Inbox::new(
         state.db_path(),
         crate::daemon::spool::ClipWindow::of(extractor.config()),
         state.subscribe_shutdown(),
+        Box::new(move || commits_are_durable(&durable_state)),
     );
     // The replayed detection handed out last and what became of it, settled
     // at the top of the next turn so that every `continue` below reaches it.
@@ -980,9 +1074,16 @@ pub(super) fn event_processor(
     // says otherwise, so a path that forgets leaves it to be offered again
     // rather than lost (review F02).
     let mut unsettled: Option<(crate::daemon::spool::Ticket, crate::daemon::spool::Outcome)> = None;
+    // The live detection handed out last, kept for the next start unless a
+    // path that finished with it says otherwise: one the database refused is
+    // recovered as a stop's backlog is, not lost (review F02, second batch).
+    let mut live_unsettled: Option<Box<crate::daemon::spool::Kept>> = None;
     loop {
         if let Some((ticket, outcome)) = unsettled.take() {
             inbox.settle(ticket, outcome);
+        }
+        if let Some(kept) = live_unsettled.take() {
+            inbox.defer(*kept);
         }
         let (event, origin) = match inbox.next(&event_rx, RESET_POLL, &mut || {
             dynamic.apply_resets(&state);
@@ -1049,7 +1150,7 @@ pub(super) fn event_processor(
                 species = %detection.scientific_name,
                 "a kept detection was already recorded before the last stop; not recorded again"
             );
-            settled(&mut unsettled);
+            settled(&mut unsettled, &mut live_unsettled);
             continue;
         }
         // The floor for this detection: its classifier's own threshold where
@@ -1069,19 +1170,29 @@ pub(super) fn event_processor(
         // daylight would never have recorded. A per-species miss still goes
         // on to the gates, so an implausible hour stays the reason it is filed
         // under.
-        let disposition = kept_bars.map_or_else(
-            || {
-                decide_disposition(
-                    detection.confidence,
-                    &detection.scientific_name,
-                    species_thresholds,
-                    global_confidence,
-                    dynamic.tracker(),
-                    now_ms,
-                )
-            },
-            |bars| crate::daemon::disposition::decide_at_bars(detection.confidence, bars),
-        );
+        // The bars this detection is judged at, worked out once, now (or as
+        // a kept one recorded them), so the decision and what a later start
+        // replays from are the same numbers (review F01).
+        let bars = kept_bars.unwrap_or_else(|| {
+            crate::daemon::disposition::bars(
+                &detection.scientific_name,
+                species_thresholds,
+                global_confidence,
+                dynamic.tracker(),
+                now_ms,
+            )
+        });
+        let disposition = crate::daemon::disposition::decide_at_bars(detection.confidence, bars);
+        if !replayed {
+            live_unsettled = Some(Box::new(crate::daemon::spool::Kept {
+                event: birdnet_core::detection::daemon::DetectionEvent {
+                    lease: None,
+                    ..event.clone()
+                },
+                run: Some(provenance.kept()),
+                bars: Some(bars),
+            }));
+        }
         // The bar in force, whatever else is decided (DD-9): what the decision
         // admitted or quarantined it at, `None` for a drop.
         let applicable = crate::daemon::disposition::threshold_of(disposition);
@@ -1093,10 +1204,19 @@ pub(super) fn event_processor(
         // clock and hour gates, so each discard has one reason and one count.
         if let Some(sf_probability) = event.out_of_range {
             if matches!(disposition, DispositionDecision::DropBelowGlobal) {
-                settled(&mut unsettled);
+                settled(&mut unsettled, &mut live_unsettled);
             } else {
                 let week_str = detection.week.to_string();
-                let file_str = event.source_file.to_string_lossy();
+                if quarantine_already_recorded(
+                    &state,
+                    detection,
+                    &derive_source_label(&event.source_file),
+                ) {
+                    settled(&mut unsettled, &mut live_unsettled);
+                    continue;
+                }
+                let clip = quarantine_clip(&extractor, &event);
+                let file_str = quarantine_file_name(clip.as_deref(), &event);
                 let source_label = derive_source_label(&event.source_file);
                 let q_record = birdnet_db::sqlite::QuarantineRecord {
                     date: &detection.date,
@@ -1109,7 +1229,7 @@ pub(super) fn event_processor(
                     file_name: if file_str.is_empty() {
                         None
                     } else {
-                        Some(file_str.as_ref())
+                        Some(file_str.as_str())
                     },
                     lat: attribution.lat,
                     lon: attribution.lon,
@@ -1128,8 +1248,9 @@ pub(super) fn event_processor(
                 match state
                     .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
                 {
-                    Some(Ok(())) => settled(&mut unsettled),
+                    Some(Ok(())) => settled(&mut unsettled, &mut live_unsettled),
                     Some(Err(e)) => {
+                        discard_quarantine_clip(clip.as_deref());
                         tracing::warn!(
                             correlation_id,
                             error = %e,
@@ -1138,14 +1259,14 @@ pub(super) fn event_processor(
                         );
                     }
                     // Halted: the database failed its integrity check. Not settled.
-                    None => {}
+                    None => discard_quarantine_clip(clip.as_deref()),
                 }
             }
             continue;
         }
 
         if matches!(disposition, DispositionDecision::DropBelowGlobal) {
-            settled(&mut unsettled);
+            settled(&mut unsettled, &mut live_unsettled);
             // Counted, not silent. "The station is detecting nothing" and
             // "the station is discarding everything" look identical from
             // outside, and the reason label is what tells them apart.
@@ -1182,7 +1303,16 @@ pub(super) fn event_processor(
                  the system clock was not set when this was captured"
             );
             let week_str = detection.week.to_string();
-            let file_str = event.source_file.to_string_lossy();
+            if quarantine_already_recorded(
+                &state,
+                detection,
+                &derive_source_label(&event.source_file),
+            ) {
+                settled(&mut unsettled, &mut live_unsettled);
+                continue;
+            }
+            let clip = quarantine_clip(&extractor, &event);
+            let file_str = quarantine_file_name(clip.as_deref(), &event);
             let source_label = derive_source_label(&event.source_file);
             let q_record = birdnet_db::sqlite::QuarantineRecord {
                 date: &detection.date,
@@ -1195,7 +1325,7 @@ pub(super) fn event_processor(
                 file_name: if file_str.is_empty() {
                     None
                 } else {
-                    Some(file_str.as_ref())
+                    Some(file_str.as_str())
                 },
                 lat: None,
                 lon: None,
@@ -1214,8 +1344,9 @@ pub(super) fn event_processor(
             match state
                 .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
             {
-                Some(Ok(())) => settled(&mut unsettled),
+                Some(Ok(())) => settled(&mut unsettled, &mut live_unsettled),
                 Some(Err(e)) => {
+                    discard_quarantine_clip(clip.as_deref());
                     tracing::warn!(
                         correlation_id,
                         error = %e,
@@ -1224,7 +1355,7 @@ pub(super) fn event_processor(
                     );
                 }
                 // Halted: the database failed its integrity check. Not settled.
-                None => {}
+                None => discard_quarantine_clip(clip.as_deref()),
             }
             state.metrics().inc_detection_dropped("implausible_clock");
             continue;
@@ -1245,7 +1376,16 @@ pub(super) fn event_processor(
                 "quarantining a day bird heard in the middle of the night"
             );
             let week_str = detection.week.to_string();
-            let file_str = event.source_file.to_string_lossy();
+            if quarantine_already_recorded(
+                &state,
+                detection,
+                &derive_source_label(&event.source_file),
+            ) {
+                settled(&mut unsettled, &mut live_unsettled);
+                continue;
+            }
+            let clip = quarantine_clip(&extractor, &event);
+            let file_str = quarantine_file_name(clip.as_deref(), &event);
             let source_label = derive_source_label(&event.source_file);
             let q_record = birdnet_db::sqlite::QuarantineRecord {
                 date: &detection.date,
@@ -1258,7 +1398,7 @@ pub(super) fn event_processor(
                 file_name: if file_str.is_empty() {
                     None
                 } else {
-                    Some(file_str.as_ref())
+                    Some(file_str.as_str())
                 },
                 lat: None,
                 lon: None,
@@ -1277,8 +1417,9 @@ pub(super) fn event_processor(
             match state
                 .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
             {
-                Some(Ok(())) => settled(&mut unsettled),
+                Some(Ok(())) => settled(&mut unsettled, &mut live_unsettled),
                 Some(Err(e)) => {
+                    discard_quarantine_clip(clip.as_deref());
                     tracing::warn!(
                         correlation_id,
                         error = %e,
@@ -1287,7 +1428,7 @@ pub(super) fn event_processor(
                     );
                 }
                 // Halted: the database failed its integrity check. Not settled.
-                None => {}
+                None => discard_quarantine_clip(clip.as_deref()),
             }
             state.metrics().inc_detection_dropped("implausible_hour");
             continue;
@@ -1307,7 +1448,16 @@ pub(super) fn event_processor(
                     "detection below per-species threshold — quarantining for review"
                 );
                 let week_str = detection.week.to_string();
-                let file_str = event.source_file.to_string_lossy();
+                if quarantine_already_recorded(
+                    &state,
+                    detection,
+                    &derive_source_label(&event.source_file),
+                ) {
+                    settled(&mut unsettled, &mut live_unsettled);
+                    continue;
+                }
+                let clip = quarantine_clip(&extractor, &event);
+                let file_str = quarantine_file_name(clip.as_deref(), &event);
                 let source_label = derive_source_label(&event.source_file);
                 let q_record = birdnet_db::sqlite::QuarantineRecord {
                     date: &detection.date,
@@ -1320,7 +1470,7 @@ pub(super) fn event_processor(
                     file_name: if file_str.is_empty() {
                         None
                     } else {
-                        Some(file_str.as_ref())
+                        Some(file_str.as_str())
                     },
                     lat: attribution.lat,
                     lon: attribution.lon,
@@ -1339,8 +1489,9 @@ pub(super) fn event_processor(
                 match state
                     .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
                 {
-                    Some(Ok(())) => settled(&mut unsettled),
+                    Some(Ok(())) => settled(&mut unsettled, &mut live_unsettled),
                     Some(Err(e)) => {
+                        discard_quarantine_clip(clip.as_deref());
                         tracing::warn!(
                             correlation_id,
                             error = %e,
@@ -1349,14 +1500,14 @@ pub(super) fn event_processor(
                         );
                     }
                     // Halted: the database failed its integrity check. Not settled.
-                    None => {}
+                    None => discard_quarantine_clip(clip.as_deref()),
                 }
                 state.metrics().inc_detection_dropped("quarantine");
                 continue;
             }
             // Dropped above, before the clock and hour gates.
             DispositionDecision::DropBelowGlobal => {
-                settled(&mut unsettled);
+                settled(&mut unsettled, &mut live_unsettled);
                 continue;
             }
             DispositionDecision::Accept { threshold } => threshold,
@@ -1386,7 +1537,7 @@ pub(super) fn event_processor(
                     species_intervals.get(&state, &detection.scientific_name),
                 )
         {
-            settled(&mut unsettled);
+            settled(&mut unsettled, &mut live_unsettled);
             tracing::debug!(
                 correlation_id,
                 species = %detection.scientific_name,
@@ -1558,11 +1709,9 @@ pub(super) fn event_processor(
         // daily integrity check stops taking detection rows, and this is one of
         // the three writes that stop.
         let model_scores = db_model_scores(&detection.model_scores);
-        // The row and its answers are one transaction, so a crash or a power
-        // cut between the two cannot leave a row without the answers it was
-        // stored with (review F15). A failure of the answers alone is rolled
-        // back to their savepoint and the row still commits, as before: the
-        // detail is lost, not the detection.
+        // The row and its answers are one transaction, so a crash, a power
+        // cut or a failed write of the answers cannot leave a row without the
+        // answers it was stored with (review F15).
         let Some(insert_result) = state.with_ingest_db(|conn| {
             let tx = conn
                 .unchecked_transaction()
@@ -1577,9 +1726,14 @@ pub(super) fn event_processor(
             // overwriting this one's. A failure here costs the detail, not the
             // detection: the row keeps `model_id` and `model_agreement`, and the
             // card says what those alone can say.
-            if inserted.is_ok()
-                && !model_scores.is_empty()
-                && let Err(e) = birdnet_db::sqlite::insert_model_scores(
+            let rowid = inserted?;
+            // The answers are part of the row's evidence: when they cannot be
+            // written the whole transaction is rolled back and the detection is
+            // kept for the next start, never stored without them (review F15,
+            // second batch). An empty set is a row from one classifier with no
+            // answer detail, as before.
+            if !model_scores.is_empty() {
+                birdnet_db::sqlite::insert_model_scores(
                     &tx,
                     &birdnet_db::sqlite::DetectionKey {
                         date: record.date,
@@ -1588,17 +1742,8 @@ pub(super) fn event_processor(
                         file_name: Some(record.file_name),
                     },
                     &model_scores,
-                )
-            {
-                tracing::warn!(
-                    correlation_id,
-                    error = %e,
-                    species = %detection.scientific_name,
-                    "the classifiers' own scores for this detection could not be stored \
-                     (or were already); the detection itself was"
-                );
+                )?;
             }
-            let rowid = inserted?;
             tx.commit().map_err(birdnet_db::sqlite::DbError::from)?;
             Ok::<_, birdnet_db::sqlite::DbError>(rowid)
         }) else {
@@ -1612,7 +1757,8 @@ pub(super) fn event_processor(
                 correlation_id,
                 species = %detection.scientific_name,
                 "detection classified but not recorded: this station's database \
-                 failed its integrity check and detection writes are halted"
+                 failed its integrity check and detection writes are halted; it is kept \
+                 for the next start"
             );
             continue;
         };
@@ -1637,7 +1783,7 @@ pub(super) fn event_processor(
                 species = %detection.scientific_name,
                 date = %detection.date,
                 time = %detection.time,
-                "detection classified but refused by the database — it is lost"
+                "detection classified but refused by the database; it is kept and recorded at the next start"
             );
             // Stop here. Everything below — the DuckDB mirror, alert rules,
             // the live broadcast, Apprise, email, BirdWeather, MQTT — would
@@ -1653,7 +1799,7 @@ pub(super) fn event_processor(
             metrics.observe_inference_seconds(latency_ms_to_seconds(event.latency_ms));
             continue;
         }
-        settled(&mut unsettled);
+        settled(&mut unsettled, &mut live_unsettled);
         if let Some(at_secs) = duplicate_at {
             duplicates.record(&source_label, &detection.scientific_name, at_secs);
         }
@@ -2590,6 +2736,7 @@ mod tests {
                 waiting_state.db_path(),
                 crate::daemon::spool::ClipWindow::of(&ExtractionConfig::default()),
                 waiting_state.subscribe_shutdown(),
+                Box::new(|| true),
             );
             let got = inbox.next(&rx, RESET_POLL, &mut || {
                 dynamic.apply_resets(&waiting_state);

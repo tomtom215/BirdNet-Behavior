@@ -16,7 +16,7 @@
 //! 4. **Reject** — [`reject_quarantine`] marks `reviewed = 1, approved = 0`.
 //! 5. **Delete** — [`delete_quarantine`] removes the row entirely.
 
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension as _, params};
 
 use crate::sqlite::connection::DbError;
 
@@ -238,6 +238,30 @@ pub(crate) const INSERT_QUARANTINE_SQL: &str = "INSERT INTO quarantine
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          ON CONFLICT(date, time, sci_name, COALESCE(file_name, '')) DO NOTHING";
 
+/// Whether a quarantine row exists for this detection from `source`.
+///
+/// What a replay asks before quarantining one again. The row's `file_name`
+/// is not part of it, since a replay cuts its clip again under a new name
+/// (review F03, second batch).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn quarantine_recorded(
+    conn: &Connection,
+    date: &str,
+    time: &str,
+    sci_name: &str,
+    source: &str,
+) -> Result<bool, DbError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM quarantine \
+          WHERE date = ?1 AND time = ?2 AND sci_name = ?3 AND COALESCE(source, '') = ?4)",
+        params![date, time, sci_name, source],
+        |r| r.get(0),
+    )?)
+}
+
 /// Insert a new quarantine entry.
 ///
 /// Duplicate entries (same `date`, `time`, `sci_name` and recording) are
@@ -399,6 +423,69 @@ pub fn reject_quarantine(conn: &Connection, id: i64) -> Result<(), DbError> {
 pub fn delete_quarantine(conn: &Connection, id: i64) -> Result<(), DbError> {
     conn.execute("DELETE FROM quarantine WHERE id = ?1", params![id])?;
     Ok(())
+}
+
+/// The clip a quarantine row was given, when it has one.
+///
+/// A bare file name in the recordings directory (review F03, second batch).
+/// A row from before quarantine clips were cut names its source recording by
+/// path, and is `None` here: that file is not the row's to remove.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn quarantine_clip_of(conn: &Connection, id: i64) -> Result<Option<String>, DbError> {
+    let name: Option<Option<String>> = conn
+        .query_row(
+            "SELECT file_name FROM quarantine WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    Ok(name.flatten().filter(|n| is_clip_name(n)))
+}
+
+/// The clips of the rows [`prune_quarantine`] would remove at `days`.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn prunable_quarantine_clips(conn: &Connection, days: u32) -> Result<Vec<String>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT file_name FROM quarantine
+         WHERE reviewed = 1 AND created_at < datetime('now', ?1) AND file_name IS NOT NULL",
+    )?;
+    let names = stmt
+        .query_map(params![format!("-{days} days")], |r| r.get::<_, String>(0))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(names.into_iter().filter(|n| is_clip_name(n)).collect())
+}
+
+/// Of `names`, those no detection and no remaining quarantine row names:
+/// the clips that can be removed from the disk.
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn unreferenced_clips(conn: &Connection, names: &[String]) -> Result<Vec<String>, DbError> {
+    let mut out = Vec::new();
+    for name in names {
+        let referenced: bool = conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM detections WHERE File_Name = ?1)
+                 OR EXISTS (SELECT 1 FROM quarantine WHERE file_name = ?1)",
+            params![name],
+            |r| r.get(0),
+        )?;
+        if !referenced {
+            out.push(name.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// A bare file name: what a quarantine clip is recorded as.
+fn is_clip_name(name: &str) -> bool {
+    !name.is_empty() && !name.contains('/') && !name.contains('\\') && name != ".." && name != "."
 }
 
 /// Prune reviewed quarantine entries older than `days` days.

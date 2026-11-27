@@ -78,6 +78,15 @@ pub(super) const VERSION: u64 = 2;
 /// Starts that may fail to store a kept detection before it is held for an
 /// operator instead of offered again.
 pub(super) const MAX_ATTEMPTS: usize = 3;
+/// Audio the queue keeps before it keeps detections without theirs.
+pub(super) const MAX_QUEUE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// Free space on the data disk below which the queue keeps no audio.
+pub(super) const FREE_RESERVE_BYTES: u64 = 512 * 1024 * 1024;
+/// Refused live detections held in memory before they are written to the
+/// queue; they are written sooner when the channel is idle or closes.
+const DEFER_MAX: usize = 32;
+/// Settlements awaiting durability before the database is asked again.
+const ACK_BATCH: usize = 64;
 
 /// The run a kept detection was analysed under, as a batch line carries it:
 /// the processor's `RunProvenance`, with the classifier's `BirdWeather` name
@@ -288,6 +297,8 @@ fn read_run(run: &serde_json::Value) -> Option<KeptRun> {
 pub struct ClipQueue {
     dir: PathBuf,
     window: ClipWindow,
+    /// Audio kept before detections are kept without theirs.
+    max_bytes: u64,
 }
 
 impl ClipQueue {
@@ -300,28 +311,92 @@ impl ClipQueue {
                 .unwrap_or_else(|| Path::new("."))
                 .join(DIR_NAME),
             window,
+            max_bytes: MAX_QUEUE_BYTES,
         }
+    }
+
+    /// The queue with a byte budget of `max_bytes`, for tests.
+    #[cfg(test)]
+    const fn with_budget(mut self, max_bytes: u64) -> Self {
+        self.max_bytes = max_bytes;
+        self
     }
 
     /// Keep `kept` for the next start: write the detections and the audio
     /// their clips need into a new batch. Returns how many were kept.
     ///
+    /// The queue is bounded: past [`MAX_QUEUE_BYTES`] of kept audio, or with
+    /// less than [`FREE_RESERVE_BYTES`] left on its disk, a batch keeps the
+    /// detections without their audio, and a batch whose audio cannot be
+    /// written (a full disk) is written again without it. A detection kept
+    /// without audio is recorded without a clip; it is not lost.
+    ///
     /// # Errors
     ///
-    /// The filesystem's, when the batch could not be written; the batch is
-    /// then removed, so a half-written one is never replayed.
+    /// The filesystem's, when not even the detections could be written; the
+    /// batch is then removed, so a half-written one is never replayed.
     pub(super) fn keep(&self, kept: &[Kept]) -> std::io::Result<usize> {
         if kept.is_empty() {
             return Ok(0);
         }
+        let with_audio = self.room_for_audio();
+        match self.keep_once(kept, with_audio) {
+            Err(e) if with_audio => {
+                tracing::warn!(
+                    error = %e,
+                    detections = kept.len(),
+                    "the audio of the detections being kept could not be written; keeping \
+                     them without it"
+                );
+                self.keep_once(kept, false)
+            }
+            other => other,
+        }
+    }
+
+    fn keep_once(&self, kept: &[Kept], with_audio: bool) -> std::io::Result<usize> {
         let batch = self.new_batch()?;
-        let written = write_batch(&batch, kept, self.window);
+        let written = write_batch(&batch, kept, self.window, with_audio);
         if written.is_err() {
             let _ = std::fs::remove_dir_all(&batch);
         }
         written?;
         sync_dir(&self.dir)?;
         Ok(kept.len())
+    }
+
+    /// Whether the queue may take more audio: under its byte budget, with the
+    /// reserve free on its disk. A disk whose free space cannot be read is
+    /// taken to have room; the write itself then says otherwise.
+    fn room_for_audio(&self) -> bool {
+        let used = dir_bytes(&self.dir);
+        if used >= self.max_bytes {
+            tracing::warn!(
+                queue = %self.dir.display(),
+                used,
+                limit = self.max_bytes,
+                "the stop queue holds its limit of audio; detections are kept without theirs"
+            );
+            return false;
+        }
+        let probe = if self.dir.exists() {
+            self.dir.clone()
+        } else {
+            self.dir
+                .parent()
+                .map_or_else(|| PathBuf::from("."), Path::to_path_buf)
+        };
+        match birdnet_core::audio::capture::disk_usage(&probe) {
+            Ok(u) if u.available_bytes < FREE_RESERVE_BYTES => {
+                tracing::warn!(
+                    available = u.available_bytes,
+                    reserve = FREE_RESERVE_BYTES,
+                    "the data disk is nearly full; detections are kept without their audio"
+                );
+                false
+            }
+            _ => true,
+        }
     }
 
     /// A new, empty batch directory, named so batches sort in the order they
@@ -371,6 +446,7 @@ impl ClipQueue {
             unsettled: HashMap::new(),
             held: 0,
             queue_dir: self.dir.clone(),
+            pending_acks: Vec::new(),
         };
         let entries = match std::fs::read_dir(&self.dir) {
             Ok(entries) => entries,
@@ -394,12 +470,16 @@ impl ClipQueue {
                 continue;
             }
             if !batch.join(EVENTS).is_file() {
-                if batch.join(format!("{EVENTS}.part")).exists() {
-                    tracing::warn!(
-                        batch = %batch.display(),
-                        "a batch a stop did not finish writing; left as it is"
-                    );
-                }
+                // `events.jsonl` is the batch's commit: without it nothing in
+                // the directory was ever kept (a stop interrupted while writing,
+                // whose `keep` never returned), only audio for it. Removed, so
+                // interrupted stops do not accumulate.
+                tracing::warn!(
+                    batch = %batch.display(),
+                    "removing a batch a stop did not finish writing; it held no kept detection"
+                );
+                let _ = std::fs::remove_dir_all(&batch);
+                removed = true;
                 continue;
             }
             match load_batch(&batch, &mut replay) {
@@ -525,118 +605,183 @@ fn sample_at(secs: f32, rate: u32, len: usize) -> usize {
     ((secs.max(0.0) * rate as f32) as usize).min(len)
 }
 
+/// Samples and rate of `path`, decoded and dropped: what the extractor would
+/// see of its length. `None` for a recording gone or unreadable (said once in
+/// the journal when it is there and unreadable).
+fn length_of(path: &Path) -> Option<(usize, u32)> {
+    match birdnet_core::audio::decode::decode_file(path) {
+        Ok(a) if !a.samples.is_empty() => Some((a.samples.len(), a.sample_rate)),
+        Ok(_) => None,
+        Err(e) => {
+            // A recording already gone is not an error: its detection is still
+            // kept, and recorded without a clip.
+            if path.exists() {
+                tracing::warn!(
+                    recording = %path.display(),
+                    error = %e,
+                    "a recording a kept detection needs cannot be read; kept without its audio"
+                );
+            }
+            None
+        }
+    }
+}
+
 #[allow(
     clippy::cast_precision_loss,
     reason = "the extractor's own f32 arithmetic"
 )]
-fn duration_of(audio: &AudioData) -> f32 {
-    audio.samples.len() as f32 / audio.sample_rate as f32
+fn secs_of(len: usize, rate: u32) -> f32 {
+    len as f32 / rate as f32
 }
 
-/// One recording a batch keeps part of.
-struct KeptAudio {
-    /// Its name in the batch.
-    name: String,
-    audio: AudioData,
-    /// The sample ranges a clip needs.
-    keep: Vec<std::ops::Range<usize>>,
-}
-
-/// Write `kept` and the audio their clips need into `batch`.
-fn write_batch(batch: &Path, kept: &[Kept], window: ClipWindow) -> std::io::Result<()> {
+/// Write `kept`, and with `with_audio` the audio their clips need, into
+/// `batch`.
+///
+/// Two passes, so no more than one recording's samples are held at once,
+/// whatever the backlog: the first decodes each recording a clip reaches for
+/// its length alone and works out the sample ranges; the second decodes each
+/// recording that has a range again, writes its masked copy and drops it.
+fn write_batch(
+    batch: &Path,
+    kept: &[Kept],
+    window: ClipWindow,
+    with_audio: bool,
+) -> std::io::Result<()> {
     let mut lines = String::new();
-    // Each recording decoded once; `None` for one that is gone or unreadable.
-    let mut audio: HashMap<PathBuf, Option<KeptAudio>> = HashMap::new();
-    let need = |path: &Path,
-                from: f32,
-                to: f32,
-                audio: &mut HashMap<PathBuf, Option<KeptAudio>>| {
-        let entry = audio.entry(path.to_path_buf()).or_insert_with(|| {
-            let decoded = match birdnet_core::audio::decode::decode_file(path) {
-                Ok(a) if !a.samples.is_empty() => a,
-                Ok(_) => return None,
-                Err(e) => {
-                    // A recording already gone is not an error: its detection
-                    // is still kept, and recorded without a clip.
-                    if path.exists() {
-                        tracing::warn!(
-                            recording = %path.display(),
-                            error = %e,
-                            "a recording a kept detection needs cannot be read; kept without its audio"
-                        );
-                    }
-                    return None;
-                }
-            };
-            Some(KeptAudio {
-                name: kept_name(path),
-                audio: decoded,
-                keep: Vec::new(),
-            })
-        });
-        if let Some(k) = entry {
-            let (rate, len) = (k.audio.sample_rate, k.audio.samples.len());
-            let range = sample_at(from, rate, len)..sample_at(to, rate, len);
-            if !range.is_empty() {
-                k.keep.push(range);
-            }
-        }
-        entry.as_ref().map(|k| k.name.clone())
+    let mut lengths: HashMap<PathBuf, Option<(usize, u32)>> = HashMap::new();
+    let mut ranges: std::collections::BTreeMap<PathBuf, Vec<std::ops::Range<usize>>> =
+        std::collections::BTreeMap::new();
+    let mut length = |path: &Path| {
+        *lengths
+            .entry(path.to_path_buf())
+            .or_insert_with(|| length_of(path))
     };
     for k in kept {
         let det = &k.event.detection;
         let source = &k.event.source_file;
-        let mut start = det.start - window.lead_in;
-        let mut stop = (det.stop + window.spacer).max(start);
-        // Decoded first, for its length, as the extractor does.
-        let name = need(source, 0.0, 0.0, &mut audio);
-        let duration = audio
-            .get(source)
-            .and_then(Option::as_ref)
-            .map(|k| duration_of(&k.audio));
-        if let Some(d) = duration {
+        if with_audio && let Some((len, rate)) = length(source) {
+            let d = secs_of(len, rate);
+            let mut start = det.start - window.lead_in;
+            let mut stop = (det.stop + window.spacer).max(start);
             if window.own_segment_only {
                 start = start.clamp(0.0, d);
                 stop = stop.clamp(start, d);
             }
-            need(source, start.max(0.0), stop.min(d), &mut audio);
+            let mut need = |path: &Path, from: f32, to: f32, len: usize, rate: u32| {
+                let range = sample_at(from, rate, len)..sample_at(to, rate, len);
+                if !range.is_empty() {
+                    ranges.entry(path.to_path_buf()).or_default().push(range);
+                }
+            };
+            need(source, start.max(0.0), stop.min(d), len, rate);
             if !window.own_segment_only {
                 let (before, after) = neighbours(source);
                 if start < 0.0
                     && let Some(prev) = before
+                    && let Some((plen, prate)) = length(&prev)
                 {
-                    need(&prev, 0.0, 0.0, &mut audio);
-                    if let Some(pd) = audio
-                        .get(&prev)
-                        .and_then(Option::as_ref)
-                        .map(|k| duration_of(&k.audio))
-                    {
-                        let take = (-start).min(pd);
-                        need(&prev, pd - take, pd, &mut audio);
-                    }
+                    let pd = secs_of(plen, prate);
+                    let take = (-start).min(pd);
+                    need(&prev, pd - take, pd, plen, prate);
                 }
                 if stop > d
                     && let Some(next) = after
+                    && let Some((nlen, nrate)) = length(&next)
                 {
-                    need(&next, 0.0, (stop - d).max(0.0), &mut audio);
+                    need(&next, 0.0, (stop - d).max(0.0), nlen, nrate);
                 }
             }
         }
-        let shown = name.unwrap_or_else(|| kept_name(source));
-        lines.push_str(&kept_line(k, &shown).map_err(std::io::Error::other)?);
+        lines.push_str(&kept_line(k, &kept_name(source)).map_err(std::io::Error::other)?);
         lines.push('\n');
     }
-    for k in audio.into_values().flatten() {
-        if k.keep.is_empty() {
+    let mut names: HashMap<String, PathBuf> = HashMap::new();
+    for (path, keep) in ranges {
+        let name = kept_name(&path);
+        if let Some(other) = names.get(&name)
+            && *other != path
+        {
+            tracing::warn!(
+                recording = %path.display(),
+                "two recordings a stop kept share a name; the second is kept without its audio"
+            );
             continue;
         }
-        write_masked(&batch.join(&k.name), &k.audio, &k.keep)?;
+        let Ok(audio) = birdnet_core::audio::decode::decode_file(&path) else {
+            continue;
+        };
+        let _held = held_audio::Held::new();
+        write_masked(&batch.join(&name), &audio, &keep)?;
+        names.insert(name, path);
     }
     let part = batch.join(format!("{EVENTS}.part"));
     let mut file = std::fs::File::create(&part)?;
     file.write_all(lines.as_bytes())?;
     drop(file);
     birdnet_core::atomic_file::commit(&part, &batch.join(EVENTS))
+}
+
+/// How many decoded recordings the queue holds at once, for the test that
+/// keeps a large backlog bounded. Per thread, so tests running side by side
+/// do not add to each other's count.
+mod held_audio {
+    #[cfg(test)]
+    thread_local! {
+        static LIVE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        pub static PEAK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    /// One decoded recording held, for as long as it lives.
+    pub struct Held;
+
+    impl Held {
+        #[cfg(test)]
+        pub fn new() -> Self {
+            LIVE.with(|live| {
+                live.set(live.get() + 1);
+                PEAK.with(|peak| peak.set(peak.get().max(live.get())));
+            });
+            Self
+        }
+
+        #[cfg(not(test))]
+        pub const fn new() -> Self {
+            Self
+        }
+    }
+
+    impl Drop for Held {
+        fn drop(&mut self) {
+            #[cfg(test)]
+            LIVE.with(|live| live.set(live.get().saturating_sub(1)));
+        }
+    }
+}
+
+/// Bytes of the files directly in `dir` and one level below: a batch is a
+/// directory of files.
+fn dir_bytes(dir: &Path) -> u64 {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| {
+            let p = e.path();
+            if p.is_dir() {
+                std::fs::read_dir(&p).map_or(0, |inner| {
+                    inner
+                        .flatten()
+                        .filter_map(|f| f.metadata().ok())
+                        .map(|m| m.len())
+                        .sum()
+                })
+            } else {
+                e.metadata().map_or(0, |m| m.len())
+            }
+        })
+        .sum()
 }
 
 /// A recording's name in its batch: its own name with a `.wav` extension,
@@ -732,6 +877,8 @@ pub struct Replay {
     /// Detections left for an operator.
     held: usize,
     queue_dir: PathBuf,
+    /// Settled, and not yet known to be durable in the database.
+    pending_acks: Vec<Ticket>,
 }
 
 impl Replay {
@@ -748,32 +895,51 @@ impl Replay {
     }
 
     /// Record what became of the detection `ticket` was handed out with.
+    ///
+    /// A settled detection is acknowledged only by [`Self::flush`], once the
+    /// database says what was settled is on the disk (review F04/F17, second
+    /// batch): with `synchronous=NORMAL` a commit can be rolled back by a
+    /// power cut until the next checkpoint, and an acknowledgement written
+    /// before it would lose the detection for good. Until then a crash offers
+    /// it again, where the processor finds its row and writes nothing twice.
     pub(super) fn settle(&mut self, ticket: Ticket, outcome: Outcome) {
-        let Ticket { batch, index } = ticket;
         match outcome {
-            Outcome::Settled => {
-                if let Err(e) = append_index(&batch.join(ACKED), index) {
-                    // Offered again at the next start, where the processor
-                    // finds its row and settles it without writing a second.
-                    tracing::warn!(batch = %batch.display(), error = %e, "could not record a kept detection as settled");
-                    return;
-                }
-                let left = self.unsettled.get_mut(&batch).map(|n| {
-                    *n = n.saturating_sub(1);
-                    *n
-                });
-                if left == Some(0) {
-                    self.unsettled.remove(&batch);
-                    let _ = std::fs::remove_dir_all(&batch);
-                    let _ = sync_dir(&self.queue_dir);
-                }
-            }
+            Outcome::Settled => self.pending_acks.push(ticket),
             Outcome::Retry => {
+                let Ticket { batch, index } = ticket;
                 if let Err(e) = append_index(&batch.join(FAILED), index) {
                     tracing::warn!(batch = %batch.display(), error = %e, "could not record a kept detection's failed attempt");
                 }
             }
         }
+    }
+
+    /// Acknowledge the settled detections when `durable` (the database
+    /// confirmed its commits are on the disk); keep them pending otherwise.
+    pub(super) fn flush(&mut self, durable: bool) {
+        if !durable {
+            return;
+        }
+        for Ticket { batch, index } in std::mem::take(&mut self.pending_acks) {
+            if let Err(e) = append_index(&batch.join(ACKED), index) {
+                tracing::warn!(batch = %batch.display(), error = %e, "could not record a kept detection as settled");
+                continue;
+            }
+            let left = self.unsettled.get_mut(&batch).map(|n| {
+                *n = n.saturating_sub(1);
+                *n
+            });
+            if left == Some(0) {
+                self.unsettled.remove(&batch);
+                let _ = std::fs::remove_dir_all(&batch);
+                let _ = sync_dir(&self.queue_dir);
+            }
+        }
+    }
+
+    /// How many settlements await the database's confirmation.
+    pub(super) const fn awaiting_durability(&self) -> usize {
+        self.pending_acks.len()
     }
 
     /// How many detections are held for an operator.
@@ -812,22 +978,38 @@ pub(super) enum Next {
 
 /// Where the processor's detections come from: what the last stop kept,
 /// then the detection loop's channel, until the station stops.
-#[derive(Debug)]
 pub(super) struct Inbox {
     queue: ClipQueue,
     replay: Replay,
     stopping: tokio::sync::watch::Receiver<bool>,
+    /// Live detections the database refused, to keep for the next start.
+    deferred: Vec<Kept>,
+    /// Whether the database's commits so far are on the disk; asked before
+    /// settlements are acknowledged.
+    durable: Box<dyn FnMut() -> bool>,
+}
+
+impl std::fmt::Debug for Inbox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inbox")
+            .field("queue", &self.queue)
+            .field("replay", &self.replay)
+            .field("deferred", &self.deferred.len())
+            .finish_non_exhaustive()
+    }
 }
 
 impl Inbox {
     /// The inbox of the station whose database is `db_path`, whose clips are
     /// cut in `window`, stopping when `stopping` turns true
-    /// (`AppState::subscribe_shutdown`).
+    /// (`AppState::subscribe_shutdown`), and asking `durable` whether the
+    /// database's commits are on the disk before acknowledging what it settled.
     #[must_use]
     pub(super) fn new(
         db_path: &Path,
         window: ClipWindow,
         stopping: tokio::sync::watch::Receiver<bool>,
+        durable: Box<dyn FnMut() -> bool>,
     ) -> Self {
         let queue = ClipQueue::beside(db_path, window);
         let replay = queue.take();
@@ -835,6 +1017,8 @@ impl Inbox {
             queue,
             replay,
             stopping,
+            deferred: Vec::new(),
+            durable,
         }
     }
 
@@ -860,10 +1044,18 @@ impl Inbox {
                     },
                 )));
             }
+            self.flush_acks();
             match events.recv_timeout(poll) {
                 Ok(event) => return Next::Event(Box::new((event, Origin::Live))),
-                Err(mpsc::RecvTimeoutError::Timeout) => idle(),
-                Err(mpsc::RecvTimeoutError::Disconnected) => return Next::Closed,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    self.flush_deferred();
+                    idle();
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    self.flush_deferred();
+                    self.flush_acks();
+                    return Next::Closed;
+                }
             }
         }
     }
@@ -871,21 +1063,68 @@ impl Inbox {
     /// Record what became of a replayed detection.
     pub(super) fn settle(&mut self, ticket: Ticket, outcome: Outcome) {
         self.replay.settle(ticket, outcome);
+        if self.replay.awaiting_durability() >= ACK_BATCH {
+            self.flush_acks();
+        }
+    }
+
+    /// Keep a live detection the database refused, for the next start
+    /// (review F02, second batch). Written to the queue within [`DEFER_MAX`]
+    /// of them, or when the channel is idle, closes or the station stops.
+    pub(super) fn defer(&mut self, kept: Kept) {
+        self.deferred.push(kept);
+        if self.deferred.len() >= DEFER_MAX {
+            self.flush_deferred();
+        }
+    }
+
+    fn flush_deferred(&mut self) {
+        if self.deferred.is_empty() {
+            return;
+        }
+        let deferred = std::mem::take(&mut self.deferred);
+        match self.queue.keep(&deferred) {
+            Ok(n) => tracing::warn!(
+                detections = n,
+                "detections the database refused are kept beside it and recorded at the next start"
+            ),
+            Err(e) => tracing::error!(
+                detections = deferred.len(),
+                error = %e,
+                "detections the database refused could not be kept either, and are lost"
+            ),
+        }
+    }
+
+    fn flush_acks(&mut self) {
+        if self.replay.awaiting_durability() == 0 {
+            return;
+        }
+        let durable = (self.durable)();
+        if !durable {
+            tracing::debug!(
+                pending = self.replay.awaiting_durability(),
+                "the database could not confirm its commits are on the disk; acknowledging later"
+            );
+        }
+        self.replay.flush(durable);
     }
 
     /// Keep everything the detection loop sends until it closes its channel
-    /// (or [`KEEP_WAIT`] passes), each made into a [`Kept`] by `freeze`.
-    /// Returns how many were kept: written to the disk, not merely offered.
+    /// (or [`KEEP_WAIT`] passes), each made into a [`Kept`] by `freeze`, with
+    /// the refused live detections not yet kept. Returns how many were kept:
+    /// written to the disk, not merely offered.
     ///
     /// What is left of the replay stays in its own batches, which are already
     /// on the disk with the run and bars they were kept under.
     pub(super) fn keep_the_rest(
-        &self,
+        &mut self,
         events: &mpsc::Receiver<DetectionEvent>,
         freeze: &mut dyn FnMut(DetectionEvent) -> Kept,
     ) -> usize {
+        self.flush_acks();
         let deadline = keep_deadline(Instant::now());
-        let mut rest = Vec::new();
+        let mut rest = std::mem::take(&mut self.deferred);
         while let Ok(event) =
             events.recv_timeout(deadline.saturating_duration_since(Instant::now()))
         {
@@ -989,6 +1228,7 @@ mod tests {
             names.push(k.event.detection.scientific_name);
             replay.settle(t, Outcome::Settled);
         }
+        replay.flush(true);
         names
     }
 
@@ -1018,6 +1258,7 @@ mod tests {
         let batch = first.event.source_file.parent().unwrap().to_path_buf();
         assert!(first.event.source_file.is_file(), "its audio came back");
         replay.settle(t, Outcome::Settled);
+        replay.flush(true);
         let (_t, second) = replay.next().unwrap();
         assert_eq!(second.event.detection.scientific_name, "Corvus corax");
         // Killed here: the second was handed out and never settled.
@@ -1295,7 +1536,7 @@ mod tests {
         assert_eq!(queue.keep(&[kept(&src, "Pica pica", 0.0)]).unwrap(), 1);
 
         let (_stop, stopping) = tokio::sync::watch::channel(true);
-        let mut inbox = Inbox::new(&db, window(), stopping);
+        let mut inbox = Inbox::new(&db, window(), stopping, Box::new(|| true));
         let (tx, rx) = mpsc::channel();
         let event = |sci: &str| kept(&src, sci, 3.0).event;
         tx.send(event("Corvus corax")).unwrap();
@@ -1367,6 +1608,164 @@ mod tests {
         queue.keep(&[kept(&src, "Pica pica", 0.0)]).unwrap();
         let (_, said) = crate::daemon::test_support::logged(tracing::Level::INFO, || queue.take());
         assert!(said.contains(SAID), "{said}");
+    }
+
+    /// Review F04/F17, second batch: a settlement is acknowledged only once the
+    /// database says what it settled is durable. Settled and not yet confirmed
+    /// durable, a detection is offered again at the next start (where the
+    /// processor finds its row and writes nothing twice); confirmed, it is not.
+    #[test]
+    fn a_settlement_is_acknowledged_only_once_durable() {
+        let data = tempfile::tempdir().unwrap();
+        let queue = ClipQueue::beside(&data.path().join("birds.db"), window());
+        let src = data.path().join("2026-05-19-birdnet-09:01:00.wav");
+        queue.keep(&[kept(&src, "Pica pica", 0.0)]).unwrap();
+        let mut replay = queue.take();
+        let (t, _) = replay.next().unwrap();
+        replay.settle(t, Outcome::Settled);
+        // Killed before the database's commit was known to be on the disk.
+        drop(replay);
+        let mut again = queue.take();
+        let (t, k) = again
+            .next()
+            .expect("a settlement nobody confirmed durable was acknowledged");
+        assert_eq!(k.event.detection.scientific_name, "Pica pica");
+        again.settle(t, Outcome::Settled);
+        again.flush(true);
+        assert!(
+            queue.take().next().is_none(),
+            "confirmed durable, it is not offered again"
+        );
+    }
+
+    /// Resource bounds (second batch): a backlog spread over several sources'
+    /// recordings is kept with no more than one recording decoded at a time,
+    /// and each source's clips reach only that source's neighbours.
+    #[test]
+    fn a_large_backlog_over_several_sources_holds_one_recording_at_a_time() {
+        let data = tempfile::tempdir().unwrap();
+        let stream = tempfile::tempdir().unwrap();
+        let mut kept_events = Vec::new();
+        for cam in ["cam1", "cam2", "cam3"] {
+            for t in ["09:00:45", "09:01:00", "09:01:15", "09:01:30"] {
+                let p = stream
+                    .path()
+                    .join(format!("2026-05-19-birdnet-{cam}-{t}.wav"));
+                ramp(&p, 0);
+                for start in [0.5_f32, 6.0, 11.5] {
+                    for sci in [
+                        "Pica pica",
+                        "Corvus corax",
+                        "Parus major",
+                        "Turdus merula",
+                        "Sitta europaea",
+                    ] {
+                        kept_events.push(kept(&p, sci, start));
+                    }
+                }
+            }
+        }
+        assert_eq!(kept_events.len(), 180);
+        held_audio::PEAK.with(|p| p.set(0));
+        let queue = ClipQueue::beside(&data.path().join("birds.db"), window());
+        assert_eq!(queue.keep(&kept_events).unwrap(), 180);
+        assert_eq!(
+            held_audio::PEAK.with(std::cell::Cell::get),
+            1,
+            "more than one recording was held decoded at once"
+        );
+        let batch = std::fs::read_dir(data.path().join(DIR_NAME))
+            .unwrap()
+            .flatten()
+            .next()
+            .unwrap()
+            .path();
+        let wavs: Vec<String> = std::fs::read_dir(&batch)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| {
+                Path::new(n)
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("wav"))
+            })
+            .collect();
+        // Every recording of every source is reached by some clip, and none of
+        // another source's names appears under the wrong one.
+        assert_eq!(wavs.len(), 12, "{wavs:?}");
+        let mut replay = queue.take();
+        assert_eq!(drain(&mut replay).len(), 180);
+    }
+
+    /// Over its byte budget the queue keeps detections without their audio:
+    /// they come back and are recorded without a clip, not lost.
+    #[test]
+    fn over_its_budget_the_queue_keeps_detections_without_audio() {
+        let data = tempfile::tempdir().unwrap();
+        let stream = tempfile::tempdir().unwrap();
+        let src = stream.path().join("2026-05-19-birdnet-09:01:00.wav");
+        ramp(&src, 0);
+        let queue = ClipQueue::beside(&data.path().join("birds.db"), window()).with_budget(1);
+        queue.keep(&[kept(&src, "Pica pica", 3.0)]).unwrap();
+        // The first batch had room (nothing was kept yet) and holds audio.
+        queue.keep(&[kept(&src, "Corvus corax", 3.0)]).unwrap();
+        let mut replay = queue.take();
+        let mut with_audio = 0;
+        while let Some((t, k)) = replay.next() {
+            with_audio += usize::from(k.event.source_file.is_file());
+            replay.settle(t, Outcome::Settled);
+        }
+        replay.flush(true);
+        assert_eq!(with_audio, 1, "the batch over budget kept its audio");
+    }
+
+    /// A batch whose audio cannot be written is written again without it, and
+    /// its detections come back. Here the audio's file name is longer than
+    /// the path limit allows beside the batch, as a full disk fails a write.
+    #[test]
+    fn a_batch_whose_audio_cannot_be_written_keeps_its_detections() {
+        let data = tempfile::tempdir().unwrap();
+        let stream = tempfile::tempdir().unwrap();
+        let src = stream.path().join("2026-05-19-birdnet-09:01:00.wav");
+        ramp(&src, 0);
+        // A queue whose batch paths leave room for `events.jsonl` and not for
+        // the 31-character recording name: batch dir is `<24 digits>-0`.
+        let mut parent = data.path().to_path_buf();
+        let target = 4095 - 31 + 2 - (1 + DIR_NAME.len() + 1 + 26);
+        while parent.as_os_str().len() + 201 < target {
+            parent.push("a".repeat(200));
+        }
+        let pad = target - parent.as_os_str().len() - 1;
+        parent.push("b".repeat(pad));
+        if std::fs::create_dir_all(&parent).is_err() {
+            return;
+        }
+        let queue = ClipQueue::beside(&parent.join("birds.db"), window());
+        assert_eq!(queue.keep(&[kept(&src, "Pica pica", 3.0)]).unwrap(), 1);
+        let mut replay = queue.take();
+        let (t, k) = replay
+            .next()
+            .expect("the detection was kept without its audio");
+        assert!(
+            !k.event.source_file.exists(),
+            "precondition: its audio could not be written"
+        );
+        replay.settle(t, Outcome::Settled);
+        replay.flush(true);
+    }
+
+    /// A batch a stop did not finish writing (no `events.jsonl`, the batch's
+    /// commit) holds no kept detection and is removed at the next start, so
+    /// interrupted stops do not accumulate audio.
+    #[test]
+    fn an_unfinished_batch_is_removed_at_the_next_start() {
+        let data = tempfile::tempdir().unwrap();
+        let queue = ClipQueue::beside(&data.path().join("birds.db"), window());
+        let batch = queue.new_batch_at(7).unwrap();
+        ramp(&batch.join("2026-05-19-birdnet-09:01:00.wav"), 0);
+        std::fs::write(batch.join(format!("{EVENTS}.part")), "{").unwrap();
+        assert!(queue.take().next().is_none());
+        assert!(!batch.exists(), "an unfinished batch was left on the disk");
     }
 
     /// Nothing kept is nothing written, and nothing to take.
