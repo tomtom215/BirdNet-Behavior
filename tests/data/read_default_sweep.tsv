@@ -280,3 +280,6 @@ handled	crates/birdnet-web/src/routes/pages/migration.rs	compute_ridgeline	ok	st
 fail-closed	crates/birdnet-web/src/live_audio.rs	policy	match-err	match birdnet_db::settings::get(conn, LIVE_AUDIO_SETTING) { Err .. }
 write-outcome	crates/birdnet-web/src/live_audio.rs	seed_at_start	match-err	match state.with_db(seed) { Err .. }
 write-outcome	src/integrations/station_health.rs	record_clock	match-err	match state.with_db(|conn| birdnet_db::capture_ledger::observe(conn, reading)) { Err .. }
+handled	crates/birdnet-web/src/routes/admin/validation.rs	add_verdict	match-err	match state .run_blocking(move |s| { s.with_db(|conn| { validation::record_verdict( conn, id, body.position, &
+handled	crates/birdnet-web/src/routes/admin/validation.rs	create_sample	match-err	match state .run_blocking(move |s| s.with_db(|conn| validation::create_sample(conn, &protocol))) .await { Err 
+handled	crates/birdnet-web/src/routes/admin/validation.rs	list_samples	match-err	match state .run_blocking(|s| s.with_read_db(validation::samples)) .await { Err .. }

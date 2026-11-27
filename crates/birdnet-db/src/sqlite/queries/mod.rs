@@ -21,6 +21,7 @@ pub mod quarantine;
 pub mod run_config;
 pub mod site_effort;
 pub mod species;
+pub mod validation;
 
 pub use analysis_runs::{
     AnalysisRun, ModelAttribution, NewAnalysisRun, NewRunClassifier, RunModel, analysis_run,

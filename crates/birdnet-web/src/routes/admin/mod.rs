@@ -56,6 +56,7 @@ pub mod system;
 pub mod system_controls;
 pub mod today_layout;
 pub mod update;
+pub mod validation;
 
 use std::fmt::Write as _;
 
@@ -172,6 +173,8 @@ pub fn router() -> Router<AppState> {
         // Software update
         .merge(update::router())
         .merge(today_layout::router())
+        // Validation samples (RES-07)
+        .merge(validation::router())
         // Alert rules engine
         .merge(rules::router())
         // Data quality dashboard
