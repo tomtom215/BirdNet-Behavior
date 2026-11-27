@@ -14,6 +14,7 @@ mod cli;
 mod daemon;
 mod doctor;
 mod helpers;
+mod ingest;
 mod integrations;
 mod log_capture;
 mod log_filter;
@@ -62,6 +63,9 @@ enum Action {
     /// `--import-birdnet-pi-clips`: find, or with `--apply-import` bring
     /// across, the recordings of imported detections; then exit.
     ImportBirdnetPiClips,
+    /// `--ingest-recordings`: split long recordings into segments in the
+    /// watch directory for the running station to analyse; then exit.
+    IngestRecordings,
     /// `--rebuild-species-summary`: recompute the maintained per-species
     /// totals from the detections and exit.
     RebuildSpeciesSummary,
@@ -109,6 +113,8 @@ const fn dispatch_subcommand(cli: &Cli) -> Action {
         Action::ImportBirdnetPiConf
     } else if cli.import_birdnet_pi_clips.is_some() {
         Action::ImportBirdnetPiClips
+    } else if cli.ingest_recordings.is_some() {
+        Action::IngestRecordings
     } else if cli.rebuild_species_summary {
         Action::RebuildSpeciesSummary
     } else if cli.decrypt_backup.is_some() {
@@ -274,7 +280,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // own, instead of starting with the web page and no listening.
     if matches!(
         dispatch_subcommand(&cli),
-        Action::RunServer | Action::Doctor(_)
+        Action::RunServer | Action::Doctor(_) | Action::IngestRecordings
     ) {
         let applied = helpers::station_defaults::apply(&mut cli, config.as_ref());
         if applied.classifier {
@@ -314,6 +320,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Action::ImportBirdnetPiClips => {
             let code = helpers::migrate_cli::run_import_clips(&cli, config.as_ref());
+            std::process::exit(code);
+        }
+        Action::IngestRecordings => {
+            // `spawn_blocking`: it decodes, writes and waits on the station
+            // for as long as the recordings take.
+            let (cli, config) = (cli.clone(), config.clone());
+            let code = tokio::task::spawn_blocking(move || ingest::run(&cli, config.as_ref()))
+                .await
+                .unwrap_or(1);
             std::process::exit(code);
         }
         Action::RebuildSpeciesSummary => {
@@ -486,6 +501,21 @@ mod tests {
         assert!(!parsed.apply_import, "the default is to look");
         assert_eq!(parsed.clips_mode, "copy");
         assert!(cli(&["--import-birdnet-pi-conf", "/x", "--apply-import"]).apply_import);
+    }
+
+    /// `--ingest-recordings` is a run-and-exit command too, and a flag that
+    /// only means something beside it is refused without it.
+    #[test]
+    fn ingest_recordings_is_a_run_and_exit_command() {
+        assert_eq!(
+            dispatch_subcommand(&cli(&["--ingest-recordings", "/cards", "--doctor"])),
+            Action::IngestRecordings
+        );
+        assert!(
+            Cli::try_parse_from(["birdnet-behavior", "--ingest-source", "c1"]).is_err(),
+            "--ingest-source alone is refused"
+        );
+        assert_eq!(dispatch_subcommand(&cli(&[])), Action::RunServer);
     }
 
     /// The dry-run must not be reachable only by an operator who happens not to

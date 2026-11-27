@@ -275,3 +275,4 @@ task-panic	src/main.rs	main	unwrap_or	tokio::task::spawn_blocking(move || { help
 fail-closed	crates/birdnet-web/src/routes/pages/quarantine.rs	quarantine_delete	match-err	match state.with_read_db(|conn| birdnet_db::sqlite::quarantine_clip_of(conn, id)) { Err .. }
 fail-closed	crates/birdnet-web/src/routes/pages/quarantine.rs	remove_unreferenced_clips	match-err	match state .with_read_db(|conn| birdnet_db::sqlite::unreferenced_clips(conn, names)) { Err .. }
 fail-closed	src/daemon/processor.rs	quarantine_already_recorded	match-err	match state.with_read_db(|conn| { birdnet_db::sqlite::quarantine_recorded( conn, &detection.date, &detection.t
+task-panic	src/main.rs	main	unwrap_or	tokio::task::spawn_blocking(move || ingest::run(&cli, config.as_ref())) .await .unwrap_or(1)

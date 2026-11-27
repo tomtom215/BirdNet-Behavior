@@ -198,6 +198,36 @@ Options:
       --apply-import
           Do what `--import-birdnet-pi-conf` and `--import-birdnet-pi-clips` show. Without it they change nothing
 
+      --ingest-recordings <PATH>
+          Analyse long recordings (an SD card's, a recorder's) by splitting them into station segments.
+
+          Give one recording or a folder of them (.wav, .flac, .mp3; not descended into). Each is read a packet at a time, never whole, and written into the watch directory as segments of `--ingest-source`, a few at a time, for the running station to analyse as it analyses its own; its detections are kept as imported history. A damaged packet or a gap in the recording starts a new segment where the audio resumes. Needs `--ingest-source` and the start: `--ingest-start`, or `--ingest-name-rule` with `--ingest-utc-offset`. A rerun skips what was imported (by content, source and start), so it is safe to repeat.
+
+      --ingest-source <NAME>
+          The source name `--ingest-recordings` records the audio under: letters, digits and `_`. Use one no live source has
+
+      --ingest-start <TIME>
+          When the recording given to `--ingest-recordings` started, with its UTC offset: `2026-05-19T04:30:00Z` or `2026-05-19T06:30:00+02:00`. One recording only; nothing is read from the clock or the file's date
+
+      --ingest-name-rule <RULE>
+          Read each recording's start from its name: `yyyymmdd_hhmmss`, the last `YYYYMMDD_HHMMSS` in it, as `AudioMoth` and Song Meter recorders write. Needs `--ingest-utc-offset`
+
+      --ingest-utc-offset <OFFSET>
+          The UTC offset the recorder wrote its names in, for `--ingest-name-rule`: `Z` (`AudioMoth`'s default) or `+HH:MM` / `-HH:MM`
+
+      --ingest-segment-secs <SECONDS>
+          The length of each segment `--ingest-recordings` writes, in seconds (3 to 600). Default: the station's segment length
+
+      --ingest-max-pending <N>
+          At most this many imported segments wait in the watch directory at once; the next is written when the station has analysed one
+
+          [default: 4]
+
+      --ingest-stall-secs <SECONDS>
+          Stop `--ingest-recordings` when the station has analysed none of the waiting segments for this many seconds (is it running?). A rerun carries on
+
+          [default: 600]
+
       --fix
           Attempt safe automatic repairs, then run the diagnostic.
 

@@ -336,6 +336,14 @@ Every flag `birdnet-behavior --help` lists, the environment variable that sets i
 | `--image-cache-dir` | `BIRDNET_IMAGE_CACHE_DIR` | Settings → General → System & Display → Species Image Cache Directory (`image_cache_dir`) (the same as `IMAGE_CACHE_DIR`) | |
 | `--import-birdnet-pi-clips` | — | Settings → Data → Bring your history with you → Recordings |  |
 | `--import-birdnet-pi-conf` | — | Settings → Data → Bring your history with you (upload `birdnet.conf`; the page shows every line before anything changes) |  |
+| `--ingest-max-pending` | — | — | Only meaningful with --ingest-recordings, a one-shot command run at the station's shell against recordings on its disk. |
+| `--ingest-name-rule` | — | — | Only meaningful with --ingest-recordings, a one-shot command run at the station's shell against recordings on its disk. |
+| `--ingest-recordings` | — | — | Reads recordings already on the station's disk (an SD card, a recorder's folder), which a browser cannot reach, and runs for as long as they take. |
+| `--ingest-segment-secs` | — | — | Only meaningful with --ingest-recordings, a one-shot command run at the station's shell against recordings on its disk. |
+| `--ingest-source` | — | — | Only meaningful with --ingest-recordings, a one-shot command run at the station's shell against recordings on its disk. |
+| `--ingest-stall-secs` | — | — | Only meaningful with --ingest-recordings, a one-shot command run at the station's shell against recordings on its disk. |
+| `--ingest-start` | — | — | Only meaningful with --ingest-recordings, a one-shot command run at the station's shell against recordings on its disk. |
+| `--ingest-utc-offset` | — | — | Only meaningful with --ingest-recordings, a one-shot command run at the station's shell against recordings on its disk. |
 | `--info-site` | `BIRDNET_INFO_SITE` | Settings → General → System & Display → Species Info Links (`info_site`) (the same as `INFO_SITE`) | |
 | `--install-model` | — | Settings → Capture → Bird-identifying model → Install |  |
 | `--labels` | `BIRDNET_LABELS` | — | Same as `LABELS_PATH`: Set for you by the installer or by the Bird-identifying model panel. A different labels file than the model's own reports species under other species' names, so it is only ever set together with its model, in the file. |
