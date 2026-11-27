@@ -497,7 +497,9 @@ async fn terrain_table(
         &state,
         format!("terrain-table:{days}"),
         FRAGMENT_ERR,
-        move |s| compute_terrain(s, days).map(|t| render_table(&t)),
+        move |s| {
+            compute_terrain(s, days).map(|t| crate::analytics_cache::stamped(render_table(&t)))
+        },
     )
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
@@ -522,13 +524,13 @@ pub(super) fn content(days: u32) -> String {
         .find(|&r| r >= days)
         .unwrap_or(RANGES[RANGES.len() - 1]);
     CARD.replace("{{version}}", env!("CARGO_PKG_VERSION"))
-}
-
         .replacen(
             r#"data-tr-days="30""#,
             &format!(r#"data-tr-days="{opens}""#),
             1,
         )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

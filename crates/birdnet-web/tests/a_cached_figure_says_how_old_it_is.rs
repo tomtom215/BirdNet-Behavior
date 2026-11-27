@@ -80,3 +80,52 @@ async fn each_cached_figure_on_patterns_says_when_it_was_worked_out() {
         );
     }
 }
+
+/// The rest of the cached figures (UIC-23's remainder): Migration's ridgeline and stats, the
+/// soundscape terrain's table, and Trends' four cards, which share the same ten-minute cache and
+/// said nothing of it.
+#[tokio::test]
+async fn every_other_cached_figure_says_when_it_was_worked_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::new(dir.path().join("birds.db")).expect("state");
+    state.with_db(|conn| {
+        for back in 0..20 {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES (DATE('now', 'localtime', ?1), '06:10:00', 'Turdus migratorius',
+                         'American Robin', 0.9, '')",
+                rusqlite::params![format!("-{back} days")],
+            )
+            .unwrap();
+        }
+    });
+    let mut uris = vec![
+        "/pages/migration-ridgeline",
+        "/pages/migration-stats",
+        "/pages/terrain-table?days=30",
+    ];
+    // Trends' cards draw only where the analytics engine is built in and attached; elsewhere
+    // they answer "unavailable", which is not a cached figure.
+    if state.has_analytics() {
+        uris.extend([
+            "/pages/ts-daily",
+            "/pages/ts-diversity",
+            "/pages/ts-anomalies",
+            "/pages/ts-peak",
+        ]);
+    }
+    for uri in uris {
+        let first = get(&state, uri).await;
+        assert!(
+            !first.contains("temporarily unavailable"),
+            "{uri} drew its figure, or this tests nothing: {first}"
+        );
+        let at = stamp(&first).unwrap_or_else(|| panic!("no stamp in {uri}: {first}"));
+        assert_eq!(at.len(), 5, "{uri}: {at}");
+        let second = get(&state, uri).await;
+        assert_eq!(
+            first, second,
+            "{uri}: the second reader is served the stored copy"
+        );
+    }
+}

@@ -410,7 +410,7 @@ async fn ridgeline_partial(State(state): State<AppState>) -> impl IntoResponse {
         &state,
         "migration-ridgeline".to_string(),
         FRAGMENT_ERR,
-        compute_ridgeline,
+        |s| compute_ridgeline(s).map(crate::analytics_cache::stamped),
     )
     .await;
     ok_html(html)
@@ -491,6 +491,7 @@ async fn stats_partial(State(state): State<AppState>) -> impl IntoResponse {
         let today = crate::routes::pages::today_date_string();
         s.with_read_db(|conn| stats_fragment(conn, &today, s.names()))
             .ok()
+            .map(crate::analytics_cache::stamped)
     })
     .await;
     ok_html(html)

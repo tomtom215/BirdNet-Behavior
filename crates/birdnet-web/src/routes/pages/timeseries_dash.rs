@@ -117,12 +117,9 @@ async fn ts_daily_partial(State(state): State<AppState>) -> impl axum::response:
     if !state.has_analytics() {
         return ts_unavailable("daily trend");
     }
-    let html = cached_fragment(
-        &state,
-        "ts-daily".to_string(),
-        TS_FALLBACK,
-        compute_ts_daily,
-    )
+    let html = cached_fragment(&state, "ts-daily".to_string(), TS_FALLBACK, |s| {
+        compute_ts_daily(s).map(crate::analytics_cache::stamped)
+    })
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
@@ -165,12 +162,9 @@ async fn ts_diversity_partial(State(state): State<AppState>) -> impl axum::respo
     if !state.has_analytics() {
         return ts_unavailable("diversity");
     }
-    let html = cached_fragment(
-        &state,
-        "ts-diversity".to_string(),
-        TS_FALLBACK,
-        compute_ts_diversity,
-    )
+    let html = cached_fragment(&state, "ts-diversity".to_string(), TS_FALLBACK, |s| {
+        compute_ts_diversity(s).map(crate::analytics_cache::stamped)
+    })
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
@@ -202,12 +196,9 @@ async fn ts_anomaly_partial(State(state): State<AppState>) -> impl axum::respons
     if !state.has_analytics() {
         return ts_unavailable("anomaly detection");
     }
-    let html = cached_fragment(
-        &state,
-        "ts-anomalies".to_string(),
-        TS_FALLBACK,
-        compute_ts_anomaly,
-    )
+    let html = cached_fragment(&state, "ts-anomalies".to_string(), TS_FALLBACK, |s| {
+        compute_ts_anomaly(s).map(crate::analytics_cache::stamped)
+    })
     .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
@@ -240,7 +231,10 @@ async fn ts_peak_partial(State(state): State<AppState>) -> impl axum::response::
     if !state.has_analytics() {
         return ts_unavailable("peak windows");
     }
-    let html = cached_fragment(&state, "ts-peak".to_string(), TS_FALLBACK, compute_ts_peak).await;
+    let html = cached_fragment(&state, "ts-peak".to_string(), TS_FALLBACK, |s| {
+        compute_ts_peak(s).map(crate::analytics_cache::stamped)
+    })
+    .await;
     (StatusCode::OK, [(header::CONTENT_TYPE, "text/html")], html)
 }
 
