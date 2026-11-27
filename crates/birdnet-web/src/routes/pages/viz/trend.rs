@@ -219,7 +219,13 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            let mut values = vec![if off(i) { None } else { Some(p.value) }];
+            // A value that is not a number is "too few to say" (a day too quiet to be read at
+            // the chart's common depth, CHT-07): no value in the readout, a gap in the line.
+            let mut values = vec![if off(i) || !p.value.is_finite() {
+                None
+            } else {
+                Some(p.value)
+            }];
             if o.bars && !o.smooth_name.is_empty() {
                 values.push(p.smooth);
             }
@@ -229,6 +235,8 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
             let range = expected_at(i);
             let note = if off(i) {
                 Some("The station was not listening".to_string())
+            } else if !p.value.is_finite() {
+                Some("Too few detections to say".to_string())
             } else {
                 let side = outside(p.value, range).zip(range).map(|(side, (lo, hi))| {
                     format!("{side} the usual range ({} to {})", fmt(lo), fmt(hi))
@@ -554,20 +562,29 @@ pub fn trend_chart(points: &[TrendPoint], o: &TrendOpts<'_>) -> String {
         );
     }
     // Click-free text equivalent of the picture.
-    let first = points.first().map_or(0.0, |p| p.value);
-    let last = points.last().map_or(0.0, |p| p.value);
+    let mut read = points
+        .iter()
+        .enumerate()
+        .filter(|(i, p)| !off(*i) && p.value.is_finite());
+    let first = read.clone().next().map(|(_, p)| p);
+    let last = read.next_back().map(|(_, p)| p);
     let _ = write!(
         svg,
         r#"<p class="sr-only viz-readout">{}</p></div>"#,
-        escape_html(&format!(
-            "{} {} per day over {n} days, from {} on {} to {} on {}.",
-            capitalise(o.unit),
-            "",
-            fmt(first),
-            label_of(&points[0].date).1,
-            fmt(last),
-            label_of(&points[n - 1].date).1
-        )),
+        escape_html(&match (first, last) {
+            (Some(f), Some(l)) => format!(
+                "{} per day over {n} days, from {} on {} to {} on {}.",
+                capitalise(o.unit),
+                fmt(f.value),
+                label_of(&f.date).1,
+                fmt(l.value),
+                label_of(&l.date).1
+            ),
+            _ => format!(
+                "{} per day over {n} days: no day to read.",
+                capitalise(o.unit)
+            ),
+        }),
     );
     svg
 }

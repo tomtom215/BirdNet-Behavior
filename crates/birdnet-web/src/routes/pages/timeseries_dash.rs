@@ -149,9 +149,18 @@ fn compute_ts_diversity(state: &AppState) -> Option<String> {
                     })
                 })
                 .ok();
-            Some(render_diversity_table(&rows, today.as_deref(), &|dates| {
-                listened_for(state, dates)
-            }))
+            // Each day's detections by species, for the richness at a common depth (CHT-07). A
+            // failed read is an error for the figure, not a raw count drawn in its place.
+            let by_day = state
+                .with_read_db(|conn| birdnet_db::sqlite::species_counts_by_day(conn, 60))
+                .ok()?;
+            let rare = Rarefied::of(&by_day);
+            Some(render_diversity_table(
+                &rows,
+                today.as_deref(),
+                &|dates| listened_for(state, dates),
+                &rare,
+            ))
         }
         _ => None,
     }
@@ -421,6 +430,51 @@ fn shannon_cell(h: Option<f64>) -> String {
     )
 }
 
+/// Each day's richness at one common depth (CHT-07): the expected number of species in `depth`
+/// of the day's detections (`birdnet_behavioral::richness`), so a day is not richer for having
+/// been heard more. A day with fewer detections than the depth is too few to say.
+#[cfg(feature = "analytics")]
+#[derive(Debug, Default)]
+struct Rarefied {
+    /// The common depth, in detections; `None` when no day had any.
+    depth: Option<u64>,
+    /// `date → (detections, richness at the depth)`.
+    days: std::collections::HashMap<String, (u64, Option<f64>)>,
+}
+
+#[cfg(feature = "analytics")]
+impl Rarefied {
+    fn of(by_day: &[(String, Vec<u64>)]) -> Self {
+        let totals: Vec<u64> = by_day.iter().map(|(_, c)| c.iter().sum()).collect();
+        let depth = birdnet_behavioral::richness::common_depth(&totals);
+        let days = by_day
+            .iter()
+            .zip(&totals)
+            .map(|((d, c), &n)| {
+                (
+                    d.clone(),
+                    (
+                        n,
+                        depth.and_then(|m| birdnet_behavioral::richness::rarefied(c, m)),
+                    ),
+                )
+            })
+            .collect();
+        Self { depth, days }
+    }
+
+    /// The day's value on the chart: its richness at the depth, `NaN` (too few to say) for a
+    /// listened day below it, and `0` for a listened day with no detection at all, whose
+    /// richness is zero at any depth.
+    fn value(&self, date: &str) -> f64 {
+        match self.days.get(date) {
+            Some((_, Some(v))) => *v,
+            Some((_, None)) => f64::NAN,
+            None => 0.0,
+        }
+    }
+}
+
 #[cfg(feature = "analytics")]
 // Daily counts and richness are tens to thousands: an `f64` holds them exactly.
 #[allow(clippy::cast_precision_loss)]
@@ -428,6 +482,7 @@ fn render_diversity_table(
     rows: &[birdnet_timeseries::types::results::DiversityRow],
     today: Option<&str>,
     listened_for: &dyn Fn(&[String]) -> Option<Vec<bool>>,
+    rare: &Rarefied,
 ) -> String {
     if rows.is_empty() {
         return r#"<p class="tsd-muted">No diversity data yet.</p>"#.to_string();
@@ -437,9 +492,20 @@ fn render_diversity_table(
     // (RES-14), so a day with no row is unknown: it is filled only to keep its place on
     // the axis and is marked not listened below, never drawn as a zero.
     let last = today.unwrap_or_else(|| rows.last().map_or("", |r| r.date.as_str()));
+    // The chart draws the richness at the common depth; with no depth (no detections at all)
+    // it falls back to the raw count and says so below.
     let dated: Vec<(String, f64)> = rows
         .iter()
-        .map(|r| (r.date.clone(), r.species_richness as f64))
+        .map(|r| {
+            (
+                r.date.clone(),
+                if rare.depth.is_some() {
+                    rare.value(&r.date)
+                } else {
+                    r.species_richness as f64
+                },
+            )
+        })
         .collect();
     let filled = zero_fill(&dated, last);
     let day_keys: Vec<String> = filled.iter().map(|d| d.0.clone()).collect();
@@ -472,7 +538,11 @@ fn render_diversity_table(
         &pts,
         &super::viz::TrendOpts {
             id: "ts-richness-trend",
-            unit: "species",
+            unit: if rare.depth.is_some() {
+                "species at a common depth"
+            } else {
+                "species"
+            },
             smooth_name: "",
             bars: false,
             prior: &prior,
@@ -480,20 +550,37 @@ fn render_diversity_table(
             expected: None,
         },
     );
+    let _ = write!(
+        html,
+        r#"<p class="bnb-meta ck-method">{}</p>"#,
+        rare.depth.map_or_else(
+            || "Kinds of birds heard each day, as counted: this station has no detections in the period to read them at a common depth.".to_owned(),
+            |m| format!(
+                "Kinds of birds each day at a common depth of {m} detections: the number of species expected among {m} of the day's detections drawn at random (rarefaction, Hurlbert 1971), so a day is not richer for having been heard more. {m} is the lower quartile of the period's days. A day with fewer than {m} detections is too few to say and is left out of the line; a day the station did not listen to is hatched. Detections are not birds: the measure equalises how much was heard, not how many were there."
+            ),
+        )
+    );
     html.push_str(TABLE_OPEN);
     html.push_str(
-        r"<table><thead><tr><th>Date</th><th>Kinds of birds</th><th>Diversity (Shannon H′)</th><th>Balance (0–1)</th></tr></thead><tbody>",
+        r"<table><thead><tr><th>Date</th><th>Detections</th><th>Kinds of birds</th><th>At a common depth</th><th>Diversity (Shannon H′)</th><th>Balance (0–1)</th></tr></thead><tbody>",
     );
     for row in shown {
         let h = shannon_cell(row.shannon_h);
         let ev = row
             .pielou_evenness
             .map_or_else(|| "—".to_string(), |v| format!("{v:.2}"));
+        let (detections, at_depth) = match rare.days.get(&row.date) {
+            Some((n, Some(v))) => (n.to_string(), format!("{v:.1}")),
+            Some((n, None)) => (n.to_string(), "too few to say".to_owned()),
+            None => ("0".to_owned(), "0".to_owned()),
+        };
         let _ = write!(
             html,
-            r"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+            r"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
             escape_html(&row.date),
+            detections,
             row.species_richness,
+            at_depth,
             h,
             ev
         );
@@ -689,7 +776,12 @@ mod tests {
             diversity("2026-10-08", 7),
         ];
         let all_listened = |dates: &[String]| Some(vec![true; dates.len()]);
-        let html = super::render_diversity_table(&rows, Some("2026-10-08"), &all_listened);
+        let html = super::render_diversity_table(
+            &rows,
+            Some("2026-10-08"),
+            &all_listened,
+            &super::Rarefied::default(),
+        );
         assert!(html.contains("The station was not listening"), "{html}");
         assert!(html.contains("&quot;Wed 7 Oct&quot;,[null]"), "{html}");
 
@@ -701,14 +793,64 @@ mod tests {
             diversity("2026-10-07", 0),
             diversity("2026-10-08", 7),
         ];
-        let html = super::render_diversity_table(&rows, Some("2026-10-08"), &all_listened);
+        let html = super::render_diversity_table(
+            &rows,
+            Some("2026-10-08"),
+            &all_listened,
+            &super::Rarefied::default(),
+        );
         assert!(!html.contains("The station was not listening"), "{html}");
         assert!(html.contains("&quot;Wed 7 Oct&quot;,[0.0]"), "{html}");
 
         // And with no ledger at all the query returns every day, so nothing
         // is marked.
-        let html = super::render_diversity_table(&rows, Some("2026-10-08"), &|_| None);
+        let html = super::render_diversity_table(
+            &rows,
+            Some("2026-10-08"),
+            &|_| None,
+            &super::Rarefied::default(),
+        );
         assert!(!html.contains("The station was not listening"), "{html}");
+    }
+
+    /// CHT-07: a day heard five times as much from the same pool of birds names more species
+    /// as counted, and the same number, within a tolerance, at the common depth the chart draws.
+    /// A day below the depth is too few to say: no point, and the table says so.
+    #[test]
+    fn richness_is_drawn_at_a_common_depth_not_at_how_much_was_heard() {
+        let busy: Vec<u64> = vec![120, 80, 60, 40, 30, 20, 15, 10, 8, 5, 4, 3];
+        let quiet: Vec<u64> = busy.iter().map(|c| c / 5).filter(|&c| c > 0).collect();
+        let by_day = vec![
+            ("2026-10-05".to_owned(), busy.clone()),
+            ("2026-10-06".to_owned(), quiet),
+            ("2026-10-07".to_owned(), busy),
+            ("2026-10-08".to_owned(), vec![3, 2]),
+        ];
+        let rare = super::Rarefied::of(&by_day);
+        let m = rare.depth.expect("a depth");
+        assert!(m <= 77, "the quiet day can be read: depth {m}");
+        let (a, b) = (rare.value("2026-10-05"), rare.value("2026-10-06"));
+        assert!((a - b).abs() < 0.6, "busy {a} quiet {b} at depth {m}");
+        assert!(rare.value("2026-10-08").is_nan(), "5 detections is too few");
+        let rows = [
+            diversity("2026-10-05", 12),
+            diversity("2026-10-06", 10),
+            diversity("2026-10-07", 12),
+            diversity("2026-10-08", 2),
+        ];
+        let all_listened = |dates: &[String]| Some(vec![true; dates.len()]);
+        let html = super::render_diversity_table(&rows, Some("2026-10-08"), &all_listened, &rare);
+        assert!(html.contains("too few to say"), "{html}");
+        assert!(html.contains("Too few detections to say"), "{html}");
+        assert!(
+            html.contains(&format!("common depth of {m} detections")),
+            "{html}"
+        );
+        assert!(html.contains("Hurlbert 1971"), "{html}");
+        assert!(
+            !html.contains("&quot;Thu 8 Oct&quot;,[2.0]"),
+            "the raw count is not drawn: {html}"
+        );
     }
 
     fn anomaly(
