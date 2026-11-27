@@ -47,8 +47,8 @@ pub use clip_evidence::{
     for_each_clip_record, record_clip_digest, record_quarantine_clip_digest, verify as verify_clip,
 };
 pub use correlation::{
-    COOCCURRENCE_METHOD, CooccurrenceAnalysis, CooccurrenceQuery, companion_species,
-    cooccurrence_analysis, top_cooccurrence_pairs,
+    COOCCURRENCE_METHOD, CoStrata, CooccurrenceAnalysis, CooccurrenceQuery, ListenedFrom,
+    companion_species, cooccurrence_analysis, cooccurrence_strata, top_cooccurrence_pairs,
 };
 pub use detection_reviews::{
     Detached, DetectionReview, ReviewEvent, ReviewStatus, Reviewer, UnreviewedDetection,
@@ -111,7 +111,7 @@ pub use species::{
     delete_species_interval, delete_species_threshold, get_species_interval_map,
     get_species_intervals, get_species_threshold_map, get_species_thresholds, prune_species_clips,
     recent_by_species, search_species, set_species_interval, set_species_threshold,
-    species_clip_files, species_count, species_daily_counts, species_disk_usage,
-    species_first_detection, species_first_seen, species_hourly_activity,
+    species_clip_files, species_count, species_counts_by_day, species_daily_counts,
+    species_disk_usage, species_first_detection, species_first_seen, species_hourly_activity,
     species_hourly_activity_batch, species_sparklines, species_summary, top_species,
 };

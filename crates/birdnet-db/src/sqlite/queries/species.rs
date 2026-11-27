@@ -176,6 +176,40 @@ pub fn species_summary(
     }
 }
 
+/// Each day's detections by species over the last `days` calendar days (today included).
+///
+/// Oldest first: `(date, counts)` with one count per species heard that day, from
+/// `detections_analytic` (a detection a reviewer rejected is not counted). A day with no
+/// detection has no row: whether it was listened to is the effort ledger's to say.
+///
+/// What rarefied richness is computed from (CHT-07, `birdnet_behavioral::richness`).
+///
+/// # Errors
+///
+/// Returns `DbError` on query failure.
+pub fn species_counts_by_day(
+    conn: &Connection,
+    days: u32,
+) -> Result<Vec<(String, Vec<u64>)>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT Date, COUNT(*) FROM detections_analytic
+          WHERE Date >= DATE('now', 'localtime', '-' || (?1 - 1) || ' days')
+          GROUP BY Date, Com_Name
+          ORDER BY Date, Com_Name",
+    )?;
+    let mut out: Vec<(String, Vec<u64>)> = Vec::new();
+    let mut rows = stmt.query(params![days])?;
+    while let Some(row) = rows.next()? {
+        let date: String = row.get(0)?;
+        let n = u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0);
+        match out.last_mut() {
+            Some((d, counts)) if *d == date => counts.push(n),
+            _ => out.push((date, vec![n])),
+        }
+    }
+    Ok(out)
+}
+
 /// Daily detection counts for one species over the last `days` calendar days,
 /// today (station local time) included, oldest first — one row per day, with
 /// a zero for each day the species was not heard.
@@ -875,6 +909,27 @@ pub fn delete_species_interval(conn: &Connection, sci_name: &str) -> Result<(), 
 
 #[cfg(test)]
 mod tests {
+    /// CHT-07: a day's detections by species, the days that had any, oldest first.
+    #[test]
+    fn species_counts_by_day_groups_a_day_by_species() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::migration::migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) VALUES
+               (DATE('now','localtime','-2 days'),'05:00:00','a','Alpha',0.9),
+               (DATE('now','localtime','-2 days'),'05:01:00','a','Alpha',0.9),
+               (DATE('now','localtime','-2 days'),'05:02:00','b','Beta',0.9),
+               (DATE('now','localtime','-1 days'),'05:00:00','b','Beta',0.9),
+               (DATE('now','localtime','-40 days'),'05:00:00','b','Beta',0.9);",
+        )
+        .unwrap();
+        let d = super::species_counts_by_day(&conn, 30).unwrap();
+        assert_eq!(d.len(), 2, "{d:?}");
+        assert_eq!(d[0].1, [2, 1]);
+        assert_eq!(d[1].1, [1]);
+        assert!(d[0].0 < d[1].0);
+    }
+
     /// A per-species interval round-trips, upserts, deletes, and the column
     /// refuses a non-positive value (0 would read as "no interval" upstream and
     /// as a stored row here; it must not exist).

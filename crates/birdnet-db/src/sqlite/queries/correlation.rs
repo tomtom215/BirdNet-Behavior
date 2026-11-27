@@ -449,6 +449,164 @@ pub fn top_cooccurrence_pairs(
     Ok(cooccurrence_analysis(conn, &CooccurrenceQuery::new(days, limit, min_shared))?.pairs)
 }
 
+/// Where the listened blocks of [`CoStrata`] came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum ListenedFrom {
+    /// The hourly effort ledger: an hour holds as many blocks as it has five minutes of
+    /// analysed audio (at most twelve), and never fewer than the blocks a detection proves.
+    Ledger,
+    /// No ledger in the window: every hour with any detection is taken as listened in full.
+    /// A station with no ledger cannot say which quiet hours it listened to.
+    DetectionHours,
+}
+
+/// The co-occurrence counts by hour of the day, for a chance level that keeps each bird's
+/// daily rhythm (CHT-08).
+///
+/// A block is five minutes of one day. `listened[h]` is how many blocks of clock hour `h`
+/// the station listened to in the window; `blocks[i][h]` how many of them held species `i`;
+/// `shared[i][j][h]` how many held both `i` and `j`.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct CoStrata {
+    /// Species, most blocks first (ties by name).
+    pub names: Vec<String>,
+    /// Listened blocks per clock hour.
+    pub listened: Vec<u64>,
+    /// `blocks[i][h]`.
+    pub blocks: Vec<Vec<u64>>,
+    /// `shared[i][j][h]`, symmetric, zero on the diagonal.
+    pub shared: Vec<Vec<Vec<u64>>>,
+    /// Where `listened` came from.
+    pub listened_from: Option<ListenedFrom>,
+}
+
+impl CoStrata {
+    /// Total blocks species `i` was heard in.
+    #[must_use]
+    pub fn total(&self, i: usize) -> u64 {
+        self.blocks.get(i).map_or(0, |r| r.iter().sum())
+    }
+
+    /// Total blocks `i` and `j` shared.
+    #[must_use]
+    pub fn total_shared(&self, i: usize, j: usize) -> u64 {
+        self.shared
+            .get(i)
+            .and_then(|r| r.get(j))
+            .map_or(0, |r| r.iter().sum())
+    }
+}
+
+/// The co-occurrence counts of the `max_species` species heard in most five-minute blocks over
+/// the last `days` days, by clock hour, with the blocks the station listened to in each hour.
+///
+/// The species kept are the busiest by blocks, not the most connected: choosing by
+/// connectedness would pick the pairs to test by their result.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on `SQLite` failure.
+pub fn cooccurrence_strata(
+    conn: &Connection,
+    days: u32,
+    max_species: usize,
+) -> Result<CoStrata, DbError> {
+    use std::collections::{BTreeMap, HashMap, HashSet};
+
+    // (day, hour) → slots with any detection; species → set of block keys.
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT Date,
+                CAST(SUBSTR(Time, 1, 2) AS INTEGER) AS h,
+                CAST(SUBSTR(Time, 4, 2) AS INTEGER) / 5 AS s,
+                Com_Name
+         FROM detections_analytic
+         WHERE Date >= DATE('now', 'localtime', '-' || (?1 - 1) || ' days')",
+    )?;
+    let mut rows = stmt.query(params![days])?;
+    let mut heard_slots: HashMap<(String, u8), HashSet<u8>> = HashMap::new();
+    let mut of_species: HashMap<String, HashSet<(String, u8, u8)>> = HashMap::new();
+    while let Some(row) = rows.next()? {
+        let date: String = row.get(0)?;
+        let h: i64 = row.get(1)?;
+        let s: i64 = row.get(2)?;
+        let name: String = row.get(3)?;
+        let (Ok(h), Ok(s)) = (u8::try_from(h), u8::try_from(s)) else {
+            continue;
+        };
+        if h > 23 || s > 11 {
+            continue;
+        }
+        heard_slots.entry((date.clone(), h)).or_default().insert(s);
+        of_species.entry(name).or_default().insert((date, h, s));
+    }
+
+    // The ledger: the best-covered source of each (day, hour).
+    let mut stmt = conn.prepare(
+        "SELECT date, hour, MAX(seconds_analysed) FROM recording_effort_hourly
+          WHERE date >= DATE('now', 'localtime', '-' || (?1 - 1) || ' days')
+          GROUP BY date, hour",
+    )?;
+    let ledger: BTreeMap<(String, u8), f64> = stmt
+        .query_map(params![days], |r| {
+            Ok((
+                (r.get::<_, String>(0)?, r.get::<_, u8>(1)?),
+                r.get::<_, f64>(2)?,
+            ))
+        })?
+        .collect::<Result<_, _>>()?;
+
+    let mut listened = vec![0_u64; 24];
+    let listened_from = if ledger.is_empty() {
+        for (_, h) in heard_slots.keys() {
+            listened[usize::from(*h)] += 12;
+        }
+        (!heard_slots.is_empty()).then_some(ListenedFrom::DetectionHours)
+    } else {
+        let mut hours: HashSet<(String, u8)> = ledger.keys().cloned().collect();
+        hours.extend(heard_slots.keys().cloned());
+        for key in hours {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let from_ledger = ledger
+                .get(&key)
+                .map_or(0, |s| (s.max(0.0) / 300.0).ceil().min(12.0) as u64);
+            let proven = heard_slots.get(&key).map_or(0, |s| s.len() as u64);
+            listened[usize::from(key.1)] += from_ledger.max(proven);
+        }
+        Some(ListenedFrom::Ledger)
+    };
+
+    let mut ranked: Vec<(String, usize)> = of_species
+        .iter()
+        .map(|(n, b)| (n.clone(), b.len()))
+        .collect();
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    ranked.truncate(max_species);
+    let names: Vec<String> = ranked.into_iter().map(|(n, _)| n).collect();
+    let n = names.len();
+    let mut blocks = vec![vec![0_u64; 24]; n];
+    let mut shared = vec![vec![vec![0_u64; 24]; n]; n];
+    for (i, name) in names.iter().enumerate() {
+        let mine = &of_species[name];
+        for (_, h, _) in mine {
+            blocks[i][usize::from(*h)] += 1;
+        }
+        for j in i + 1..n {
+            for key in mine.intersection(&of_species[&names[j]]) {
+                let h = usize::from(key.1);
+                shared[i][j][h] += 1;
+                shared[j][i][h] += 1;
+            }
+        }
+    }
+    Ok(CoStrata {
+        names,
+        listened,
+        blocks,
+        shared,
+        listened_from,
+    })
+}
+
 /// The `limit` species heard on the same days as `trigger_species` over the last `days` days,
 /// strongest [`overlap`](FollowOn::overlap) first (then most shared days, then surest, then by
 /// name).
@@ -579,6 +737,60 @@ mod tests {
             !names.contains(&("Blackbird", "Tawny Owl")),
             "dawn and dusk residents are never together: {names:?}"
         );
+    }
+
+    /// CHT-08: the strata hold each hour's listened blocks (from the ledger, never fewer than a
+    /// detection proves), each species' blocks and each pair's shared blocks, by hour.
+    #[test]
+    fn the_strata_count_by_hour_against_what_was_listened() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::migration::migrate(&conn).unwrap();
+        let mut rows = Vec::new();
+        let mut effort = Vec::new();
+        for back in 1..=4 {
+            let d = format!("DATE('now', 'localtime', '-{back} days')");
+            rows.push(format!("({d},'05:01:00','A a','Alpha',0.9)"));
+            rows.push(format!("({d},'05:03:00','B b','Beta',0.9)"));
+            rows.push(format!("({d},'05:31:00','B b','Beta',0.9)"));
+            // Hour 5 fully listened; hour 6 half an hour; hour 20 not in the ledger at all.
+            effort.push(format!("({d},5,'mic',3600,3600)"));
+            effort.push(format!("({d},6,'mic',1800,3600)"));
+            effort.push(format!("({d},6,'usb',900,3600)"));
+        }
+        let d = "DATE('now', 'localtime', '-1 days')";
+        rows.push(format!("({d},'20:10:00','A a','Alpha',0.9)"));
+        conn.execute_batch(&format!(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence) VALUES {};
+             INSERT INTO recording_effort_hourly (date, hour, source, seconds_analysed, seconds_up) VALUES {};",
+            rows.join(","),
+            effort.join(",")
+        ))
+        .unwrap();
+        let s = cooccurrence_strata(&conn, 30, 10).unwrap();
+        assert_eq!(s.names, ["Beta", "Alpha"], "most blocks first");
+        assert_eq!(s.listened_from, Some(ListenedFrom::Ledger));
+        assert_eq!(s.listened[5], 48, "12 blocks on each of 4 days");
+        assert_eq!(
+            s.listened[6], 24,
+            "the best source's half hour: 6 blocks a day"
+        );
+        assert_eq!(
+            s.listened[20], 1,
+            "an hour the ledger missed holds the block a detection proves"
+        );
+        assert_eq!(s.blocks[0][5], 8);
+        assert_eq!(s.blocks[1][5], 4);
+        assert_eq!(s.shared[0][1][5], 4, "05:01 and 05:03 are one block");
+        assert_eq!(s.shared[1][0][5], 4);
+        assert_eq!(s.total_shared(0, 1), 4);
+        assert_eq!(s.total(1), 5);
+
+        // Counterpart: with no ledger, an hour with a detection is taken as listened in full.
+        conn.execute_batch("DELETE FROM recording_effort_hourly")
+            .unwrap();
+        let s = cooccurrence_strata(&conn, 30, 10).unwrap();
+        assert_eq!(s.listened_from, Some(ListenedFrom::DetectionHours));
+        assert_eq!((s.listened[5], s.listened[6], s.listened[20]), (48, 0, 12));
     }
 
     fn setup() -> Connection {
