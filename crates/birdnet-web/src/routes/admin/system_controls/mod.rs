@@ -4,10 +4,12 @@
 //! |-----------|-----------------------------------------------------|
 //! | `data`    | Clear detections + extracted recordings              |
 //! | `backup`  | Full tar.gz backup download + restore upload         |
+//! | `backup_manifest` | A full backup's configuration, clip manifest and checksums |
 //! | `service` | Service restart, status, systemd integration         |
 //! | `update`  | GitHub Releases update check                        |
 
 mod backup;
+mod backup_manifest;
 mod data;
 pub(crate) mod service;
 mod update;

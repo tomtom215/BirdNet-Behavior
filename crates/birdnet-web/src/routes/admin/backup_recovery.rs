@@ -422,7 +422,7 @@ fn render_body(f: &DataFacts) -> String {
     let backup_restore = r##"<div class="bkr-split">
   <div class="bnb-card pad">
     <div class="section-header"><div><div class="bnb-eyebrow">Back up</div><h2 class="sh-h">Take a copy now</h2></div></div>
-    <p class="bnb-meta">A <b>snapshot</b> copies the database only — small and quick, kept here on the station. A <b>full backup</b> bundles the database, recordings and config into one archive you can download and keep somewhere else.</p>
+    <p class="bnb-meta">A <b>snapshot</b> copies the database only — small and quick, kept here on the station. A <b>full backup</b> bundles the database, recordings, the configuration file and a checksum list of the clips into one archive you can download and keep somewhere else. It holds the station's passwords and keys: keep it like a password file. For a smaller archive, take <a href="/admin/system/backup/full?audio=kept" download="birdnet-backup.tar.gz">only the locked and reviewed clips</a> or <a href="/admin/system/backup/full?audio=none" download="birdnet-backup.tar.gz">no audio</a>; the clip list still names every clip.</p>
     <div class="bnb-row tight bkr-mt">
       <button class="bnb-btn"
               hx-post="/admin/system/backup"

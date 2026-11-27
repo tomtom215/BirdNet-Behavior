@@ -9,10 +9,10 @@ The commands below are for a bare-metal install. A Docker station keeps its data
 | Backup | How it is made | Holds | Where it lives |
 |---|---|---|---|
 | **Snapshot** | Automatically, every 7 days by default (`BACKUP_SCHEDULE`); 14 kept | The database only | `backups/` beside `birds.db`, **on the same card**: it dies with it |
-| **Full backup** | You press **Download full backup** on **Settings → Data** (`/station/data`) | The database (a consistent snapshot), the `recordings/` folder with every clip, and a `birdnet.conf` only if one sits beside the database | Wherever you saved the download. It is not encrypted |
-| **Offsite copy** | Automatically with each snapshot, once `OFFSITE_BACKUP` is set ([Offsite backups](./backups.md#offsite-backups)) | The database only, encrypted with `OFFSITE_PASSPHRASE` | Your bucket or SSH server |
+| **Full backup** | You press **Download full backup** on **Settings → Data** (`/station/data`) | The database (a consistent snapshot), the `recordings/` folder with every clip (or only the kept ones, or none, if you chose), the configuration file the station reads, and a manifest with every clip's checksum | Wherever you saved the download. It is not encrypted |
+| **Offsite copy** | Automatically with each snapshot, once `OFFSITE_BACKUP` is set ([Offsite backups](./backups.md#offsite-backups)) | The database only (which records each clip's checksum, not the audio), encrypted with `OFFSITE_PASSPHRASE` | Your bucket or SSH server |
 
-The configuration file is in **none** of them on a standard install. The full backup takes `birdnet.conf` from the folder that holds the database, but the bare-metal installer writes the configuration to `/etc/birdnet/birdnet.conf` and the database to `~/BirdNet-Behavior/birds.db` of the service's account, and the Docker image does not keep one beside the database either. Offsite copies carry no recordings.
+A full backup takes the configuration file the station was started with (`--config`; `/etc/birdnet/birdnet.conf` on a bare-metal install), or, when that names no file, a `birdnet.conf` beside the database. A full backup made before this release took only the second, so on a standard install it holds no configuration. Offsite copies carry neither recordings nor the configuration.
 
 ### What comes back with the database
 
@@ -74,7 +74,7 @@ Before the card fails, keep these somewhere that is not the station:
 ## What cannot be recovered
 
 - **The station's own snapshots.** They were on the card.
-- **The configuration file.** No backup the station makes holds it on a standard install, and there is no command that restores one. A full backup that does contain a `birdnet.conf` is unpacked beside the database, where the station does not read its configuration from.
+- **The configuration file, without a full backup that holds it.** Restoring a full backup puts its `birdnet.conf` back where the station reads its configuration, keeping the file there as `birdnet.conf.before-restore`; on a fresh card, check that file for anything the new install set that you want to keep (a new `CADDY_PWD`, say). An offsite copy does not hold it, and an older full backup may not.
 - **Recordings, without a full backup.** Offsite copies are the database only.
 - **An offsite copy, without its passphrase.** It is not stored anywhere but the configuration file, and nothing can derive it.
 - **Restoring an offsite copy from the browser.** There is no screen for it; it is the command line in step 4 or nothing.
