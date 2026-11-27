@@ -196,7 +196,9 @@ pub fn start_disk_manager(
                     cli.retain_reviewed_audio,
                     holds_clips,
                 )),
-                ineffective_flag: Some(state.metrics().purge_ineffective_flag()),
+                // Its own flag (N25-10): the recordings manager below holds
+                // the other, and one shared flag said whichever wrote last.
+                ineffective_flag: Some(state.metrics().stream_purge_ineffective_flag()),
                 stream_retention_secs: retention,
                 stream_max_bytes: max_mb.saturating_mul(1024 * 1024),
                 // Raw segments carry no species; oldest-first is right here.
