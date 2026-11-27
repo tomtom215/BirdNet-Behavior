@@ -277,3 +277,5 @@ fail-closed	src/daemon/processor.rs	quarantine_already_recorded	match-err	match 
 task-panic	src/main.rs	main	unwrap_or	tokio::task::spawn_blocking(move || ingest::run(&cli, config.as_ref())) .await .unwrap_or(1)
 decoration	crates/birdnet-web/src/routes/pages/history.rs	history_calendar_partial	ok	super::listening::StationLedger::read(conn).ok()
 handled	crates/birdnet-web/src/routes/pages/migration.rs	compute_ridgeline	ok	state .with_read_db(|conn| { let today = crate::routes::pages::today_date_string(); ridgeline_html(conn, year,
+fail-closed	crates/birdnet-web/src/live_audio.rs	policy	match-err	match birdnet_db::settings::get(conn, LIVE_AUDIO_SETTING) { Err .. }
+write-outcome	crates/birdnet-web/src/live_audio.rs	seed_at_start	match-err	match state.with_db(seed) { Err .. }

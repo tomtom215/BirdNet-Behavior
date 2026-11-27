@@ -251,6 +251,28 @@ CADDY_PWD=a-long-random-password
 
 After editing the config, restart the service (`sudo systemctl restart birdnet-behavior`). This is **still plain HTTP** — only rely on it behind TLS, or on a trusted LAN. **Clearing `CADDY_PWD` leaves `/admin` open** to anyone who can reach the dashboard; if the server binds to a non-loopback address (e.g. the default `0.0.0.0`) with no `CADDY_PWD` set, it logs a prominent warning at startup. The live-detection WebSocket and `/api/v2/health` are exempt from this auth (they sit outside the gated router, and a browser cannot attach a session to a `WebSocket` handshake anyway), and are read-only in any case — restrict those at the network layer if you need to.
 
+### Lost the admin password {#lost-password}
+
+The installer stores the first password as `CADDY_PWD` in `/etc/birdnet/birdnet.conf`, and `sudo grep '^CADDY_PWD' /etc/birdnet/birdnet.conf` prints it. That is the password only until someone changes it on **Settings → Access**: after that the file still holds the old value and the station ignores it, so the command prints a password that is refused.
+
+To give the station a new password in either case, on the station:
+
+```bash
+curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash -s -- reset-password
+```
+
+(or `sudo bash install.sh reset-password` with a copy you saved). It writes a new random `CADDY_PWD`, leaves every other line of the file as it was, restarts the station and prints the new password for the user `admin`. Every browser is signed out. No detection, setting or recording is touched. It works because the station applies a `CADDY_PWD` that differs from the one it last applied, replacing whatever password the account had; typing a new value into the file yourself and restarting does the same.
+
+Under Docker, set `CADDY_PWD` in the `.env` beside the compose file to a new value and run `docker compose up -d`.
+
+### Who can hear the live microphone {#live-audio}
+
+The live feed (`/stream`, and the HLS stream the Live page uses on phones) is the one way to hear the microphone unfiltered: stored clips have passed the human-sound filter, the live feed has not. A **new** station therefore plays it only to signed-in users; a visitor sees **Sign in to listen** on **Recordings → Live** instead of the Listen button, and `/stream` answers `401` with a sentence saying why.
+
+A station that **already held detections** when it first started on this version keeps the open feed it had, so a household that listened yesterday still can. The choice is **Settings → Capture** (`/admin/audio`), *Who can hear the live audio*: **Signed-in users only** or **Anyone who can reach the station**. It applies at once. It is stored in the database as `live_audio` (`signed-in` or `anyone`); a missing or unreadable value is read as signed-in.
+
+A station with no admin password has nobody to sign in, so its live audio is open on the same terms as its admin panel (to names that no outside website can point at it). In private mode the private-mode rules decide, and its `live_audio` carve-out still opens the feed. The live spectrogram is not covered: it is a picture the Today page draws for visitors. A media player that cannot send the station's cookie can be handed the HLS playlist URL a signed-in browser was given (`/api/v2/streams/hls/t/<token>/playlist.m3u8`); the token is 128 random bits and lasts while the stream is listened to.
+
 ### Admins and viewers {#roles}
 
 Each account on **Settings → Access** is an **admin** or a **viewer**.

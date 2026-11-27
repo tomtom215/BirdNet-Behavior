@@ -37,6 +37,7 @@ Every key the settings pages and `PUT /api/v2/settings` write, where it is chang
 | `freq_shift_hz` | Settings → Capture → Audio Capture → Frequency Shift (Hz, 0 = disabled) (`freq_shift_hz`) | Applies after restart |
 | `clip_target_lufs` | Settings → Capture → Audio Capture → Even out clip volume (`clip_target_lufs`) | Applies after restart |
 | `livestream_source` | Recordings → Live (the source picker) | Applies immediately |
+| `live_audio` | Settings → Capture → Audio sources → Who can hear the live audio | Applies immediately |
 | `analytics_exclude_imports` | Settings → Data → Bring your history with you | Applies immediately |
 | `today_layout` | Settings → General → Today Page Layout | Applies immediately |
 | `latitude` | Settings → Capture → Location & Recording Schedule → Latitude (`latitude`) | Applies after restart |

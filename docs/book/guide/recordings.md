@@ -35,6 +35,8 @@ only while audio is arriving and shows a flat baseline otherwise, never a fake
 waveform. Today's live-signal card links straight here, and you can preselect a
 microphone with `/recordings?view=live&source=<id>`.
 
+**Who can listen.** The live audio has not passed the human-sound filter that stored clips pass, so a new station plays it only to signed-in users, and a visitor sees **Sign in to listen** where the Listen button would be. A station that already had detections when it was updated keeps playing it to everyone. The spectrogram is shown to everyone either way. The choice is under **Settings → Capture**, *Who can hear the live audio* ([details](../admin/remote-access.md#live-audio)).
+
 > The pre-spine `/listen`, `/livestream` and `/live` addresses still work —
 > they permanently redirect to `/recordings?view=live`.
 

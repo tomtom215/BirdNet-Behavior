@@ -68,6 +68,8 @@ One command. It asks two or three plain-English questions, auto-detects your USB
 bash <(curl -fsSL https://raw.githubusercontent.com/tomtom215/BirdNet-Behavior/main/quickstart.sh)
 ```
 
+The script installs one published release: the compose files come from that release's tag and the image is pinned to it (`BIRDNET_IMAGE_TAG` in `.env`). That is the newest release unless you name one with `BIRDNET_VERSION=0.19.0 bash <(curl …)`. If GitHub's API cannot be reached it says so and falls back to the development branch's compose files and the `latest` image. The script itself is still read from the development branch.
+
 <details>
 <summary>What the quick-start script does</summary>
 
@@ -127,7 +129,12 @@ sudo bash install.sh update      # swap in the latest binary, restart (the defau
 sudo bash install.sh repair      # fix a broken install without re-downloading
 sudo bash install.sh reinstall   # re-download and reinstall from scratch
 sudo bash install.sh uninstall   # remove the software (see Uninstalling below)
+sudo bash install.sh reset-password  # a new admin password, printed; nothing else changes
 ```
+
+`reset-password` is for a lost admin password, including one changed in the browser since install ([Lost the admin password](../admin/remote-access.md#lost-password)).
+
+**On a machine that runs BirdNET-Pi** the installer stops before it downloads or changes anything: BirdNET-Pi makes `/etc/birdnet/birdnet.conf`, the file this installer writes, a link to its own `~/BirdNET-Pi/birdnet.conf`, and installing over it would change BirdNET-Pi's settings and put two recorders on one microphone. It prints what to do: `sudo systemctl disable --now birdnet_recording.service birdnet_analysis.service`, move the link aside (`sudo mv /etc/birdnet/birdnet.conf /etc/birdnet/birdnet.conf.birdnet-pi`), run the installer again, then import BirdNET-Pi's settings and history from **Settings → Data** ([Migrating from BirdNET-Pi](../guides/migration.md)), which only reads its files.
 
 **Update** stops the service, swaps in the new binary, and restarts it; your
 configuration and the SQLite/DuckDB databases are preserved, and schema

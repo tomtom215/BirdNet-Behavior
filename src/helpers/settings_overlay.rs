@@ -147,6 +147,14 @@ const SETTING_SPECS: &[(&str, Wiring, SettingsCategory)] = &[
         SettingsCategory::Audio,
     ),
     (
+        // `birdnet_web::live_audio::LIVE_AUDIO_SETTING`, written from
+        // `/admin/audio` and seeded once at start; read by the live-audio gate
+        // on every request to `/stream` and the HLS control routes (OOB-13).
+        "live_audio",
+        Wiring::OwnedBy("birdnet_web::live_audio (who may hear /stream and the HLS stream)"),
+        SettingsCategory::Audio,
+    ),
+    (
         // `birdnet_behavioral::queries::EXCLUDE_IMPORTS_SETTING`, written from
         // `/admin/migration` and read by both analytics engines to decide
         // whether detections imported from a BirdNET-Pi count as this
@@ -737,6 +745,9 @@ mod tests {
         // a list of real rows rather than typed as an id. Covered by
         // `audio_admin_keys_are_all_classified` below.
         "livestream_source",
+        // Written from `/admin/audio` as a choice of two, beside the sources
+        // whose sound it governs (OOB-13).
+        "live_audio",
         // Written from `/admin/migration`, a page with its own controls rather
         // than a settings form. Found by
         // `every_settings_key_written_anywhere_is_classified`, which is the
