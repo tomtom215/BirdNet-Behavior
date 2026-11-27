@@ -3020,6 +3020,193 @@ pub const MIGRATIONS: &[Migration] = &[
             SELECT RAISE(ABORT, 'Clip_Sha256 is permanent: it records the clip as it was written');
         END;",
     },
+    Migration {
+        version: 70,
+        description: "The station's identity, its deployments, each source's devices, the clock's state, and effort by UTC hour",
+        // RES-12, RES-13, RES-22, MSC-13, OOB-17. Five additive records; no
+        // existing row is changed and every source id stays what it was.
+        //
+        // `station_identity` holds one random RFC 4122 version 4 id, minted
+        // here once. An export or a run names the station by it; a copy of the
+        // database is the same station, a fresh database another.
+        //
+        // `deployments` is what an operator states about where and how a
+        // source listened: from when, at what coordinates and height, facing
+        // which way, with which microphone. Nothing is inferred into it. Its
+        // triggers keep it a record: a deployment of one source may not
+        // overlap another, what was stated is not rewritten, and an open
+        // deployment's end is set once. A mistake is corrected by closing it
+        // and stating the next.
+        //
+        // `audio_source_devices` says which device each source was, and when.
+        // `device_seq` numbers a source's distinct devices (kind and device
+        // string) in the order first seen, so removing and re-adding the same
+        // microphone keeps its number, and editing a camera's URL starts a new
+        // one rather than continuing the old camera's history under it. The
+        // triggers write it on every path that adds, edits, removes or
+        // re-adds a source. A source that existed before this migration gets
+        // one record, starting at its creation if the row was never edited
+        // and at an unknown time (NULL) if it was, because the device may have
+        // been changed in between; a removed source's record ends at its
+        // removal.
+        //
+        // `clock_observations` is the clock as the station saw it: its
+        // synchronisation state, which authority said so, the boot it was
+        // seen in, and any step against elapsed time. A row is written when
+        // the state or the boot changes or the clock steps; between rows the
+        // state is the last row's.
+        //
+        // `recording_effort_utc` is the effort ledger by UTC hour, so the
+        // repeated autumn hour is two rows rather than one, with the time each
+        // source was up split by the clock's state while it was. Rows before
+        // this migration are not inferred into it.
+        up_sql: "CREATE TABLE IF NOT EXISTS station_identity (
+            id             INTEGER PRIMARY KEY CHECK (id = 1),
+            station_uuid   TEXT    NOT NULL,
+            created_at_utc INTEGER NOT NULL
+        );
+        INSERT OR IGNORE INTO station_identity (id, station_uuid, created_at_utc)
+        VALUES (
+            1,
+            lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4'
+                || substr(lower(hex(randomblob(2))), 2) || '-'
+                || substr('89ab', 1 + (abs(random()) % 4), 1)
+                || substr(lower(hex(randomblob(2))), 2) || '-' || lower(hex(randomblob(6))),
+            CAST(strftime('%s', 'now') AS INTEGER)
+        );
+
+        CREATE TABLE IF NOT EXISTS deployments (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            station_uuid        TEXT    NOT NULL,
+            source_id           TEXT    NOT NULL,
+            start_utc           INTEGER NOT NULL,
+            end_utc             INTEGER CHECK (end_utc IS NULL OR end_utc > start_utc),
+            latitude            REAL CHECK (latitude IS NULL OR latitude BETWEEN -90 AND 90),
+            longitude           REAL CHECK (longitude IS NULL OR longitude BETWEEN -180 AND 180),
+            coord_uncertainty_m REAL CHECK (coord_uncertainty_m IS NULL OR coord_uncertainty_m >= 0),
+            elevation_m         REAL,
+            height_m            REAL CHECK (height_m IS NULL OR height_m >= 0),
+            orientation_deg     REAL CHECK (orientation_deg IS NULL
+                                            OR (orientation_deg >= 0 AND orientation_deg < 360)),
+            microphone          TEXT,
+            recorder            TEXT,
+            enclosure           TEXT,
+            habitat             TEXT,
+            notes               TEXT,
+            recorded_at_utc     INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_deployments_source ON deployments (source_id, start_utc);
+        CREATE TRIGGER deployments_do_not_overlap
+            BEFORE INSERT ON deployments
+            WHEN EXISTS (SELECT 1 FROM deployments d
+                          WHERE d.source_id = NEW.source_id
+                            AND d.start_utc < COALESCE(NEW.end_utc, 9223372036854775807)
+                            AND COALESCE(d.end_utc, 9223372036854775807) > NEW.start_utc)
+        BEGIN
+            SELECT RAISE(ABORT, 'deployments of one source may not overlap: close the open one first');
+        END;
+        CREATE TRIGGER deployments_are_not_rewritten
+            BEFORE UPDATE OF id, station_uuid, source_id, start_utc, latitude, longitude,
+                             coord_uncertainty_m, elevation_m, height_m, orientation_deg,
+                             microphone, recorder, enclosure, habitat, notes, recorded_at_utc
+            ON deployments
+        BEGIN
+            SELECT RAISE(ABORT, 'a deployment is a record: close it and state the next');
+        END;
+        CREATE TRIGGER deployments_end_once
+            BEFORE UPDATE OF end_utc ON deployments
+            WHEN OLD.end_utc IS NOT NULL
+        BEGIN
+            SELECT RAISE(ABORT, 'a closed deployment keeps its end');
+        END;
+        CREATE TRIGGER deployments_are_never_deleted
+            BEFORE DELETE ON deployments
+        BEGIN
+            SELECT RAISE(ABORT, 'a deployment is a record and is never deleted');
+        END;
+
+        CREATE TABLE IF NOT EXISTS audio_source_devices (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_id  TEXT    NOT NULL,
+            device_seq INTEGER NOT NULL CHECK (device_seq >= 1),
+            kind       TEXT    NOT NULL,
+            device_id  TEXT    NOT NULL,
+            from_utc   INTEGER,
+            to_utc     INTEGER,
+            CHECK (to_utc IS NULL OR from_utc IS NULL OR to_utc >= from_utc)
+        );
+        CREATE INDEX IF NOT EXISTS idx_audio_source_devices_source
+            ON audio_source_devices (source_id, from_utc);
+        INSERT INTO audio_source_devices (source_id, device_seq, kind, device_id, from_utc, to_utc)
+        SELECT id, 1, kind, device_id,
+               CASE WHEN created_at = updated_at
+                    THEN CAST(strftime('%s', created_at) AS INTEGER) END,
+               CAST(strftime('%s', disabled_at) AS INTEGER)
+          FROM audio_sources
+         WHERE NOT EXISTS (SELECT 1 FROM audio_source_devices);
+        CREATE TRIGGER audio_source_devices_on_insert
+            AFTER INSERT ON audio_sources
+            WHEN NEW.disabled_at IS NULL
+        BEGIN
+            INSERT INTO audio_source_devices (source_id, device_seq, kind, device_id, from_utc)
+            VALUES (
+                NEW.id,
+                COALESCE(
+                    (SELECT device_seq FROM audio_source_devices
+                      WHERE source_id = NEW.id AND kind = NEW.kind AND device_id = NEW.device_id
+                      ORDER BY id DESC LIMIT 1),
+                    (SELECT COALESCE(MAX(device_seq), 0) + 1 FROM audio_source_devices
+                      WHERE source_id = NEW.id)),
+                NEW.kind, NEW.device_id, CAST(strftime('%s', 'now') AS INTEGER));
+        END;
+        CREATE TRIGGER audio_source_devices_on_update
+            AFTER UPDATE OF kind, device_id, disabled_at ON audio_sources
+            WHEN OLD.kind IS NOT NEW.kind OR OLD.device_id IS NOT NEW.device_id
+              OR OLD.disabled_at IS NOT NEW.disabled_at
+        BEGIN
+            UPDATE audio_source_devices SET to_utc = CAST(strftime('%s', 'now') AS INTEGER)
+             WHERE source_id = NEW.id AND to_utc IS NULL;
+            INSERT INTO audio_source_devices (source_id, device_seq, kind, device_id, from_utc)
+            SELECT NEW.id,
+                   COALESCE(
+                       (SELECT device_seq FROM audio_source_devices
+                         WHERE source_id = NEW.id AND kind = NEW.kind AND device_id = NEW.device_id
+                         ORDER BY id DESC LIMIT 1),
+                       (SELECT COALESCE(MAX(device_seq), 0) + 1 FROM audio_source_devices
+                         WHERE source_id = NEW.id)),
+                   NEW.kind, NEW.device_id, CAST(strftime('%s', 'now') AS INTEGER)
+             WHERE NEW.disabled_at IS NULL;
+        END;
+        CREATE TRIGGER audio_source_devices_on_delete
+            AFTER DELETE ON audio_sources
+        BEGIN
+            UPDATE audio_source_devices SET to_utc = CAST(strftime('%s', 'now') AS INTEGER)
+             WHERE source_id = OLD.id AND to_utc IS NULL;
+        END;
+
+        CREATE TABLE IF NOT EXISTS clock_observations (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            at_utc      INTEGER NOT NULL,
+            state       TEXT    NOT NULL CHECK (state IN ('synced', 'unsynced', 'unknown', 'unset')),
+            authority   TEXT    NOT NULL,
+            reason      TEXT    NOT NULL DEFAULT 'changed'
+                                CHECK (reason IN ('first', 'changed', 'boot', 'step')),
+            boot_id     TEXT,
+            uptime_secs REAL,
+            step_secs   REAL
+        );
+        CREATE INDEX IF NOT EXISTS idx_clock_observations_at ON clock_observations (at_utc);
+
+        CREATE TABLE IF NOT EXISTS recording_effort_utc (
+            hour_start_utc            INTEGER NOT NULL CHECK (hour_start_utc % 3600 = 0),
+            source                    TEXT    NOT NULL,
+            seconds_analysed          REAL    NOT NULL DEFAULT 0,
+            seconds_up                REAL    NOT NULL DEFAULT 0,
+            seconds_up_clock_synced   REAL    NOT NULL DEFAULT 0,
+            seconds_up_clock_unsynced REAL    NOT NULL DEFAULT 0,
+            PRIMARY KEY (hour_start_utc, source)
+        );",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
