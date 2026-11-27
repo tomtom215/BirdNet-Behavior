@@ -388,6 +388,16 @@ async fn health(
             // A DuckDB mirror write that failed used to be a warn! line while
             // this body went on asserting "analytics": true (OP-7).
             "analytics_mirror_failures": state.metrics().analytics_mirror_failures(),
+            // What the system last said of its clock (RES-12, OOB-17), as the
+            // station-health poll read it: `unknown` when nothing could
+            // answer or the poll has not run, never assumed synchronised.
+            // Not a status-code fault: a station without network time still
+            // records, and its record says under which clock.
+            "clock": match state.metrics().clock_synced() {
+                None => "unknown",
+                Some(true) => "synced",
+                Some(false) => "unsynced",
+            },
             "mqtt": match state.metrics().mqtt_connected() {
                 None => "off",
                 Some(true) => "connected",

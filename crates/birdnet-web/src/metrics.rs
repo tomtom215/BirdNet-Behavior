@@ -230,6 +230,9 @@ pub struct MetricsRegistry {
     /// and `recording_effort_hourly` on its five-minute tick, so a write is
     /// not made for every segment.
     effort_pending: std::sync::Mutex<HashMap<EffortKey, f64>>,
+    /// The same audio, by the start of the UTC hour it began in and its
+    /// source (RES-13), drained into `recording_effort_utc` on the same tick.
+    effort_pending_utc: std::sync::Mutex<HashMap<(i64, String), f64>>,
     /// Segments the watcher announced that were gone before the pipeline
     /// read them, per source (PR-1 / S-3): recorded audio never analysed.
     segments_dropped: RwLock<HashMap<String, AtomicU64>>,
@@ -342,6 +345,7 @@ impl MetricsRegistry {
             files_analysed: RwLock::new(HashMap::new()),
             audio_analysed_ms: RwLock::new(HashMap::new()),
             effort_pending: std::sync::Mutex::new(HashMap::new()),
+            effort_pending_utc: std::sync::Mutex::new(HashMap::new()),
             segments_dropped: RwLock::new(HashMap::new()),
             segments_shed: RwLock::new(HashMap::new()),
             analysis_queue_depth: AtomicU64::new(u64::MAX),
@@ -472,6 +476,34 @@ impl MetricsRegistry {
         std::mem::take(
             &mut *self
                 .effort_pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        )
+    }
+
+    /// Hold `secs` of analysed audio for the UTC effort ledger, under the
+    /// start of the UTC hour it began in (`hour_start_utc`, a multiple of
+    /// 3600) and its `source`. A length that is not a finite, non-negative
+    /// number is not held.
+    pub fn add_effort_pending_utc(&self, hour_start_utc: i64, source: &str, secs: f64) {
+        if !(secs.is_finite() && secs >= 0.0) {
+            return;
+        }
+        let mut pending = self
+            .effort_pending_utc
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *pending
+            .entry((hour_start_utc, source.to_owned()))
+            .or_insert(0.0) += secs;
+    }
+
+    /// Take everything held for the UTC effort ledger; the recorder gives
+    /// back with [`Self::add_effort_pending_utc`] any it could not write.
+    pub fn take_effort_pending_utc(&self) -> HashMap<(i64, String), f64> {
+        std::mem::take(
+            &mut *self
+                .effort_pending_utc
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner),
         )
