@@ -187,7 +187,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // structured output like `--doctor-json`.
     tracing_subscriber::registry()
         .with(filter_layer)
-        .with(tracing_subscriber::fmt::layer().with_writer(std::io::stderr))
+        .with(
+            tracing_subscriber::fmt::layer()
+                .with_writer(std::io::stderr)
+                // Colour only on a terminal (MDL-28): under systemd the
+                // journal stored the escape codes. `NO_COLOR` still wins.
+                .with_ansi(
+                    std::io::IsTerminal::is_terminal(&std::io::stderr())
+                        && std::env::var_os("NO_COLOR").is_none(),
+                ),
+        )
         .with(log_capture::LogCapture::new(
             log_broadcaster.clone(),
             error_log,
@@ -226,11 +235,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    tracing::info!(
-        version = env!("CARGO_PKG_VERSION"),
-        config = %cli.config.display(),
-        "starting BirdNet-Behavior"
-    );
+    if announces_start(&dispatch_subcommand(&cli)) {
+        tracing::info!(
+            version = env!("CARGO_PKG_VERSION"),
+            config = %cli.config.display(),
+            "starting BirdNet-Behavior"
+        );
+    }
 
     // Load configuration (optional — may not exist on fresh installs).
     let config = match birdnet_core::config::Config::load_from(&cli.config) {
@@ -426,6 +437,13 @@ fn reload_filter_spec(cli: &Cli, startup_rust_log: Option<&str>) -> (String, Vec
     )
 }
 
+/// Whether this invocation says "starting BirdNet-Behavior" (MDL-28): only
+/// the station itself. The unit's pre-start `--doctor` runs the same binary,
+/// and every start logged the line twice.
+const fn announces_start(action: &Action) -> bool {
+    matches!(action, Action::RunServer)
+}
+
 #[cfg(test)]
 mod tests {
     //! Unit tests for the pure top-level dispatch.
@@ -445,6 +463,18 @@ mod tests {
         let mut full = vec!["birdnet-behavior"];
         full.extend_from_slice(args);
         Cli::parse_from(full)
+    }
+
+    /// MDL-28: the station announces its start; the doctor the unit runs
+    /// before it, and every other one-shot command, does not.
+    #[test]
+    fn only_the_station_says_it_is_starting() {
+        assert!(super::announces_start(&super::dispatch_subcommand(&cli(
+            &[]
+        ))));
+        assert!(!super::announces_start(&super::dispatch_subcommand(&cli(
+            &["--doctor"]
+        ))));
     }
 
     #[test]
