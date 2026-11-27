@@ -513,10 +513,22 @@ static CARD: crate::seal::Sealed =
 /// The card the "When active" tab leads with. The page holds no data: `static/terrain.js` reads
 /// `data-src`, fetches it, and draws the grid; the 3D view (and three.js with it) is loaded when,
 /// and only when, the reader asks for it.
-pub(super) fn content() -> String {
+/// The card, opening at the terrain range for the page's `days`: the shortest it draws that is
+/// not shorter than the choice, as `terrain.js` picks when the range changes (UIC-08).
+pub(super) fn content(days: u32) -> String {
+    let opens = RANGES
+        .iter()
+        .copied()
+        .find(|&r| r >= days)
+        .unwrap_or(RANGES[RANGES.len() - 1]);
     CARD.replace("{{version}}", env!("CARGO_PKG_VERSION"))
 }
 
+        .replacen(
+            r#"data-tr-days="30""#,
+            &format!(r#"data-tr-days="{opens}""#),
+            1,
+        )
 #[cfg(test)]
 mod tests {
     use super::*;

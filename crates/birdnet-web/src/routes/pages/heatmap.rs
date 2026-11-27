@@ -57,28 +57,46 @@ const RANGES: [(u32, &str); 5] = [
 /// landscape, so the page opens on a month.
 const DEFAULT_DAYS: u32 = 30;
 
-/// The range control. `role`/`aria-pressed` carry the selection (a CSS class alone said nothing
-/// to a screen reader); `type="button"` because the default is submit.
-fn range_control() -> String {
+/// The range a request names (`?days=`), when it is one the page offers; otherwise the default.
+/// A value that is not a number, or not one of [`RANGES`], opens the default rather than a range
+/// nobody chose (UIC-08).
+#[must_use]
+pub(crate) fn range_from_query(days: Option<&str>) -> u32 {
+    days.and_then(|d| d.trim().parse::<u32>().ok())
+        .filter(|d| RANGES.iter().any(|(r, _)| r == d))
+        .unwrap_or(DEFAULT_DAYS)
+}
+
+/// The range control: a `GET` form, so a reader without scripts submits it and gets the page at
+/// that range, and the address carries the range (a reload keeps it, a link shares it). The
+/// script upgrades it to redraw the figures in place and write the range into the address.
+/// `aria-pressed` carries the selection (a CSS class alone said nothing to a screen reader).
+fn range_control(chosen: u32) -> String {
     let mut out = String::from(
-        r#"<div class="seg" id="range-controls" role="group" aria-label="Time range for every chart on this page">"#,
+        r#"<form class="seg" id="range-controls" method="get" action="/patterns" role="group" aria-label="Time range for every chart on this page"><input type="hidden" name="tab" value="when">"#,
     );
     for (days, label) in RANGES {
-        let on = days == DEFAULT_DAYS;
+        let on = days == chosen;
         let _ = write!(
             out,
-            r#"<button type="button" class="btn{}" data-days="{days}" aria-pressed="{on}">{label}</button>"#,
+            r#"<button type="submit" class="btn{}" data-days="{days}" name="days" value="{days}" aria-pressed="{on}">{label}</button>"#,
             if on { " active" } else { "" }
         );
     }
-    out.push_str("</div>");
+    out.push_str("</form>");
     out
 }
 
-/// A figure whose body is an HTMX slot filled by `url` at the default range.
-fn slot_figure(f: &super::frame::Figure<'_>, id: &str, url: &str, loading: &str) -> String {
+/// A figure whose body is an HTMX slot filled by `url` at `days`.
+fn slot_figure(
+    f: &super::frame::Figure<'_>,
+    id: &str,
+    url: &str,
+    loading: &str,
+    days: u32,
+) -> String {
     let body = format!(
-        r#"<div id="{id}" hx-get="{url}?days={DEFAULT_DAYS}" hx-trigger="load" hx-swap="innerHTML">
+        r#"<div id="{id}" hx-get="{url}?days={days}" hx-trigger="load" hx-swap="innerHTML">
     <p class="bnb-meta">{loading}</p>
   </div>"#
     );
@@ -87,15 +105,16 @@ fn slot_figure(f: &super::frame::Figure<'_>, id: &str, url: &str, loading: &str)
 
 /// The heatmap surface, rendered for embedding by `homes::patterns`: the head, then the
 /// soundscape as the lead figure, then the three that zoom in (who, which hours, which
-/// weekdays). `terrain` is the terrain card's markup.
-pub(super) fn content(terrain: &str) -> String {
+/// weekdays). `terrain` is the terrain card's markup; `days` the range, from
+/// [`range_from_query`].
+pub(super) fn content(terrain: &str, days: u32) -> String {
     let head = super::frame::page_head(&super::frame::Head {
         eyebrow: "Patterns",
         help: &super::help::help_link(super::help::Topic::Analytics),
         title: "When the yard is <em>alive</em>",
         lead: "When your birds are out, and who is singing.",
         lede: "Four views of the same days, from the whole soundscape down to a single hour. The range on the right sets all of them.",
-        aside: &range_control(),
+        aside: &range_control(days),
     });
     let stream = slot_figure(
         &super::frame::Figure {
@@ -108,6 +127,7 @@ pub(super) fn content(terrain: &str) -> String {
         "activity-streamgraph",
         "/pages/activity-streamgraph",
         "Loading streamgraph...",
+        days,
     );
     let hours = slot_figure(
         &super::frame::Figure {
@@ -120,6 +140,7 @@ pub(super) fn content(terrain: &str) -> String {
         "hourly-totals",
         "/pages/hourly-totals",
         "Loading chart...",
+        days,
     );
     let grid = slot_figure(
         &super::frame::Figure {
@@ -132,6 +153,7 @@ pub(super) fn content(terrain: &str) -> String {
         "heatmap-grid",
         "/pages/heatmap-grid",
         "Loading heatmap...",
+        days,
     );
     format!(
         "{head}\n{terrain}\n{stream}\n{hours}\n{grid}\n{}",
@@ -140,7 +162,8 @@ pub(super) fn content(terrain: &str) -> String {
 }
 
 /// Sets every figure from the one range control: the three partials by `htmx.ajax`, the terrain
-/// by an event it listens for (`bnb:range`, on its card).
+/// by an event it listens for (`bnb:range`, on its card), and the address by `replaceState`, so a
+/// reload or a copied link keeps the range (UIC-08). Without the script the form submits.
 static RANGE_SCRIPT: crate::seal::Sealed = crate::seal::Sealed::new(
     r"<script>
 function loadDays(days, btn) {
@@ -158,7 +181,16 @@ function loadDays(days, btn) {
 }
 document.getElementById('range-controls').addEventListener('click', function(e) {
   const btn = e.target.closest('button[data-days]');
-  if (btn) loadDays(parseInt(btn.dataset.days, 10), btn);
+  if (!btn) return;
+  e.preventDefault();
+  const days = parseInt(btn.dataset.days, 10);
+  loadDays(days, btn);
+  try {
+    const url = new URL(window.location.href);
+    url.searchParams.set('tab', 'when');
+    url.searchParams.set('days', String(days));
+    window.history.replaceState(window.history.state, '', url.toString());
+  } catch (err) { /* the figures are redrawn; only the address keeps the old range */ }
 });
 </script>",
 );
