@@ -258,7 +258,7 @@ struct Splitter<'s> {
 }
 
 impl Splitter<'_> {
-    fn close(&mut self) -> Result<(), SplitError> {
+    fn finish_piece(&mut self) -> Result<(), SplitError> {
         if let Some(piece) = self.open.take() {
             self.sink.end(&piece)?;
             self.report.pieces += 1;
@@ -292,7 +292,7 @@ impl Splitter<'_> {
             piece.frames += take as u64;
             written += take;
             if piece.frames == self.piece_frames {
-                self.close()?;
+                self.finish_piece()?;
             }
         }
         Ok(())
@@ -300,7 +300,7 @@ impl Splitter<'_> {
 
     /// A discontinuity: the open piece ends, and the next starts with `cause`.
     fn break_at(&mut self, cause: PieceCause) -> Result<(), SplitError> {
-        self.close()?;
+        self.finish_piece()?;
         // A loss followed by a jump is reported as the loss; the first cause
         // is what a reader needs to find the damage.
         if !matches!(
@@ -319,7 +319,10 @@ impl Splitter<'_> {
 /// # Errors
 ///
 /// As [`split_file`].
-#[allow(clippy::too_many_lines, clippy::cast_precision_loss)]
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "a channel count as the divisor of a mono mix"
+)]
 pub fn split_source(
     source: Box<dyn MediaSource>,
     ext: Option<&str>,
@@ -465,7 +468,7 @@ pub fn split_source(
             Err(e) => return Err(DecodeError::Format(e.to_string()).into()),
         }
     }
-    s.close()?;
+    s.finish_piece()?;
     Ok(s.report)
 }
 
@@ -655,7 +658,11 @@ mod tests {
                     self.header[usize::try_from(self.pos).unwrap()]
                 } else {
                     let i = (self.pos - 44) / 2;
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_possible_wrap,
+                        reason = "a ramp below 200 as a test sample"
+                    )]
                     let sample = ((i % 200) as i16 - 100) * 100;
                     sample.to_le_bytes()[usize::try_from((self.pos - 44) % 2).unwrap()]
                 };
@@ -826,7 +833,7 @@ mod tests {
         };
         let mut w = hound::WavWriter::create(&src, spec).unwrap();
         for i in 0..10_000_i32 {
-            #[allow(clippy::cast_possible_truncation)]
+            #[allow(clippy::cast_possible_truncation, reason = "test samples within i16")]
             {
                 w.write_sample(((i % 300) * 50) as i16).unwrap();
                 w.write_sample((-(i % 70) * 90) as i16).unwrap();

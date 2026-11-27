@@ -109,7 +109,10 @@ impl std::error::Error for AdmissionError {
 ///
 /// [`AdmissionError::TooLong`] for a file longer than [`LIVE_MAX_FILE_SECS`],
 /// and [`AdmissionError::Unreadable`] when the header cannot be read.
-#[allow(clippy::cast_precision_loss)]
+#[allow(
+    clippy::cast_precision_loss,
+    reason = "a frame count as seconds; exact well past any recording's length"
+)]
 pub fn admit_for_live_analysis(path: &Path) -> Result<Admitted, AdmissionError> {
     use symphonia::core::codecs::audio::well_known::{CODEC_ID_PCM_MULAW, CODEC_ID_PCM_S32LE};
     use symphonia::core::formats::probe::Hint;
@@ -256,7 +259,7 @@ mod tests {
             silent_wav(&path, 1_000, secs);
             let a = admit_for_live_analysis(&path).expect("admitted");
             assert_eq!(a.sample_rate, 1_000);
-            #[allow(clippy::cast_precision_loss)]
+            #[allow(clippy::cast_precision_loss, reason = "a test length in seconds")]
             let want = secs as f64;
             assert!(
                 a.claimed_secs.is_some_and(|c| (c - want).abs() < 1e-6),
