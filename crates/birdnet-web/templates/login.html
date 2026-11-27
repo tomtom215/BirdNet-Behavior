@@ -135,11 +135,22 @@
     <details class="login-card__hint">
       <summary>Forgotten the password?</summary>
       <p>
-        It is stored as <code>CADDY_PWD</code> in <code>/etc/birdnet/birdnet.conf</code>
-        on the station. From a terminal there:
+        The username is <code>admin</code>. The installer stored the first
+        password as <code>CADDY_PWD</code> in <code>/etc/birdnet/birdnet.conf</code>;
+        from a terminal on the station:
       </p>
       <pre><code>sudo grep '^CADDY_PWD' /etc/birdnet/birdnet.conf</code></pre>
-      <p>The username is <code>admin</code>.</p>
+      <p>
+        If that one is refused, the password was changed in the browser since,
+        and the file still holds the old one. Give the station a new password
+        (it is printed, and nothing else changes):
+      </p>
+      <pre><code>curl --proto '=https' --tlsv1.2 -fsSL https://github.com/tomtom215/BirdNet-Behavior/releases/latest/download/install.sh | sudo bash -s -- reset-password</code></pre>
+      <p>
+        or <code>sudo bash install.sh reset-password</code> with a copy you saved.
+        In Docker, set <code>CADDY_PWD</code> in the <code>.env</code> file to a new
+        value and run <code>docker compose up -d</code>.
+      </p>
     </details>
 
     <div class="login-card__foot">
