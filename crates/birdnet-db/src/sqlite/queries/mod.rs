@@ -3,6 +3,7 @@
 pub mod analysis_runs;
 pub mod analytics;
 pub mod charts;
+pub mod clip_evidence;
 pub mod correlation;
 pub mod detection_reviews;
 pub mod detections;
@@ -36,6 +37,10 @@ pub use analytics::{
 pub use charts::{
     CONFIDENCE_HISTOGRAM_MIN_DETECTIONS, ConfidenceHistogram, DayOnset, SpeciesDay, SpeciesHours,
     confidence_histograms, day_counts_between, day_onsets, slot_counts, species_day, species_hours,
+};
+pub use clip_evidence::{
+    ClipDigest, ClipRecord, ClipState, clip_record, detection_uuid_of, digest_clip, digest_file,
+    for_each_clip_record, record_clip_digest, record_quarantine_clip_digest, verify as verify_clip,
 };
 pub use correlation::{companion_species, top_cooccurrence_pairs};
 pub use detection_reviews::{
@@ -88,9 +93,10 @@ pub use overview::{EngineDetails, TableSize, detection_rate_24h, engine_details,
 pub use quarantine::{
     ALL_QUARANTINE_REASONS, QuarantineFilter, QuarantineReason, QuarantineRecord, QuarantineRow,
     QuarantineStats, approve_quarantine, approve_quarantine_by, count_quarantine,
-    delete_quarantine, get_quarantine, insert_quarantine, list_quarantine,
-    prunable_quarantine_clips, prune_quarantine, quarantine_clip_of, quarantine_pending_count,
-    quarantine_recorded, quarantine_stats, reject_quarantine, unreferenced_clips,
+    delete_quarantine, get_quarantine, insert_quarantine, insert_quarantine_with_clip,
+    list_quarantine, prunable_quarantine_clips, prune_quarantine, quarantine_clip_of,
+    quarantine_pending_count, quarantine_recorded, quarantine_stats, reject_quarantine,
+    unreferenced_clips,
 };
 pub use species::{
     BulkOutcome, SpeciesInterval, SpeciesThreshold, SpeciesUsage, delete_species_detections,

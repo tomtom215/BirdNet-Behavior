@@ -71,16 +71,17 @@ pub use queries::{
     detections_by_species, detections_for_clip, detections_per_day, discards_on,
     distinct_detection_dates, effort_hours, get_quarantine, get_species_interval_map,
     get_species_intervals, get_species_threshold_map, get_species_thresholds, hourly_activity,
-    hourly_totals, insert_analysis_run, insert_detection, insert_quarantine, insert_run_classifier,
-    is_detection_locked, is_detection_locked_at, is_image_blacklisted, kept_back_file_names,
-    known_sources, last_hour_count, latest_analysis_run, latest_detection, latest_detection_full,
-    like_contains, list_analysis_runs, list_image_blacklist, list_quarantine, lock_detection,
-    lock_detection_at, locked_file_names, low_confidence_species, model_attribution,
-    monthly_species_counts, parse_search_term, prunable_quarantine_clips, prune_quarantine,
-    prune_species_clips, quality_summary, quarantine_clip_of, quarantine_pending_count,
-    quarantine_recorded, quarantine_stats, range_daily_counts, recent_by_species, recent_clips,
-    recent_clips_count, recent_detections, reject_quarantine, relabel_detection,
-    relabel_detection_at, remove_image_blacklist, review_share_by_species, review_verdict_trend,
+    hourly_totals, insert_analysis_run, insert_detection, insert_quarantine,
+    insert_quarantine_with_clip, insert_run_classifier, is_detection_locked,
+    is_detection_locked_at, is_image_blacklisted, kept_back_file_names, known_sources,
+    last_hour_count, latest_analysis_run, latest_detection, latest_detection_full, like_contains,
+    list_analysis_runs, list_image_blacklist, list_quarantine, lock_detection, lock_detection_at,
+    locked_file_names, low_confidence_species, model_attribution, monthly_species_counts,
+    parse_search_term, prunable_quarantine_clips, prune_quarantine, prune_species_clips,
+    quality_summary, quarantine_clip_of, quarantine_pending_count, quarantine_recorded,
+    quarantine_stats, range_daily_counts, recent_by_species, recent_clips, recent_clips_count,
+    recent_detections, reject_quarantine, relabel_detection, relabel_detection_at,
+    remove_image_blacklist, review_share_by_species, review_verdict_trend,
     reviewed_detections_by_species, run_models, search_detection_count, search_detections,
     search_species, seconds_since_last_detection, set_birdweather_soundscape, set_species_interval,
     set_species_threshold, species_clip_files, species_count, species_daily_counts,
@@ -95,6 +96,10 @@ pub use queries::{
 pub use queries::{
     CONFIDENCE_HISTOGRAM_MIN_DETECTIONS, ConfidenceHistogram, DayOnset, SpeciesDay, SpeciesHours,
     confidence_histograms, day_counts_between, day_onsets, slot_counts, species_day, species_hours,
+};
+pub use queries::{
+    ClipDigest, ClipRecord, ClipState, clip_record, detection_uuid_of, digest_clip, digest_file,
+    for_each_clip_record, record_clip_digest, record_quarantine_clip_digest, verify_clip,
 };
 pub use queries::{
     DashboardKpis, DawnFirstSong, ExpectedSpecies, FirstHeard, GoneQuiet, NewArrival,

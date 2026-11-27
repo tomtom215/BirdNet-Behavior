@@ -1234,6 +1234,8 @@ pub(super) fn event_processor(
                     continue;
                 }
                 let clip = quarantine_clip(&extractor, &event);
+                // Its checksum as cut (RES-23); approval carries it to the detection.
+                let clip_digest = clip.as_deref().and_then(birdnet_db::sqlite::digest_clip);
                 let file_str = quarantine_file_name(clip.as_deref(), &event);
                 let source_label = derive_source_label(&event.source_file);
                 let q_record = birdnet_db::sqlite::QuarantineRecord {
@@ -1263,9 +1265,13 @@ pub(super) fn event_processor(
                     // rows for one bird in one second apart.
                     source: Some(&source_label),
                 };
-                match state
-                    .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
-                {
+                match state.with_ingest_db(|conn| {
+                    birdnet_db::sqlite::insert_quarantine_with_clip(
+                        conn,
+                        &q_record,
+                        clip_digest.as_ref(),
+                    )
+                }) {
                     Some(Ok(())) => settled(&mut unsettled, &mut live_unsettled),
                     Some(Err(e)) => {
                         discard_quarantine_clip(clip.as_deref());
@@ -1330,6 +1336,8 @@ pub(super) fn event_processor(
                 continue;
             }
             let clip = quarantine_clip(&extractor, &event);
+            // Its checksum as cut (RES-23); approval carries it to the detection.
+            let clip_digest = clip.as_deref().and_then(birdnet_db::sqlite::digest_clip);
             let file_str = quarantine_file_name(clip.as_deref(), &event);
             let source_label = derive_source_label(&event.source_file);
             let q_record = birdnet_db::sqlite::QuarantineRecord {
@@ -1359,9 +1367,13 @@ pub(super) fn event_processor(
                 // rows for one bird in one second apart.
                 source: Some(&source_label),
             };
-            match state
-                .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
-            {
+            match state.with_ingest_db(|conn| {
+                birdnet_db::sqlite::insert_quarantine_with_clip(
+                    conn,
+                    &q_record,
+                    clip_digest.as_ref(),
+                )
+            }) {
                 Some(Ok(())) => settled(&mut unsettled, &mut live_unsettled),
                 Some(Err(e)) => {
                     discard_quarantine_clip(clip.as_deref());
@@ -1403,6 +1415,8 @@ pub(super) fn event_processor(
                 continue;
             }
             let clip = quarantine_clip(&extractor, &event);
+            // Its checksum as cut (RES-23); approval carries it to the detection.
+            let clip_digest = clip.as_deref().and_then(birdnet_db::sqlite::digest_clip);
             let file_str = quarantine_file_name(clip.as_deref(), &event);
             let source_label = derive_source_label(&event.source_file);
             let q_record = birdnet_db::sqlite::QuarantineRecord {
@@ -1432,9 +1446,13 @@ pub(super) fn event_processor(
                 // rows for one bird in one second apart.
                 source: Some(&source_label),
             };
-            match state
-                .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
-            {
+            match state.with_ingest_db(|conn| {
+                birdnet_db::sqlite::insert_quarantine_with_clip(
+                    conn,
+                    &q_record,
+                    clip_digest.as_ref(),
+                )
+            }) {
                 Some(Ok(())) => settled(&mut unsettled, &mut live_unsettled),
                 Some(Err(e)) => {
                     discard_quarantine_clip(clip.as_deref());
@@ -1475,6 +1493,8 @@ pub(super) fn event_processor(
                     continue;
                 }
                 let clip = quarantine_clip(&extractor, &event);
+                // Its checksum as cut (RES-23); approval carries it to the detection.
+                let clip_digest = clip.as_deref().and_then(birdnet_db::sqlite::digest_clip);
                 let file_str = quarantine_file_name(clip.as_deref(), &event);
                 let source_label = derive_source_label(&event.source_file);
                 let q_record = birdnet_db::sqlite::QuarantineRecord {
@@ -1504,9 +1524,13 @@ pub(super) fn event_processor(
                     // rows for one bird in one second apart.
                     source: Some(&source_label),
                 };
-                match state
-                    .with_ingest_db(|conn| birdnet_db::sqlite::insert_quarantine(conn, &q_record))
-                {
+                match state.with_ingest_db(|conn| {
+                    birdnet_db::sqlite::insert_quarantine_with_clip(
+                        conn,
+                        &q_record,
+                        clip_digest.as_ref(),
+                    )
+                }) {
                     Some(Ok(())) => settled(&mut unsettled, &mut live_unsettled),
                     Some(Err(e)) => {
                         discard_quarantine_clip(clip.as_deref());
@@ -1629,6 +1653,14 @@ pub(super) fn event_processor(
                 birdnet_core::audio::decode::probe_duration_secs(&event.source_file),
             ),
         };
+        // The clip's SHA-256 and length as written (RES-23), recorded with the
+        // row so a study can later tell the file is the one the row describes.
+        // Read here, before the transaction; a clip that cannot be read back is
+        // stored with its checksum unknown.
+        let clip_digest = extracted
+            .as_ref()
+            .ok()
+            .and_then(|clip| birdnet_db::sqlite::digest_clip(&clip.path));
         let record = birdnet_db::sqlite::DetectionRecord {
             date: &detection.date,
             time: &detection.time,
@@ -1761,6 +1793,9 @@ pub(super) fn event_processor(
                     },
                     &model_scores,
                 )?;
+            }
+            if let Some(digest) = &clip_digest {
+                birdnet_db::sqlite::record_clip_digest(&tx, rowid, digest)?;
             }
             tx.commit().map_err(birdnet_db::sqlite::DbError::from)?;
             Ok::<_, birdnet_db::sqlite::DbError>(rowid)
@@ -5806,6 +5841,67 @@ mod tests {
                 * 51.48_f64.to_radians().cos();
             assert!(dlat.hypot(dlon) <= 301.5, "outside 300 m: {p}");
         }
+    }
+
+    /// RES-23: the row a live detection writes records the SHA-256 and length
+    /// of the clip it was written with, and verifying it against that clip
+    /// says so; and the row has its permanent identifier (RES-25).
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_stored_detection_records_the_checksum_of_its_clip() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("2026-05-19-birdnet-09:00:00.wav");
+        silent_wav(&source, 15);
+        let clips = tmp.path().join("clips");
+        let extractor = Extractor::new(ExtractionConfig {
+            output_dir: clips.clone(),
+            ..ExtractionConfig::default()
+        });
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let mut ev = make_event("Pica pica", "Eurasian Magpie", 0.95, source, "sha-1");
+        ev.detection.start = 6.0;
+        ev.detection.stop = 9.0;
+        run_processor_integrated(
+            &state,
+            vec![ev],
+            HashMap::new(),
+            0.25,
+            0,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+            birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+            ),
+            test_provenance(&state),
+            None,
+            extractor,
+        )
+        .await;
+        let (file, uuid, sha, bytes): (String, Option<String>, Option<String>, Option<i64>) = state
+            .with_db(|conn| {
+                conn.query_row(
+                    "SELECT File_Name, detection_uuid, Clip_Sha256, Clip_Bytes FROM detections",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+                )
+                .unwrap()
+            });
+        let on_disk = birdnet_db::sqlite::digest_file(&clips.join(&file)).unwrap();
+        assert_eq!(
+            (sha.as_deref(), bytes),
+            (
+                Some(on_disk.sha256.as_str()),
+                Some(i64::try_from(on_disk.bytes).unwrap())
+            ),
+            "the row records the clip it was written with"
+        );
+        let uuid = uuid.expect("the row has its identifier");
+        let record = state
+            .with_db(|conn| birdnet_db::sqlite::clip_record(conn, &uuid))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            birdnet_db::sqlite::verify_clip(&record, &clips),
+            birdnet_db::sqlite::ClipState::Verified
+        );
     }
 
     /// DD-32: a detection sent to `BirdWeather` is preceded by its clip as a

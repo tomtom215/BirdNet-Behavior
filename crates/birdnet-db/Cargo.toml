@@ -20,6 +20,8 @@ rusqlite.workspace = true
 # Password hashing for the accounts surface (O-14 / O-15 wire flip).
 argon2.workspace = true
 password-hash.workspace = true
+# A clip's checksum, recorded when it is written and checked on demand (RES-23).
+sha2.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

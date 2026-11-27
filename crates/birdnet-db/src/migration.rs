@@ -2949,6 +2949,77 @@ pub const MIGRATIONS: &[Migration] = &[
         // window was padding was not recorded, and is not inferred. Additive.
         up_sql: "ALTER TABLE detection_model_scores ADD COLUMN padded_secs REAL;",
     },
+    Migration {
+        version: 69,
+        description: "A stable identifier for every detection, and the checksum of its clip",
+        // RES-25. A detection had no identifier of its own. The rowid is
+        // renumbered by a `VACUUM` of a table without an INTEGER PRIMARY KEY,
+        // which this one (BirdNET-Pi's schema) is; the unique key
+        // `(Date, Time, Sci_Name, File_Name, chunk_offset_secs)` changes when
+        // the detection is relabelled; and neither travels through an export.
+        // `detection_uuid` is a random (version 4) UUID given once, by a
+        // trigger, so every write path present and future gets one, and a
+        // second trigger refuses to change it once given. An export carries it
+        // and the CSV import keeps it, so a detection read back is the same
+        // detection.
+        //
+        // Every row already stored is given one here. That writes a new column
+        // and changes no value a row already has, so it is not a history
+        // rewrite and takes no pre-migration backup (as migration 32's
+        // `detected_at_utc` backfill did not).
+        //
+        // RES-23. `Clip_Sha256` and `Clip_Bytes` are the SHA-256 and length of
+        // the clip as it was written, recorded beside the row so a study can
+        // tell later that the file it holds is the one the row describes.
+        // NULL on a row stored before this migration, or one whose clip could
+        // not be read when it was written: unknown, never computed after the
+        // fact from whatever file is there now. Once recorded they cannot be
+        // changed. The quarantine keeps the same two values for the clip it
+        // cuts, and approval carries them to the detection.
+        up_sql: "ALTER TABLE detections ADD COLUMN detection_uuid TEXT;
+        ALTER TABLE detections ADD COLUMN Clip_Sha256 TEXT;
+        ALTER TABLE detections ADD COLUMN Clip_Bytes INTEGER;
+        ALTER TABLE quarantine ADD COLUMN clip_sha256 TEXT;
+        ALTER TABLE quarantine ADD COLUMN clip_bytes INTEGER;
+
+        UPDATE detections
+           SET detection_uuid = lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2)))
+                 || '-4' || substr(lower(hex(randomblob(2))), 2)
+                 || '-' || substr('89ab', 1 + (abs(random()) % 4), 1)
+                 || substr(lower(hex(randomblob(2))), 2)
+                 || '-' || lower(hex(randomblob(6)))
+         WHERE detection_uuid IS NULL;
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_detections_uuid ON detections(detection_uuid);
+
+        CREATE TRIGGER detections_stamp_uuid AFTER INSERT ON detections
+        WHEN NEW.detection_uuid IS NULL
+        BEGIN
+            UPDATE detections
+               SET detection_uuid = lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2)))
+                     || '-4' || substr(lower(hex(randomblob(2))), 2)
+                     || '-' || substr('89ab', 1 + (abs(random()) % 4), 1)
+                     || substr(lower(hex(randomblob(2))), 2)
+                     || '-' || lower(hex(randomblob(6)))
+             WHERE rowid = NEW.rowid;
+        END;
+
+        CREATE TRIGGER detections_uuid_is_permanent
+            BEFORE UPDATE OF detection_uuid ON detections
+            WHEN OLD.detection_uuid IS NOT NULL
+             AND NEW.detection_uuid IS NOT OLD.detection_uuid
+        BEGIN
+            SELECT RAISE(ABORT, 'detection_uuid is permanent: a detection keeps its identifier');
+        END;
+
+        CREATE TRIGGER detections_clip_checksum_is_permanent
+            BEFORE UPDATE OF Clip_Sha256, Clip_Bytes ON detections
+            WHEN OLD.Clip_Sha256 IS NOT NULL
+             AND (NEW.Clip_Sha256 IS NOT OLD.Clip_Sha256 OR NEW.Clip_Bytes IS NOT OLD.Clip_Bytes)
+        BEGIN
+            SELECT RAISE(ABORT, 'Clip_Sha256 is permanent: it records the clip as it was written');
+        END;",
+    },
 ];
 
 /// A migration that rewrites rows that already exist, rather than only changing
@@ -5516,5 +5587,151 @@ mod tests {
             .unwrap();
         assert_eq!(current, None, "migration 59 clears it; the event agrees");
         assert_eq!(before(&conn)[0], kept[0], "the old event is not rewritten");
+    }
+
+    /// The identifier and checksum migration on a station with history.
+    ///
+    /// Every stored row gets an identifier, distinct from every other and
+    /// shaped as a version 4 UUID; a row inserted afterwards, by any path that
+    /// names none, gets one too; and the identifier is the same after a
+    /// relabel and after a `VACUUM`, which is what the five-column key and the
+    /// rowid each fail. Rows stored before it have no clip checksum: unknown,
+    /// not invented.
+    #[test]
+    fn migration_69_gives_every_detection_a_permanent_identifier() {
+        let conn = memory_db_at_version(68);
+        for i in 0..50 {
+            conn.execute(
+                "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+                 VALUES ('2026-05-01', printf('06:00:%02d', ?1), 'Strix aluco', 'Tawny Owl',
+                         0.9, printf('c%d.wav', ?1))",
+                [i],
+            )
+            .unwrap();
+        }
+        let m69 = MIGRATIONS.iter().find(|m| m.version == 69).unwrap();
+        conn.execute_batch(m69.up_sql).unwrap();
+
+        let ids = |c: &Connection| -> Vec<(String, Option<String>)> {
+            c.prepare("SELECT File_Name, detection_uuid FROM detections ORDER BY File_Name")
+                .unwrap()
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        let before = ids(&conn);
+        assert_eq!(before.len(), 50);
+        let distinct: std::collections::BTreeSet<_> =
+            before.iter().map(|(_, id)| id.clone()).collect();
+        assert_eq!(
+            distinct.len(),
+            50,
+            "every stored row has its own identifier"
+        );
+        for (_, id) in &before {
+            let id = id.as_deref().expect("every stored row has an identifier");
+            assert!(is_uuid_v4(id), "{id} is not a version 4 UUID");
+        }
+
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-05-02', '07:00:00', 'Parus major', 'Great Tit', 0.8, 'new.wav')",
+            [],
+        )
+        .unwrap();
+        let new_id: Option<String> = conn
+            .query_row(
+                "SELECT detection_uuid FROM detections WHERE File_Name = 'new.wav'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            new_id.as_deref().is_some_and(is_uuid_v4),
+            "a row inserted with no identifier is given one: {new_id:?}"
+        );
+
+        // Relabel, delete a row so a VACUUM has something to renumber, VACUUM.
+        conn.execute_batch(
+            "UPDATE detections SET Sci_Name = 'Asio otus', Com_Name = 'Long-eared Owl'
+              WHERE File_Name = 'c7.wav';
+             DELETE FROM detections WHERE File_Name = 'c0.wav';
+             VACUUM;",
+        )
+        .unwrap();
+        let after = ids(&conn);
+        for (file, id) in &after {
+            if let Some((_, was)) = before.iter().find(|(f, _)| f == file) {
+                assert_eq!(
+                    id, was,
+                    "{file} kept its identifier across a relabel and VACUUM"
+                );
+            }
+        }
+
+        assert!(
+            conn.execute(
+                "UPDATE detections SET detection_uuid = 'something-else' WHERE File_Name = 'c1.wav'",
+                [],
+            )
+            .is_err(),
+            "an identifier once given cannot be rewritten"
+        );
+        // Its counterpart: other columns of the row are still writable.
+        conn.execute(
+            "UPDATE detections SET is_locked = 1 WHERE File_Name = 'c1.wav'",
+            [],
+        )
+        .unwrap();
+
+        let unknown: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM detections WHERE Clip_Sha256 IS NULL AND Clip_Bytes IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            unknown, 50,
+            "no stored row is given a checksum it was never written with"
+        );
+    }
+
+    /// A clip checksum, once recorded, is not changed; recording one where
+    /// none was is allowed (that is how a write records it).
+    #[test]
+    fn migration_69_a_recorded_clip_checksum_is_permanent() {
+        let conn = memory_db_at_version(69);
+        conn.execute(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, File_Name)
+             VALUES ('2026-05-01', '06:00:00', 'Strix aluco', 'Tawny Owl', 0.9, 'a.wav')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE detections SET Clip_Sha256 = 'aa', Clip_Bytes = 10",
+            [],
+        )
+        .unwrap();
+        assert!(
+            conn.execute("UPDATE detections SET Clip_Sha256 = 'bb'", [])
+                .is_err()
+        );
+        assert!(
+            conn.execute("UPDATE detections SET Clip_Bytes = 11", [])
+                .is_err()
+        );
+    }
+
+    fn is_uuid_v4(s: &str) -> bool {
+        let b = s.as_bytes();
+        s.len() == 36
+            && [8, 13, 18, 23].iter().all(|&i| b[i] == b'-')
+            && b[14] == b'4'
+            && matches!(b[19], b'8' | b'9' | b'a' | b'b')
+            && s.chars().enumerate().all(|(i, c)| {
+                [8, 13, 18, 23].contains(&i) || c.is_ascii_hexdigit() && !c.is_ascii_uppercase()
+            })
     }
 }

@@ -305,6 +305,29 @@ pub fn insert_quarantine(conn: &Connection, record: &QuarantineRecord<'_>) -> Re
     Ok(())
 }
 
+/// [`insert_quarantine`], and the checksum of the clip the row was cut with
+/// (RES-23), in one transaction: approval carries it to the detection.
+///
+/// `digest` is `None` when no clip was cut, or it could not be read back;
+/// the row then has no checksum, which reads as unknown.
+///
+/// # Errors
+///
+/// Returns [`DbError`] on insert failure.
+pub fn insert_quarantine_with_clip(
+    conn: &Connection,
+    record: &QuarantineRecord<'_>,
+    digest: Option<&crate::sqlite::ClipDigest>,
+) -> Result<(), DbError> {
+    let tx = conn.unchecked_transaction()?;
+    insert_quarantine(&tx, record)?;
+    if let (Some(digest), Some(name)) = (digest, record.file_name) {
+        crate::sqlite::record_quarantine_clip_digest(&tx, name, digest)?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+
 /// Approve a quarantine entry.
 ///
 /// Copies the detection into the `detections` table (absorbing the case where
@@ -352,10 +375,11 @@ pub fn approve_quarantine_by(
     let inserted = tx.execute(
         "INSERT INTO detections
             (Date, Time, Sci_Name, Com_Name, Confidence, Lat, Lon, Cutoff,
-             Week, Sens, Overlap, File_Name, is_locked, review_verdict, run_id, Source)
+             Week, Sens, Overlap, File_Name, is_locked, review_verdict, run_id, Source,
+             Clip_Sha256, Clip_Bytes)
          SELECT date, time, sci_name, com_name, confidence,
                 lat, lon, cutoff, week, sens, overlap, file_name, 0, 'confirmed', run_id,
-                source
+                source, clip_sha256, clip_bytes
          FROM quarantine WHERE id = ?1
          ON CONFLICT(Date, Time, Sci_Name, COALESCE(File_Name, ''), chunk_offset_secs) DO NOTHING",
         params![id],
@@ -817,6 +841,39 @@ mod tests {
         assert_eq!((cutoff, sens, overlap), (Some(0.8), Some(1.25), Some(0.5)));
         let row = get_quarantine(&conn, id).unwrap().unwrap();
         assert_eq!(row.cutoff, Some(0.8), "the quarantine row keeps them too");
+    }
+
+    /// RES-23: the checksum of the clip quarantine cut reaches the detection
+    /// approval makes, and the detection gets an identifier of its own.
+    #[test]
+    fn an_approved_quarantine_keeps_its_clips_checksum() {
+        let conn = open();
+        insert_quarantine(&conn, &sample(QuarantineReason::LowConfidence)).unwrap();
+        let row = list_quarantine(&conn, QuarantineFilter::Pending, 1, 0).unwrap()[0].clone();
+        let digest = crate::sqlite::ClipDigest {
+            sha256: "ab".repeat(32),
+            bytes: 4321,
+        };
+        assert!(
+            crate::sqlite::record_quarantine_clip_digest(
+                &conn,
+                row.file_name.as_deref().unwrap(),
+                &digest
+            )
+            .unwrap()
+        );
+        assert!(approve_quarantine(&conn, row.id).unwrap());
+        let (sha, bytes, uuid): (Option<String>, Option<i64>, Option<String>) = conn
+            .query_row(
+                "SELECT Clip_Sha256, Clip_Bytes, detection_uuid FROM detections
+                  WHERE Sci_Name = 'Upupa epops'",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(sha.as_deref(), Some(digest.sha256.as_str()));
+        assert_eq!(bytes, Some(4321));
+        assert!(uuid.is_some());
     }
 
     /// Finding 7: an approved detection carries a `confirmed` verdict, so

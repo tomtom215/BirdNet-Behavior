@@ -245,6 +245,14 @@ fn event_date_of(row: &birdnet_db::sqlite::DetectionRow) -> Option<String> {
 /// `Clip_Pruned_At` (when retention removed the clip's audio, RFC 3339 UTC;
 /// empty while it is kept), `Import_Batch_Id` (the import it came from; empty
 /// for a row this station recorded) and `BirdWeather_Soundscape_Id`.
+///
+/// Then, appended after those (RES-25, RES-23): `Detection_Id`, the
+/// detection's permanent identifier, which a relabel or a `VACUUM` does not
+/// change and which the CSV import keeps when the file is read back; and
+/// `Clip_SHA256` and `Clip_Bytes`, the clip's checksum and length as it was
+/// written, empty where the station did not record one (a row from before it
+/// did, or whose clip could not be read when it was written): unknown, not
+/// computed from the file there now.
 fn detections_to_csv(
     rows: &[birdnet_db::sqlite::DetectionRow],
     runs: &birdnet_db::sqlite::ModelAttribution,
@@ -254,14 +262,14 @@ fn detections_to_csv(
         "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name,\
          Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256,Model_Id,Model_Agreement,\
          Source,Review_Verdict,Chunk_Offset_Secs,Clip_Pruned_At,Import_Batch_Id,\
-         BirdWeather_Soundscape_Id\n",
+         BirdWeather_Soundscape_Id,Detection_Id,Clip_SHA256,Clip_Bytes\n",
     );
 
     for row in rows {
         let model = runs.for_row(row.run_id, row.model_id.as_deref());
         let _ = writeln!(
             csv,
-            "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             escape_csv(&row.date),
             escape_csv(&row.time),
             escape_csv(&row.sci_name),
@@ -293,6 +301,11 @@ fn detections_to_csv(
             row.import_batch_id.map_or(String::new(), |v| v.to_string()),
             row.birdweather_soundscape_id
                 .map_or(String::new(), |v| v.to_string()),
+            row.detection_uuid
+                .as_deref()
+                .map_or(String::new(), escape_csv),
+            row.clip_sha256.as_deref().map_or(String::new(), escape_csv),
+            row.clip_bytes.map_or(String::new(), |v| v.to_string()),
         );
     }
 
@@ -331,7 +344,7 @@ mod tests {
             "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name,\
              Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256,Model_Id,Model_Agreement,\
              Source,Review_Verdict,Chunk_Offset_Secs,Clip_Pruned_At,Import_Batch_Id,\
-             BirdWeather_Soundscape_Id"
+             BirdWeather_Soundscape_Id,Detection_Id,Clip_SHA256,Clip_Bytes"
         );
     }
 
@@ -352,6 +365,9 @@ mod tests {
             clip_pruned_at: Some(0),
             import_batch_id: Some(12),
             birdweather_soundscape_id: Some(34),
+            detection_uuid: Some("6f1c2a52-0e4b-4c1e-9a77-0d6f3b8e2c11".into()),
+            clip_sha256: Some("ab".repeat(32)),
+            clip_bytes: Some(4321),
             ..Default::default()
         };
         let csv = detections_to_csv(&[row], &birdnet_db::sqlite::ModelAttribution::default());
@@ -376,6 +392,9 @@ mod tests {
                 ("Clip_Pruned_At", "1970-01-01T00:00:00Z"),
                 ("Import_Batch_Id", "12"),
                 ("BirdWeather_Soundscape_Id", "34"),
+                ("Detection_Id", "6f1c2a52-0e4b-4c1e-9a77-0d6f3b8e2c11"),
+                ("Clip_SHA256", "ab".repeat(32).as_str()),
+                ("Clip_Bytes", "4321"),
             ]
         );
     }
@@ -424,7 +443,11 @@ mod tests {
             "{}",
             lines[2]
         );
-        assert!(lines[3].ends_with(",,,,,"), "unplaceable row: {}", lines[3]);
+        assert!(
+            lines[3].ends_with(",,,,,,,,"),
+            "unplaceable row: {}",
+            lines[3]
+        );
         assert_eq!(lines[3].matches(',').count(), lines[1].matches(',').count());
 
         let v = serde_json::to_value(ExportedDetection::new(
@@ -468,7 +491,11 @@ mod tests {
             &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
         );
         let lines: Vec<&str> = csv.lines().collect();
-        assert!(lines[1].ends_with(",\"perch,v2\",2,,,,,,"), "{}", lines[1]);
+        assert!(
+            lines[1].ends_with(",\"perch,v2\",2,,,,,,,,,"),
+            "{}",
+            lines[1]
+        );
         assert!(
             lines[2].ends_with(",,"),
             "a legacy row leaves both empty: {}",
@@ -530,7 +557,7 @@ mod tests {
         // The run's three columns are followed by `Model_Id,Model_Agreement`,
         // empty here because neither row names a classifier.
         assert!(
-            lines[1].ends_with(",7,BirdNET+_V3.0-preview3_Global_11K_FP32,2a0f9efb,,,,,,,,"),
+            lines[1].ends_with(",7,BirdNET+_V3.0-preview3_Global_11K_FP32,2a0f9efb,,,,,,,,,,,"),
             "{}",
             lines[1]
         );
