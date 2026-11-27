@@ -279,6 +279,7 @@ Every key `birdnet.conf` can carry (`KNOWN_CONFIG_KEYS`). A settings key bridged
 | `SPECIES_ALIASES_PATH` | — | A tab-separated file of legacy names kept by hand over months; it needs a file on the station's disk. |
 | `STATION_HEALTH_ALERTS` | Settings → Alerts → Alert limits → Tell me when the station has a problem (`station_health_alerts`) | |
 | `STATION_NAME` | Settings → Capture → Location & Recording Schedule → Station Name (`station_name`) | |
+| `STATION_PROFILE` | — | Chosen once for what the station is for, with its storage and its study in hand; it changes several defaults together, and a page that flipped it would change how the next commits are kept without the operator having read what it does. |
 | `STREAM_MAX_MB` | Settings → General → System & Display → Streaming Folder Limit (MB) (`stream_max_mb`) | |
 | `STREAM_RETENTION_SECS` | Settings → General → System & Display → Raw Segment Retention (seconds) (`stream_retention_secs`) | |
 | `TLS_CERT` | — | Changing how the page is served (HTTPS, certificates, the address it listens on) from the page itself can lock the owner out: a wrong certificate or address makes the page unreachable, with no page left to undo it. Set in the file with the service stopped. |

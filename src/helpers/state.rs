@@ -658,7 +658,9 @@ pub fn run_refresh_extension(
 /// is announced, at the cost of a write per commit. No setting makes a storage
 /// device that lies about its cache keep what it was told.
 ///
-/// Anything but `full` or `normal` is logged and read as `normal`.
+/// Unset, it follows the station's profile: `full` under `STATION_PROFILE=research`,
+/// `normal` otherwise. Anything but `full` or `normal` is logged and read as
+/// `normal`.
 pub fn apply_db_durability(
     state: &birdnet_web::state::AppState,
     config: Option<&birdnet_core::config::Config>,
@@ -666,8 +668,12 @@ pub fn apply_db_durability(
     let asked = config
         .and_then(|c| c.get("DB_SYNCHRONOUS"))
         .map(|v| v.trim().to_ascii_lowercase());
+    // The research profile's default is FULL (review F17's decision); a value
+    // the operator set is theirs under either profile.
+    let profile = birdnet_core::config::profile::StationProfile::of(config);
     let full = match asked.as_deref() {
-        None | Some("" | "normal") => false,
+        None | Some("") => profile == birdnet_core::config::profile::StationProfile::Research,
+        Some("normal") => false,
         Some("full") => true,
         Some(other) => {
             tracing::warn!(
@@ -1075,5 +1081,46 @@ mod tests {
         assert_eq!(level(&state), 1, "a typo is not a change");
         apply_db_durability(&state, Some(&config_with(&[("DB_SYNCHRONOUS", " FULL ")])));
         assert_eq!(level(&state), 2, "FULL was asked for and not applied");
+    }
+
+    /// F17's decision: the research profile syncs every commit unless the
+    /// operator set `DB_SYNCHRONOUS` themselves; the default profile, and a
+    /// station with no profile (every station upgraded), do not.
+    #[test]
+    fn the_research_profile_defaults_to_full_durability() {
+        let level = |state: &birdnet_web::state::AppState| -> i64 {
+            state.with_db(|c| c.query_row("PRAGMA synchronous", [], |r| r.get(0)).unwrap())
+        };
+        let open = || {
+            let dir = tempfile::tempdir().unwrap();
+            let state = birdnet_web::state::AppState::new(dir.path().join("birds.db")).unwrap();
+            (dir, state)
+        };
+        let (_a, state) = open();
+        apply_db_durability(
+            &state,
+            Some(&config_with(&[("STATION_PROFILE", "research")])),
+        );
+        assert_eq!(
+            level(&state),
+            2,
+            "the research profile left commits at NORMAL"
+        );
+        let (_b, state) = open();
+        apply_db_durability(
+            &state,
+            Some(&config_with(&[
+                ("STATION_PROFILE", "research"),
+                ("DB_SYNCHRONOUS", "normal"),
+            ])),
+        );
+        assert_eq!(
+            level(&state),
+            1,
+            "an explicit DB_SYNCHRONOUS is the operator's"
+        );
+        let (_c, state) = open();
+        apply_db_durability(&state, Some(&config_with(&[("STATION_PROFILE", "hobby")])));
+        assert_eq!(level(&state), 1);
     }
 }

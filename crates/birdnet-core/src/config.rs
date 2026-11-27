@@ -14,6 +14,7 @@
 
 pub mod known_keys;
 pub mod locale;
+pub mod profile;
 pub mod redact;
 pub mod secret_file;
 pub mod validate;
