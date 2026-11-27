@@ -7085,3 +7085,14 @@ input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
 /* The line under a figure from the analytics cache that says when it was worked out (UIC-23). */
 .ck-asof { margin: var(--space-6) 0 0; }
 /* /Lane L1 */
+/* Lane F (review 2026-11): the band mark and the usual range (CHT-23, CHT-06). The band is the
+   interval's hue one step paler than `.ck-ci` (a band is an area behind other marks, a whisker a
+   thin bar beside one), so a range reads as the same family on every figure without drowning the
+   columns it sits behind. A day outside its usual range is an open diamond in the annotation ink,
+   ringed off the card. */
+.ck-band { fill: var(--seq-moss-1); pointer-events: none; }
+.ck-out { fill: var(--chart-gap); stroke: var(--chart-annot); stroke-width: 1.5px; vector-effect: non-scaling-stroke; pointer-events: none; }
+.ck-keyband { display: inline-block; width: 14px; height: 10px; border-radius: var(--r-2xs); vertical-align: -1px; background: var(--seq-moss-1); }
+.ck-keyout { display: inline-block; width: 7px; height: 7px; margin: 0 var(--space-2); vertical-align: 0; transform: rotate(45deg); border: 1.5px solid var(--chart-annot); background: var(--chart-gap); }
+.ck-method { margin-top: var(--space-6); max-width: 72ch; }
+/* /Lane F */

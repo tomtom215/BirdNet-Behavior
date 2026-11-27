@@ -118,6 +118,44 @@ pub fn whisker(cx: f64, y_lo: f64, y_hi: f64, width: f64, index: usize) -> Strin
     out
 }
 
+/// The band mark: a range around a run of points, as one closed path with the class
+/// `ck-band` (painted by `app.css` from the chart tokens, under the marks it surrounds).
+///
+/// `run` is `(x, y_lo, y_hi)` in viewBox units, left to right, the bounds in either order;
+/// each point is widened by `half` on both sides, so a band of one day is a column and a run
+/// of days covers its days' slots edge to edge. Straight segments and steps, never a smoothed
+/// curve: a band's edge is a statement about each day, and a spline between two days would
+/// invent values neither had. Empty for an empty run. Decorative to a screen reader, like
+/// [`whisker`]: what it says is in the readout and the figure's method line.
+#[must_use]
+pub fn band(run: &[(f64, f64, f64)], half: f64) -> String {
+    if run.is_empty() {
+        return String::new();
+    }
+    let mut d = String::new();
+    // Upper edge left to right, lower edge right to left.
+    for (k, &(x, a, b)) in run.iter().enumerate() {
+        let top = a.min(b);
+        let _ = write!(
+            d,
+            "{}{:.1},{top:.1} L{:.1},{top:.1}",
+            if k == 0 { "M" } else { " L" },
+            x - half,
+            x + half
+        );
+    }
+    for &(x, a, b) in run.iter().rev() {
+        let bottom = a.max(b);
+        let _ = write!(
+            d,
+            " L{:.1},{bottom:.1} L{:.1},{bottom:.1}",
+            x + half,
+            x - half
+        );
+    }
+    format!(r#"<path class="ck-band" d="{d} Z"/>"#)
+}
+
 /// The estimate's mark: a dot of radius `r` at `(x, y)`, index `i`.
 #[must_use]
 pub fn estimate(x: f64, y: f64, r: f64, i: usize) -> String {
@@ -191,6 +229,19 @@ mod tests {
             too_few_words(1, ("listened day", "listened days")),
             "1 listened day: too few to say"
         );
+    }
+
+    /// The band covers each point's slot edge to edge, its upper edge at the smaller y (higher
+    /// on the screen) whichever way round the bounds come, and is closed; an empty run draws
+    /// nothing.
+    #[test]
+    fn the_band_covers_its_run_edge_to_edge() {
+        let b = band(&[(10.0, 80.0, 20.0), (20.0, 30.0, 70.0)], 5.0);
+        assert_eq!(
+            b,
+            r#"<path class="ck-band" d="M5.0,20.0 L15.0,20.0 L15.0,30.0 L25.0,30.0 L25.0,70.0 L15.0,70.0 L15.0,80.0 L5.0,80.0 Z"/>"#
+        );
+        assert_eq!(band(&[], 5.0), "");
     }
 
     /// The interval mark spans exactly its bounds whichever way round they come, and a

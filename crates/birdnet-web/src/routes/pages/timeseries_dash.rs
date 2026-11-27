@@ -351,6 +351,15 @@ fn render_trend_table(
     let pts: Vec<_> = shown.iter().map(point).collect();
     let prior: Vec<_> = before.iter().map(point).collect();
     let listened_shown = listened.map(|l| l[l.len().saturating_sub(pts.len())..].to_vec());
+    // CHT-06: each day's usual range, from the listened days before it over every row read
+    // (the thirty before the chart included), so the first day shown has its window too.
+    // The ledger's verdicts line up with the rows only when there is one per row.
+    let all: Vec<f64> = rows.iter().map(|r| r.daily_detections as f64).collect();
+    let ranges = super::viz::expected_ranges(
+        &all,
+        listened.filter(|l| l.len() == rows.len()),
+        rows.len() - shown.len(),
+    );
     let mut html = super::viz::trend_chart(
         &pts,
         &super::viz::TrendOpts {
@@ -360,22 +369,47 @@ fn render_trend_table(
             bars: true,
             prior: &prior,
             listened: listened_shown.as_deref(),
+            expected: Some(&ranges),
         },
     );
     html.push_str(TABLE_OPEN);
     html.push_str(
-        r"<table><thead><tr><th>Date</th><th>Detections</th><th>7-Day Avg</th></tr></thead><tbody>",
+        r"<table><thead><tr><th>Date</th><th>Detections</th><th>7-Day Avg</th><th>Usual range</th></tr></thead><tbody>",
     );
-    for row in shown {
+    for (i, (row, range)) in shown.into_iter().zip(&ranges).enumerate() {
         let avg = row
             .moving_avg_detections
             .map_or_else(|| "—".to_string(), |v| format!("{v:.1}"));
+        let off = listened_shown
+            .as_ref()
+            .is_some_and(|l| l.get(i).is_some_and(|on| !on));
+        let usual = range.map_or_else(
+            || {
+                if off {
+                    "not listening".to_string()
+                } else {
+                    "too few days before it".to_string()
+                }
+            },
+            |(lo, hi)| {
+                let v = row.daily_detections as f64;
+                let side = if v > hi {
+                    " (above)"
+                } else if v < lo {
+                    " (below)"
+                } else {
+                    ""
+                };
+                format!("{lo:.0} to {hi:.0}{side}")
+            },
+        );
         let _ = write!(
             html,
-            r"<tr><td>{}</td><td>{}</td><td>{}</td></tr>",
+            r"<tr><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
             escape_html(&row.date),
             row.daily_detections,
-            avg
+            avg,
+            usual
         );
     }
     html.push_str("</tbody></table></div></details>");
@@ -449,6 +483,7 @@ fn render_diversity_table(
             bars: false,
             prior: &prior,
             listened: listened_shown.as_deref(),
+            expected: None,
         },
     );
     html.push_str(TABLE_OPEN);
