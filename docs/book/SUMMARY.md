@@ -48,6 +48,7 @@ phone bottom bar): **Today**, **Species**, **Patterns**, **Recordings**,
 
 - [Tuning Detection Accuracy](./guides/tuning.md)
 - [Same audio, same detections](./guides/parity.md)
+- [Measuring the Station](./guides/evaluation.md)
 - [Common Tasks](./guides/recipes.md)
 - [Migrating from BirdNET-Pi](./guides/migration.md)
 - [FAQ](./guides/faq.md)
