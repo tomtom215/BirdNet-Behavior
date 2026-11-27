@@ -180,32 +180,6 @@ pub(crate) fn conf_pill(percent: f64, floor: f64) -> String {
     )
 }
 
-/// Deterministic mini call-waveform (24 bars, bell envelope) for a feed row.
-/// `seed` keeps a given detection's bars stable across re-renders.
-#[must_use]
-#[allow(
-    clippy::cast_precision_loss,
-    clippy::cast_possible_truncation,
-    clippy::cast_sign_loss
-)]
-pub(crate) fn waveform(seed: u64, bars: usize) -> String {
-    let mut s = seed.wrapping_mul(9301).wrapping_add(49297);
-    let mut next = || {
-        s = (s.wrapping_mul(9301).wrapping_add(49297)) % 233_280;
-        s as f64 / 233_280.0
-    };
-    let mut out = String::from(r#"<span class="waveform" aria-hidden="true">"#);
-    for i in 0..bars {
-        let t = i as f64 / bars as f64;
-        let env = (t * std::f64::consts::PI).sin();
-        let v = env.mul_add(0.55 + next() * 0.40, 0.25);
-        let h = (v * 22.0).round().clamp(2.0, 22.0) as i64;
-        let _ = write!(out, r#"<span data-style="height:{h}px"></span>"#);
-    }
-    out.push_str("</span>");
-    out
-}
-
 /// Line + area sparkline SVG (zero-baselined), styled via `.bnb-spark`.
 ///
 /// Two degenerate shapes are handled explicitly, because the arithmetic that
@@ -363,12 +337,6 @@ mod tests {
         assert!(a.contains("BLJA"));
         assert!(a.contains("bnb-avatar lg"));
         assert!(a.contains("--sp:oklch"));
-    }
-
-    #[test]
-    fn waveform_has_requested_bar_count() {
-        let w = waveform(42, 24);
-        assert_eq!(w.matches("<span data-style=\"height:").count(), 24);
     }
 
     #[test]

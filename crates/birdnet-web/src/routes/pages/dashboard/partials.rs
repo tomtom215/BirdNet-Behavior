@@ -6,22 +6,12 @@ use axum::extract::State;
 use axum::http::{StatusCode, header};
 use serde::Deserialize;
 
-use crate::routes::pages::atoms::{avatar, conf_bar, sparkline, waveform};
+use crate::routes::pages::atoms::{avatar, conf_bar, sparkline};
 use crate::routes::pages::charts::{
     render_confidence_chart, render_daily_chart, render_hourly_chart,
 };
 use crate::routes::pages::{escape_html, simple_url_encode, today_date_string};
 use crate::state::AppState;
-
-/// Cheap deterministic seed for a detection's mini-waveform.
-fn row_seed(name: &str, time: &str) -> u64 {
-    let mut h: u64 = 1_469_598_103_934_665_603;
-    for b in name.bytes().chain(time.bytes()) {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(1_099_511_628_211);
-    }
-    h
-}
 
 // ---------------------------------------------------------------------------
 // Detections table partial
@@ -165,11 +155,10 @@ fn render_feed_row(
     let fresh_cls = if fresh { " fresh bnb-rise" } else { "" };
     let _ = write!(
         html,
-        r#"<div class="feed-row{fresh_cls}"><a class="ago mono dp-ago" href="/detections/detail?date={date_enc}&time={time_enc}&name={enc}&file={file_enc}" title="Open detection detail">{time_short}</a>{avatar}<div class="who"><div class="name"><a href="/species/detail?name={enc}" class="dp-link">{name}</a>{badge}</div><div class="sci mono">{sci}</div></div>{wave}{conf}{play}</div>"#,
+        r#"<div class="feed-row{fresh_cls}"><a class="ago mono dp-ago" href="/detections/detail?date={date_enc}&time={time_enc}&name={enc}&file={file_enc}" title="Open detection detail">{time_short}</a>{avatar}<div class="who"><div class="name"><a href="/species/detail?name={enc}" class="dp-link">{name}</a>{badge}</div><div class="sci mono">{sci}</div></div>{conf}{play}</div>"#,
         avatar = avatar(&d.com_name, shown, &d.sci_name, ""),
         name = escape_html(shown),
         sci = escape_html(&d.sci_name),
-        wave = waveform(row_seed(&d.com_name, &d.time), 24),
         conf = conf_bar(d.confidence, floor),
     );
 }
@@ -633,7 +622,46 @@ pub(super) async fn most_recent_partial(
 
 #[cfg(test)]
 mod tests {
-    use super::{TOP_SPECIES_ROWS, todays_top_species};
+    use super::{TOP_SPECIES_ROWS, render_feed_row, todays_top_species};
+
+    /// UIR-05. The feed row carried a 24-bar "call waveform" drawn from a hash of the
+    /// species name and the time: two detections of the same call looked different and
+    /// two different calls looked alike, on a page whose own lede promises "never a fake
+    /// waveform". Nothing about the recording is stored that could draw a real one, so a
+    /// row draws none.
+    #[test]
+    fn a_feed_row_draws_no_waveform_it_did_not_measure() {
+        let d = birdnet_db::sqlite::DetectionRow {
+            date: "2026-06-15".into(),
+            time: "06:01:00".into(),
+            sci_name: "Turdus merula".into(),
+            com_name: "Eurasian Blackbird".into(),
+            confidence: 0.91,
+            file_name: Some("Eurasian_Blackbird-91-2026-06-15-birdnet-06:01:00.mp3".into()),
+            ..Default::default()
+        };
+        let mut html = String::new();
+        render_feed_row(
+            &mut html,
+            &d,
+            &std::collections::HashMap::new(),
+            "2026-06-15",
+            false,
+            &birdnet_core::i18n::NameLocalizer::english(),
+            0.7,
+        );
+        // The counterpart: the row was drawn, with its name, confidence and play button.
+        assert!(html.contains("Eurasian Blackbird"), "{html}");
+        assert!(
+            html.contains("bnb-conf"),
+            "the row keeps its confidence: {html}"
+        );
+        assert!(html.contains("x-fplay"), "and its play button: {html}");
+        assert!(
+            !html.contains("waveform"),
+            "a feed row must not draw an invented waveform: {html}"
+        );
+    }
 
     /// A station with history: yesterday was busy with one species, today with
     /// another. The Today card must not answer with yesterday's.

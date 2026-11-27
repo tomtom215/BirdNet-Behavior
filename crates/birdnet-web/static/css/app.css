@@ -1059,7 +1059,7 @@ main {
 /* Feed rows (dashboard live feed) */
 .feed { display: flex; flex-direction: column; gap: var(--space-6); }
 .feed-row {
-  display: grid; grid-template-columns: 64px 36px 1fr 130px 92px auto;
+  display: grid; grid-template-columns: 64px 36px 1fr 92px auto;
   align-items: center; gap: var(--space-12); padding: var(--space-10); border-radius: var(--r-base);
   border: var(--bw) solid transparent; transition: background var(--dur-glow), border-color var(--dur-glow);
 }
@@ -1069,10 +1069,6 @@ main {
 .feed-row .who .sci  { font-family: var(--font-mono); font-size: var(--fs-sm); color: var(--fg-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .feed-row:hover { background: color-mix(in oklab, var(--fg) 3.5%, transparent); }
 .feed-row.fresh { background: color-mix(in oklab, var(--moss) 6%, var(--surface)); border-color: color-mix(in oklab, var(--moss) 30%, var(--border)); }
-
-/* Mini bar waveform (deterministic envelope rendered server-side) */
-.waveform { display: inline-flex; align-items: center; gap: 1.5px; height: 22px; }
-.waveform span { width: 2px; border-radius: var(--r-3xs); background: color-mix(in oklab, var(--moss) 60%, var(--fg-4)); }
 
 /* Activity heatmap (compact) */
 .miniheat-row { display: flex; gap: var(--space-6); align-items: center; margin-top: 3px; }
@@ -1305,7 +1301,7 @@ footer a:hover { color: var(--moss-ink); }
      scientific name (nowrap) held it at 143px, so at 320px the play button was drawn
      past the card and the whole page scrolled sideways. */
   .feed-row { grid-template-columns: 52px 30px minmax(0, 1fr) auto; }
-  .feed-row .waveform, .feed-row .bnb-conf { display: none; }
+  .feed-row .bnb-conf { display: none; }
   .topnav { padding: var(--space-8) var(--space-14); }
   .topnav-right .bnb-meta.mono { display: none; }
   table { display: block; overflow-x: auto; }
@@ -1389,7 +1385,7 @@ footer a:hover { color: var(--moss-ink); }
   }
   .bnb-conf .track, .progress, .st-vital .meter { border: 1px solid CanvasText; }
   .bnb-conf .fill, .progress-bar, .st-meter-fill, .meter-fill, .st-uptime span.up,
-  .bnb-conf-key i, .waveform span {
+  .bnb-conf-key i {
     forced-color-adjust: none;
     background: Highlight;
   }
@@ -5208,9 +5204,9 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 .x-play { width: 30px; height: 30px; border-radius: var(--r-pill); border: var(--bw) solid var(--border-2); background: var(--surface); color: var(--fg-2); font-size: var(--fs-2xs); cursor: pointer; flex: none; }
 .x-play:hover, .x-play.playing { border-color: var(--moss); color: var(--moss-ink); }
 
-/* Feed rows: force one-line names so every row is the SAME height (waveforms
-   & play buttons then line up; was uneven because long names wrapped) */
-#detections-table .feed-row { grid-template-columns: 50px 32px minmax(0,1fr) 88px 86px 30px; gap: var(--space-10); }
+/* Feed rows: force one-line names so every row is the SAME height (confidence
+   bars & play buttons then line up; was uneven because long names wrapped) */
+#detections-table .feed-row { grid-template-columns: 50px 32px minmax(0,1fr) 86px 30px; gap: var(--space-10); }
 #detections-table .feed-row .who { min-width: 0; }
 #detections-table .feed-row .who .name { display: flex; align-items: center; gap: 7px; min-width: 0; flex-wrap: nowrap; }
 #detections-table .feed-row .who .name > a { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -5218,8 +5214,8 @@ table.pt-tbl td { padding: var(--space-6) var(--space-8); border-bottom: var(--b
 
 /* Phone: the six-track desktop grid above is (1,1,0) and therefore beats the
    `@media (max-width: 720px) .feed-row` rule at the top of this sheet, which is
-   (0,1,0) — a media query does not raise specificity. The waveform and
-   confidence bar *are* hidden on a phone, but their 88px + 86px tracks are not,
+   (0,1,0) — a media query does not raise specificity. The confidence bar (and a
+   since-removed waveform) *were* hidden on a phone, but their 88px + 86px tracks were not,
    so `minmax(0,1fr)` collapsed the species-name column to exactly 0px: every
    row in the Today live feed rendered as time + banding-code + play button with
    ~200px of dead air and no name at all. Measured at 390px before this rule:
