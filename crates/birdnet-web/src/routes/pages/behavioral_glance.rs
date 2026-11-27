@@ -215,6 +215,8 @@ mod tests {
 
     fn nbf(name: &str, probability: f64, frequency: u64, is_trigger: bool) -> Neighbour {
         Neighbour {
+            chance: None,
+            verdict: crate::routes::pages::viz::cograph::Verdict::Chance,
             name: name.to_owned(),
             probability,
             frequency,

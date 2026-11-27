@@ -772,6 +772,117 @@ impl AnalyticsDb {
         })
     }
 
+    /// For every species' first detection in every session, the species beside it by clock hour:
+    /// the rows [`crate::null::neighbour_base`] turns into the chance level of the before/after
+    /// figure (CHT-12). `after` is the side (`true` the next species, `false` the previous one).
+    ///
+    /// # Errors
+    ///
+    /// `ExtensionLoad` when the extension (for `sessionize`) is not loaded; a database error
+    /// otherwise.
+    pub fn neighbours_by_hour_in(
+        &self,
+        after: bool,
+        window_minutes: u32,
+        scope: &types::SourceScope,
+    ) -> Result<Vec<crate::null::HourNeighbour>, AnalyticsError> {
+        self.require_extension()?;
+        let sql = queries::neighbours_by_hour_sql(after, window_minutes, scope);
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok(crate::null::HourNeighbour {
+                hour: u8::try_from(row.get::<_, i64>(0)?).unwrap_or(0),
+                anchor: row.get(1)?,
+                neighbour: row.get(2)?,
+                n: u64::try_from(row.get::<_, i64>(3)?).unwrap_or(0),
+            })
+        })?;
+        rows.map(|r| r.map_err(AnalyticsError::from)).collect()
+    }
+
+    /// What chance gives each cell of `a` (from [`Self::answers_in`] with the same `from`,
+    /// `within_minutes` and `scope`): the count again with the answering bird's times moved by
+    /// each of [`crate::null::answer_shifts`]'s offsets, and the cells that stand out above
+    /// them after allowing for every ordered pair tested (CHT-14). See [`types::AnswersChance`].
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::answers`].
+    pub fn answers_chance_in(
+        &self,
+        a: &types::Answers,
+        from: &str,
+        within_minutes: u32,
+        scope: &types::SourceScope,
+    ) -> Result<types::AnswersChance, AnalyticsError> {
+        use crate::null;
+        if !is_iso_date(from) {
+            return Err(AnalyticsError::InvalidData(format!(
+                "answers needs a YYYY-MM-DD date, got {from:?}"
+            )));
+        }
+        self.require_extension()?;
+        let n = a.species.len();
+        let shifts = null::answer_shifts(ANSWER_SHIFTS, 300, 1800);
+        if n < 2 {
+            return Ok(types::AnswersChance {
+                shifts_secs: shifts,
+                ..types::AnswersChance::default()
+            });
+        }
+        let mut shifted: Vec<Vec<f64>> = vec![Vec::with_capacity(shifts.len()); n * (n - 1)];
+        for &s in &shifts {
+            let sql = queries::answers_shifted_sql(&a.species, from, within_minutes, scope, s);
+            let flat: Vec<i64> = self.conn.query_row(&sql, [], |row| {
+                (0..n * (n - 1)).map(|k| row.get::<_, i64>(k)).collect()
+            })?;
+            for (k, v) in flat.into_iter().enumerate() {
+                #[allow(clippy::cast_precision_loss)]
+                shifted[k].push(v as f64);
+            }
+        }
+        let mut expected = vec![vec![0.0; n]; n];
+        let mut p = vec![vec![1.0; n]; n];
+        let mut flat_p = Vec::with_capacity(n * (n - 1));
+        let mut k = 0;
+        for i in 0..n {
+            for j in 0..n {
+                if i == j {
+                    continue;
+                }
+                #[allow(clippy::cast_precision_loss)]
+                let observed = a
+                    .exchanges
+                    .get(i)
+                    .and_then(|r| r.get(j))
+                    .copied()
+                    .unwrap_or(0) as f64;
+                let (mean, pv) = null::above_shifts(observed, &shifted[k]);
+                expected[i][j] = mean;
+                p[i][j] = pv;
+                flat_p.push(pv);
+                k += 1;
+            }
+        }
+        let flags = null::benjamini_hochberg(&flat_p, null::FDR_Q);
+        let mut marked = vec![vec![false; n]; n];
+        let mut it = flags.into_iter();
+        for (i, row) in marked.iter_mut().enumerate() {
+            for (j, cell) in row.iter_mut().enumerate() {
+                if i != j {
+                    *cell = it.next().unwrap_or(false);
+                }
+            }
+        }
+        Ok(types::AnswersChance {
+            shifts_secs: shifts,
+            expected,
+            p,
+            marked,
+            tests: n * (n - 1),
+        })
+    }
+
     fn require_extension(&self) -> Result<(), AnalyticsError> {
         if self.extension_loaded {
             Ok(())
@@ -782,6 +893,10 @@ impl AnalyticsDb {
         }
     }
 }
+
+/// How many time shifts the "who answers whom" chance level takes: each is one more run of the
+/// grid's query over twice the rows.
+pub const ANSWER_SHIFTS: usize = 19;
 
 /// Whether `s` is shaped `YYYY-MM-DD` (digits and two dashes; not whether it is a real date). The
 /// queries put such a date into SQL as a literal, so nothing else may reach them.

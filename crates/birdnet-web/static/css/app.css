@@ -4765,6 +4765,7 @@ svg[data-ck="marks"] { cursor: default; }
 .ck-dn1 { --c: var(--div-neg-1); } .ck-dn2 { --c: var(--div-neg-2); } .ck-dn3 { --c: var(--div-neg-3); }
 .ck-dp1 { --c: var(--div-pos-1); } .ck-dp2 { --c: var(--div-pos-2); } .ck-dp3 { --c: var(--div-pos-3); }
 .ck-track-sw { background: var(--chart-track); }
+.ck-ctrack { --c: var(--chart-track); }
 .ck-sw { background: var(--c); }
 .ck-fill { fill: var(--c); }
 /* A mark that fills from a gradient: full colour at its data end, a little toward
@@ -6656,7 +6657,8 @@ input[type="range"]:disabled { cursor: not-allowed; opacity: .5; }
 :root[data-illustration="plate"] .ck-m6, :root[data-illustration="plate"] .ck-m7,
 :root[data-illustration="plate"] .ck-dn1, :root[data-illustration="plate"] .ck-dn2,
 :root[data-illustration="plate"] .ck-dn3, :root[data-illustration="plate"] .ck-dp1,
-:root[data-illustration="plate"] .ck-dp2, :root[data-illustration="plate"] .ck-dp3 { --hatch: initial; }
+:root[data-illustration="plate"] .ck-dp2, :root[data-illustration="plate"] .ck-dp3,
+:root[data-illustration="plate"] .ck-ctrack { --hatch: initial; }
 :root[data-illustration="plate"] .ck-fill,
 :root[data-illustration="plate"] .bt-bar,
 :root[data-illustration="plate"] .chord-arc,

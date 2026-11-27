@@ -22,7 +22,7 @@
 
 use std::fmt::Write as _;
 
-use super::cograph::share_step;
+use super::cograph::{Verdict, lift_step, lift_words, share_step};
 use super::kit::tip;
 use super::{EMPTY, svg_a11y};
 use crate::routes::pages::escape_html;
@@ -38,6 +38,37 @@ pub struct Neighbour {
     pub frequency: u64,
     /// This neighbour is the middle species itself (it calls again).
     pub is_trigger: bool,
+    /// The share chance gives it (CHT-12): how often it is beside every other species in the
+    /// middle species' hours. `None` when no chance level was worked out.
+    pub chance: Option<f64>,
+    /// Whether it is beside the middle species more or less often than chance, once the
+    /// neighbours tested with it are allowed for.
+    pub verdict: Verdict,
+}
+
+impl Neighbour {
+    /// Its share over the share chance gives it.
+    #[must_use]
+    pub fn lift(&self) -> Option<f64> {
+        self.chance
+            .filter(|c| *c > 0.0)
+            .map(|c| self.probability / c)
+    }
+
+    /// The class of its ribbon: the diverging ramp where it stands out, the quiet track where
+    /// it is within chance, and the old share ramp when no chance level is known.
+    /// The bird calling again is never a finding about another species: the quiet track.
+    fn ribbon_class(&self, pmax: f64) -> String {
+        if self.is_trigger {
+            return "ck-ctrack".to_owned();
+        }
+        match (self.chance, self.verdict, self.lift()) {
+            (None, _, _) => format!("ck-q{}", share_step(self.probability / pmax)),
+            (Some(_), Verdict::More, Some(l)) => format!("ck-dp{}", lift_step(l)),
+            (Some(_), Verdict::Less, Some(l)) => format!("ck-dn{}", lift_step(l)),
+            _ => "ck-ctrack".to_owned(),
+        }
+    }
 }
 
 const W: f64 = 700.0;
@@ -147,8 +178,8 @@ pub fn neighbours_flow(
         offset += ribbon;
         let _ = write!(
             flows,
-            r#"<path class="fl-flow ck-q{step}" d="{d}" data-tip="{data_tip}" data-ck-i="{index}" data-ck-s="{token}" data-ck-f="{token}"/>"#,
-            step = share_step(n.probability / pmax),
+            r#"<path class="fl-flow {class}" d="{d}" data-tip="{data_tip}" data-ck-i="{index}" data-ck-s="{token}" data-ck-f="{token}"/>"#,
+            class = n.ribbon_class(pmax),
             d = band(
                 LEFT_X + NODE_W,
                 top + (node_h - ribbon) / 2.0,
@@ -176,8 +207,8 @@ pub fn neighbours_flow(
         offset += ribbon;
         let _ = write!(
             flows,
-            r#"<path class="fl-flow ck-q{step}" d="{d}" data-tip="{data_tip}" data-ck-i="{index}" data-ck-s="{token}" data-ck-f="{token}"/>"#,
-            step = share_step(n.probability / pmax),
+            r#"<path class="fl-flow {class}" d="{d}" data-tip="{data_tip}" data-ck-i="{index}" data-ck-s="{token}" data-ck-f="{token}"/>"#,
+            class = n.ribbon_class(pmax),
             d = band(
                 MID_X + MID_W,
                 mid_y,
@@ -226,21 +257,43 @@ fn neighbour_tip(trigger: &str, n: &Neighbour, side: &str) -> String {
     } else {
         format!("{trigger} → {}", n.name)
     };
+    let share = format!("{:.0}%", n.probability * 100.0);
+    let sessions = n.frequency.to_string();
+    let chance = n.chance.map(|c| format!("{:.0}%", c * 100.0));
+    let against = n.lift().map(|l| {
+        format!(
+            "{}, {}",
+            lift_words(l),
+            match n.verdict {
+                Verdict::More => "more often than chance",
+                Verdict::Less => "less often than chance",
+                Verdict::Chance => "within chance",
+            }
+        )
+    });
+    let mut rows = vec![
+        (
+            if side == "before" {
+                "Of sessions with a bird before"
+            } else {
+                "Of sessions with a bird after"
+            },
+            share.as_str(),
+            None,
+        ),
+        ("Sessions", sessions.as_str(), None),
+    ];
+    if let Some(c) = &chance {
+        rows.push(("Chance gives", c.as_str(), None));
+    }
+    if let Some(a) = &against {
+        rows.push(("Against chance", a.as_str(), None));
+    }
     tip(
         &heading,
-        &[
-            (
-                if side == "before" {
-                    "Of sessions with a bird before"
-                } else {
-                    "Of sessions with a bird after"
-                },
-                &format!("{:.0}%", n.probability * 100.0),
-                None,
-            ),
-            ("Sessions", &n.frequency.to_string(), None),
-        ],
-        n.is_trigger.then_some("The same species calling again."),
+        &rows,
+        n.is_trigger
+            .then_some("The same species calling again: not tested against chance."),
     )
 }
 
@@ -250,6 +303,8 @@ mod tests {
 
     fn n(name: &str, p: f64, f: u64) -> Neighbour {
         Neighbour {
+            chance: None,
+            verdict: Verdict::Chance,
             name: name.to_owned(),
             probability: p,
             frequency: f,

@@ -630,9 +630,26 @@ pub(super) async fn analytics_next_partial(
     let result = tokio::task::spawn_blocking(move || {
         state
             .with_analytics_read(|adb| {
-                let before = adb.previous_species(&trigger, 60, 5)?;
-                let after = adb.next_species(&trigger, 60, 5)?;
-                Ok((before, after, adb.extension_version()))
+                // Every neighbour, not the five most frequent: they are ranked by how far they
+                // stand from chance, which the most frequent need not be (CHT-12).
+                let before = adb.previous_species(&trigger, 60, NEIGHBOURS_TESTED)?;
+                let after = adb.next_species(&trigger, 60, NEIGHBOURS_TESTED)?;
+                let scope = birdnet_behavioral::types::SourceScope::default();
+                let base_before = birdnet_behavioral::null::neighbour_base(
+                    &trigger,
+                    &adb.neighbours_by_hour_in(false, 60, &scope)?,
+                );
+                let base_after = birdnet_behavioral::null::neighbour_base(
+                    &trigger,
+                    &adb.neighbours_by_hour_in(true, 60, &scope)?,
+                );
+                Ok((
+                    before,
+                    after,
+                    base_before,
+                    base_after,
+                    adb.extension_version(),
+                ))
             })
             .unwrap_or_else(|| {
                 Err(
@@ -645,7 +662,7 @@ pub(super) async fn analytics_next_partial(
     .await;
 
     match result {
-        Ok(Ok((before, after, version))) => {
+        Ok(Ok((before, after, base_before, base_after, version))) => {
             if before.is_empty() && after.is_empty() {
                 return (
                     StatusCode::OK,
@@ -664,7 +681,16 @@ pub(super) async fn analytics_next_partial(
                 .iter()
                 .map(|p| (p.predicted_species.as_str(), p.probability, p.frequency))
                 .collect();
-            let mut html = render_neighbour_figure(&display, &before, &after, &names, &slots);
+            let (before, after, tested) = super::behavioral_neighbours::rate_sides(
+                &display,
+                &before,
+                &after,
+                &base_before,
+                &base_after,
+                5,
+            );
+            let mut html =
+                render_neighbour_figure(&display, &before, &after, tested, &names, &slots);
             let who = super::simple_url_encode(&display);
             html.push_str(&method_panel(
                 "sequence_next_node",
@@ -673,9 +699,10 @@ pub(super) async fn analytics_next_partial(
                     ("Bird looked at", names.name_of_stored(&display).to_owned()),
                     ("What that is", "the species of the most recent detection".to_owned()),
                     ("Sessions", "runs of detections with no gap longer than 60 minutes".to_owned()),
-                    ("Neighbours listed", "up to 5 on each side".to_owned()),
+                    ("Neighbours listed", "up to 5 on each side, furthest from chance first".to_owned()),
+                    ("Chance", "how often each species is beside every other species' first detection in the same clock hours; exact binomial test, Benjamini–Hochberg at 5% over both sides".to_owned()),
                 ],
-                "For each session in which the bird was heard, the species heard just before its first detection and just after it. The probability is the share of the sessions that had a bird on that side, not of every session the bird was heard in: a session the bird opens has no bird before it, and one it closes has none after. Birds heard in the same recording as the bird are not counted as before or after it.",
+                "For each session in which the bird was heard, the species heard just before its first detection and just after it. The probability is the share of the sessions that had a bird on that side, not of every session the bird was heard in: a session the bird opens has no bird before it, and one it closes has none after. Birds heard in the same recording as the bird are not counted as before or after it. A neighbour is marked only where its share differs from the share chance gives it, which is how often it is heard beside every other species in the hours this bird is heard: so the commonest bird of those hours is not listed first for being common. Exploratory and associational: being heard next is a timing, not a behaviour.",
                 &[
                     ("After, as JSON", api("next-species", &format!("after={who}&window=60&limit=5"))),
                     ("Before, as JSON", api("previous-species", &format!("before={who}&window=60&limit=5"))),
@@ -704,28 +731,53 @@ pub(super) async fn analytics_next_partial(
 #[cfg(feature = "analytics")]
 fn render_neighbour_figure(
     trigger: &str,
-    before: &[(&str, f64, u64)],
-    after: &[(&str, f64, u64)],
+    before: &[super::behavioral_neighbours::Rated],
+    after: &[super::behavioral_neighbours::Rated],
+    tested: usize,
     names: &birdnet_core::i18n::NameLocalizer,
     slots: &super::viz::kit::SpeciesSlots,
 ) -> String {
+    use super::viz::cograph::Verdict;
     use super::viz::flow::{Neighbour, neighbours_flow};
-    let to_neighbours = |rows: &[(&str, f64, u64)]| -> Vec<Neighbour> {
+    let to_neighbours = |rows: &[super::behavioral_neighbours::Rated]| -> Vec<Neighbour> {
         rows.iter()
-            .map(|&(species, probability, frequency)| Neighbour {
-                name: names.name_of_stored(species).to_owned(),
-                probability,
-                frequency,
-                is_trigger: species == trigger,
+            .map(|r| Neighbour {
+                name: names.name_of_stored(&r.species).to_owned(),
+                probability: r.probability,
+                frequency: r.frequency,
+                is_trigger: r.species == trigger,
+                chance: r.chance,
+                verdict: r.verdict,
             })
             .collect()
     };
     let (b, a) = (to_neighbours(before), to_neighbours(after));
     let shown = names.name_of_stored(trigger);
     let mut html = String::new();
+    let standing = b
+        .iter()
+        .chain(&a)
+        .filter(|n| n.verdict != Verdict::Chance)
+        .count();
     if let Some(sentence) = glance::neighbour_sentence(shown, &b, &a) {
         html.push_str(&super::frame::takeaway(&sentence));
     }
+    let _ = write!(
+        html,
+        r#"<p class="bnb-meta">{}</p>"#,
+        if standing == 0 {
+            format!(
+                "Nothing stands out: of the {tested} neighbours tested, none is heard beside {} more, or less, often than it is beside every bird in the same hours. The shares below are what those hours give.",
+                escape_html(shown)
+            )
+        } else {
+            format!(
+                "{standing} of the {tested} neighbours tested {} heard beside {} more or less often than chance gives (coloured); a grey ribbon is within chance.",
+                if standing == 1 { "is" } else { "are" },
+                escape_html(shown)
+            )
+        }
+    );
     html.push_str(r#"<div class="fl-fig">"#);
     html.push_str(&neighbours_flow(shown, &b, &a, &slots.class(trigger)));
     html.push_str(r#"<div class="fl-lists">"#);
@@ -778,7 +830,7 @@ fn render_neighbours(
     html: &mut String,
     side: &str,
     trigger: &str,
-    rows: &[(&str, f64, u64)],
+    rows: &[super::behavioral_neighbours::Rated],
     names: &birdnet_core::i18n::NameLocalizer,
 ) {
     let _ = write!(
@@ -793,9 +845,25 @@ fn render_neighbours(
     html.push_str("<table class=\"bh-neighbours\" data-fits-phone id=\"nb-");
     html.push_str(&side.to_lowercase());
     html.push_str(
-        "\"><thead><tr><th>Species</th><th>Probability</th><th>Observed</th></tr></thead><tbody>",
+        "\"><thead><tr><th>Species</th><th>Probability</th><th>Observed</th><th>Chance gives</th><th>Against chance</th></tr></thead><tbody>",
     );
-    for &(species, probability, frequency) in rows {
+    for r in rows {
+        let (species, probability, frequency) = (r.species.as_str(), r.probability, r.frequency);
+        let chance = r
+            .chance
+            .map_or_else(|| "not tested".to_owned(), |c| format!("{:.0}%", c * 100.0));
+        let against = match (r.chance.filter(|c| *c > 0.0), r.verdict) {
+            (None, _) => "the same bird again".to_owned(),
+            (Some(c), v) => format!(
+                "{}, {}",
+                super::viz::cograph::lift_words(probability / c),
+                match v {
+                    super::viz::cograph::Verdict::More => "more often than chance",
+                    super::viz::cograph::Verdict::Less => "less often than chance",
+                    super::viz::cograph::Verdict::Chance => "within chance",
+                }
+            ),
+        };
         // The trigger appears among its own follow-ons — the same bird calling
         // again — which under a heading that reads "which tends to turn up
         // **next**" is confusing rather than informative. Label it instead of
@@ -810,7 +878,7 @@ fn render_neighbours(
         let cls = if pct >= 50.0 { "moss" } else { "" };
         let _ = write!(
             html,
-            r#"<tr><td>{sp}{note}</td><td><span class="bnb-pill {cls}">{pct:.0}%</span></td><td>{frequency}</td></tr>"#,
+            r#"<tr><td>{sp}{note}</td><td><span class="bnb-pill {cls}">{pct:.0}%</span></td><td>{frequency}</td><td>{chance}</td><td>{against}</td></tr>"#,
             sp = escape_html(names.name_of_stored(species)),
             note = if self_follow {
                 r#" <span class="bnb-meta">(calls again)</span>"#
@@ -828,6 +896,11 @@ pub(super) async fn analytics_next_partial(
 ) -> impl axum::response::IntoResponse {
     analytics_unavailable_html("Next species predictions")
 }
+
+/// How many neighbours on each side the before/after figure tests against chance before it
+/// keeps the five furthest from it (CHT-12).
+#[cfg(feature = "analytics")]
+const NEIGHBOURS_TESTED: u32 = 50;
 
 /// How far back "who answers whom" looks, in days, and how many birds it compares.
 #[cfg(feature = "analytics")]
@@ -852,8 +925,16 @@ pub(super) async fn analytics_answers_partial(
         let slots = station_slots(&state)?;
         state
             .with_analytics_read(|adb| {
-                adb.answers(&from, 1, ANSWERS_SPECIES)
-                    .map(|a| (a, adb.extension_version(), slots))
+                let a = adb.answers(&from, 1, ANSWERS_SPECIES)?;
+                // The chance level is part of the answer: a failed shift is an error, not a
+                // grid drawn without one (CHT-14).
+                let c = adb.answers_chance_in(
+                    &a,
+                    &from,
+                    1,
+                    &birdnet_behavioral::types::SourceScope::default(),
+                )?;
+                Ok((a, c, adb.extension_version(), slots))
             })
             .unwrap_or_else(|| {
                 Err(
@@ -865,14 +946,15 @@ pub(super) async fn analytics_answers_partial(
     })
     .await;
     match result {
-        Ok(Ok((a, version, slots))) => {
+        Ok(Ok((a, chance, version, slots))) => {
             let shown: Vec<String> = a
                 .species
                 .iter()
                 .map(|s| names.name_of_stored(s).to_owned())
                 .collect();
             let window = u32::try_from(ANSWERS_DAYS).unwrap_or(30);
-            let mut html = super::behavioral_answers::render(&a, &shown, window, &slots);
+            let mut html =
+                super::behavioral_answers::render(&a, Some(&chance), &shown, window, &slots);
             if a.species.len() >= 2 {
                 html.push_str(&method_panel(
                     "sequence_count",
@@ -881,6 +963,7 @@ pub(super) async fn analytics_answers_partial(
                         ("Birds compared", format!("the {} heard most in the last {ANSWERS_DAYS} days", a.species.len())),
                         ("Counted since", from_date.clone()),
                         ("Replies", "heard within a minute after, on the same day".to_owned()),
+                        ("Chance", format!("{} shifts of the second bird's times by 5 to 30 minutes, seed {}", chance.shifts_secs.len(), birdnet_behavioral::null::NULL_SEED)),
                     ],
                     "A cell counts how many times the row bird was heard and then the column bird within a minute, without overlap: one bird singing three times before one reply is one exchange. Two birds in the same recording are not a reply, and the grid is not symmetric.",
                     &[("The numbers as JSON", api("answers", &format!("from={from_date}&within=1&top={ANSWERS_SPECIES}")))],

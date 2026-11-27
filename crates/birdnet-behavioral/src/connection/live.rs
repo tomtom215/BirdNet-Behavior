@@ -1273,3 +1273,130 @@ fn live_sequences_and_sessions_keep_sources_apart_only_when_asked() {
     let json = serde_json::to_value(&pooled[0]).unwrap();
     assert!(json.get("source").is_none(), "{json}");
 }
+
+/// CHT-14: who answers whom against chance, on the real extension. Three birds sing at random
+/// times through the same two morning hours for 20 days, independently: each pair is heard
+/// "within a minute" dozens of times, and no cell stands out above the same count with the
+/// answering bird's clock moved by minutes. Counterpart: a fourth bird that replies to the Robin
+/// 20 seconds after it, every time, is the one cell marked. And at a shift of zero the shifted
+/// query counts what the grid counts.
+#[test]
+#[allow(clippy::many_single_char_names)] // a, c, d, s, t, x: the fixture's own short names
+fn live_answers_against_chance() {
+    let Some((db, _tmp)) = loaded_db() else {
+        return;
+    };
+    let birds = [
+        ("Erithacus rubecula", "European Robin"),
+        ("Turdus merula", "Eurasian Blackbird"),
+        ("Troglodytes troglodytes", "Eurasian Wren"),
+    ];
+    let mut x: u64 = 0x2545_f491_4f6c_dd1d;
+    let mut next = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    let mut values = Vec::new();
+    let mut robin_times = Vec::new();
+    for day in 1..=20 {
+        let d = format!("2024-05-{day:02}");
+        for (k, (s, c)) in birds.iter().enumerate() {
+            for _ in 0..(40 - 8 * k) {
+                let secs = 5 * 3600 + next() % 7200;
+                let t = format!("{:02}:{:02}:{:02}", secs / 3600, secs / 60 % 60, secs % 60);
+                if k == 0 {
+                    robin_times.push((d.clone(), secs));
+                }
+                values.push(format!(
+                    "('{d}', '{t}', '{s}', '{c}', 0.9, epoch(TIMESTAMP '{d} {t}'))"
+                ));
+            }
+        }
+    }
+    db.conn()
+        .execute_batch(&format!(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) VALUES {};",
+            values.join(", ")
+        ))
+        .expect("seed insert");
+    let a = db.answers("2024-01-01", 1, 3).unwrap();
+    assert!(
+        a.exchanges[0][1] > 20,
+        "they do share minutes: {:?}",
+        a.exchanges
+    );
+    let zero: Vec<i64> = db
+        .conn()
+        .query_row(
+            &queries::answers_shifted_sql(
+                &a.species,
+                "2024-01-01",
+                1,
+                &types::SourceScope::default(),
+                0,
+            ),
+            [],
+            |row| (0..6).map(|k| row.get::<_, i64>(k)).collect(),
+        )
+        .unwrap();
+    let grid: Vec<i64> = (0..3)
+        .flat_map(|i| (0..3).filter(move |&j| j != i).map(move |j| (i, j)))
+        .map(|(i, j)| a.exchanges[i][j])
+        .collect();
+    assert_eq!(zero, grid, "a shift of zero counts what the grid counts");
+    let c = db
+        .answers_chance_in(&a, "2024-01-01", 1, &types::SourceScope::default())
+        .unwrap();
+    eprintln!("[live] chance: {:?} {:?}", c.expected, c.p);
+    assert_eq!(c.tests, 6);
+    assert!(
+        c.marked.iter().flatten().all(|m| !m),
+        "independent birds: nothing stands out: {:?}",
+        c.p
+    );
+
+    let (s, cn) = ("Sitta europaea", "Eurasian Nuthatch");
+    let replies: Vec<String> = robin_times
+        .iter()
+        .map(|(d, secs)| {
+            let r = secs + 20;
+            let t = format!("{:02}:{:02}:{:02}", r / 3600, r / 60 % 60, r % 60);
+            format!("('{d}', '{t}', '{s}', '{cn}', 0.9, epoch(TIMESTAMP '{d} {t}'))")
+        })
+        .collect();
+    db.conn()
+        .execute_batch(&format!(
+            "INSERT INTO detections (Date, Time, Sci_Name, Com_Name, Confidence, detected_at_utc) VALUES {};",
+            replies.join(", ")
+        ))
+        .expect("seed replies");
+    let a = db.answers("2024-01-01", 1, 4).unwrap();
+    let c = db
+        .answers_chance_in(&a, "2024-01-01", 1, &types::SourceScope::default())
+        .unwrap();
+    let robin = a
+        .species
+        .iter()
+        .position(|n| n == "European Robin")
+        .unwrap();
+    let nut = a
+        .species
+        .iter()
+        .position(|n| n == "Eurasian Nuthatch")
+        .unwrap();
+    assert!(
+        c.marked[robin][nut],
+        "the planted reply stands out: {:?}",
+        c.p
+    );
+    let others = c
+        .marked
+        .iter()
+        .enumerate()
+        .flat_map(|(i, r)| r.iter().enumerate().map(move |(j, &m)| (i, j, m)))
+        .filter(|&(i, j, m)| m && (i, j) != (robin, nut))
+        .count();
+    assert_eq!(others, 0, "and nothing else does: {:?}", c.p);
+}

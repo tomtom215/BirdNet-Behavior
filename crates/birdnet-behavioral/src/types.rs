@@ -255,6 +255,23 @@ pub struct Answers {
     pub within_secs: u32,
 }
 
+/// What chance gives each cell of [`Answers`] (CHT-14): the same count with the answering
+/// bird's times moved by minutes ([`crate::null::answer_shifts`]), and which cells stand out.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct AnswersChance {
+    /// The shifts used, in seconds.
+    pub shifts_secs: Vec<i64>,
+    /// `expected[row][column]`: the mean count over the shifts.
+    pub expected: Vec<Vec<f64>>,
+    /// `p[row][column]`: one-sided p-value that the count is above its shifts.
+    pub p: Vec<Vec<f64>>,
+    /// `marked[row][column]`: the cell stands out after Benjamini–Hochberg over every
+    /// ordered pair tested.
+    pub marked: Vec<Vec<bool>>,
+    /// Ordered pairs tested.
+    pub tests: usize,
+}
+
 /// Sequence pattern *match timings* (output of `sequence_match_events`, v0.8.0).
 ///
 /// Like [`PatternMatch`] but reports *when* each step of the ordered sequence
