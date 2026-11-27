@@ -40,6 +40,7 @@ pub fn router() -> Router<AppState> {
         .route("/detections/export/ebird", get(ebird::export_ebird))
         .route("/detections/export/history", get(effort::export_history))
         .route("/effort/export", get(effort::export_effort))
+        .route("/effort/export/utc", get(effort::export_effort_utc))
         .route("/detections/export/birddb", get(birddb::export_birddb))
         .route("/detections/export/raven", get(raven::export_raven))
         .route(

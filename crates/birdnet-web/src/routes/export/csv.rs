@@ -55,13 +55,16 @@ pub(super) async fn export_detections(
             // The model each row was made with (R-1): joined in memory over
             // the run table, which is one row per daemon start.
             let runs = birdnet_db::sqlite::model_attribution(conn)?;
-            Ok::<_, birdnet_db::sqlite::DbError>((rows, runs))
+            // Where, with what and under which clock each row was recorded
+            // (RES-12, RES-22, MSC-13): read once, attributed in memory.
+            let provenance = RowProvenance::load(conn)?;
+            Ok::<_, birdnet_db::sqlite::DbError>((rows, (runs, provenance)))
         })
     })
     .await;
 
     match result {
-        Ok(Ok(((detections, truncated), runs))) => {
+        Ok(Ok(((detections, truncated), (runs, provenance)))) => {
             if truncated {
                 return export_too_large();
             }
@@ -69,7 +72,7 @@ pub(super) async fn export_detections(
                 let total = detections.len();
                 let detections: Vec<ExportedDetection<'_>> = detections
                     .iter()
-                    .map(|row| ExportedDetection::new(row, &runs))
+                    .map(|row| ExportedDetection::new(row, &runs, &provenance))
                     .collect();
                 (
                     StatusCode::OK,
@@ -82,7 +85,7 @@ pub(super) async fn export_detections(
                 )
                     .into_response()
             } else {
-                let csv = detections_to_csv(&detections, &runs);
+                let csv = detections_to_csv_with(&detections, &runs, &provenance);
                 (
                     StatusCode::OK,
                     [
@@ -199,12 +202,80 @@ struct ExportedDetection<'a> {
     model_name: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     model_sha256: Option<&'a str>,
+    #[serde(flatten)]
+    recorded: Recorded<'a>,
+}
+
+/// Where, with what and under which clock a row was recorded.
+#[derive(serde::Serialize, Default)]
+struct Recorded<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    station_id: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    deployment_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_device: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clock_state: Option<&'static str>,
+}
+
+/// The station's identity, deployments, device records and clock record, for
+/// attributing exported rows.
+#[derive(Default)]
+pub(super) struct RowProvenance {
+    sources: birdnet_db::station::SourceProvenance,
+    clock: birdnet_db::capture_ledger::ClockHistory,
+}
+
+impl RowProvenance {
+    fn load(conn: &rusqlite::Connection) -> Result<Self, birdnet_db::sqlite::DbError> {
+        let sources = birdnet_db::station::SourceProvenance::load(conn).map_err(|e| match e {
+            birdnet_db::station::StationError::Sqlite(e) => birdnet_db::sqlite::DbError::Sqlite(e),
+            birdnet_db::station::StationError::Invalid(m) => birdnet_db::sqlite::DbError::Schema(m),
+        })?;
+        Ok(Self {
+            sources,
+            clock: birdnet_db::capture_ledger::ClockHistory::load(conn)?,
+        })
+    }
+
+    /// The row's attribution. A row imported from elsewhere was timed by
+    /// another station's clock and heard by another station's device, so it
+    /// is given no deployment, device or clock state of this station's; a row
+    /// with no instant or no source is given only what does not need one.
+    fn of<'a>(&'a self, row: &birdnet_db::sqlite::DetectionRow) -> Recorded<'a> {
+        let station_id = self.sources.station_uuid.as_deref();
+        if row.import_batch_id.is_some() {
+            return Recorded {
+                station_id: None,
+                ..Recorded::default()
+            };
+        }
+        let Some(at) = row.detected_at_utc else {
+            return Recorded {
+                station_id,
+                ..Recorded::default()
+            };
+        };
+        let source = row.source.as_deref();
+        Recorded {
+            station_id,
+            deployment_id: source
+                .and_then(|s| self.sources.deployment_at(s, at))
+                .map(|d| d.id),
+            source_device: source
+                .and_then(|s| self.sources.device_at(s, at))
+                .map(|d| d.device_seq),
+            clock_state: Some(self.clock.state_at(at).as_str()),
+        }
+    }
 }
 
 impl<'a> ExportedDetection<'a> {
     fn new(
         row: &'a birdnet_db::sqlite::DetectionRow,
         runs: &'a birdnet_db::sqlite::ModelAttribution,
+        provenance: &'a RowProvenance,
     ) -> Self {
         let model = runs.for_row(row.run_id, row.model_id.as_deref());
         Self {
@@ -212,6 +283,7 @@ impl<'a> ExportedDetection<'a> {
             event_date: event_date_of(row),
             model_name: model.map(|m| m.model_name.as_str()),
             model_sha256: model.map(|m| m.model_sha256.as_str()),
+            recorded: provenance.of(row),
         }
     }
 }
@@ -253,23 +325,44 @@ fn event_date_of(row: &birdnet_db::sqlite::DetectionRow) -> Option<String> {
 /// written, empty where the station did not record one (a row from before it
 /// did, or whose clip could not be read when it was written): unknown, not
 /// computed from the file there now.
+///
+/// Then, appended likewise (RES-12, RES-22, MSC-13): `Station_Id` (this
+/// station's UUID), `Deployment_Id` (the operator-stated deployment of the
+/// row's source in force at its instant; empty when none was stated),
+/// `Source_Device` (which of the source's devices it was, numbered from 1;
+/// the same device string keeps its number) and `Clock_State` (`synced`,
+/// `unsynced`, `unknown` or `unset`: what the system said of its clock when
+/// the row's instant was stamped; `unknown` before the station recorded its
+/// clock). All four are empty on an imported row, which another station
+/// recorded and timed.
+#[cfg(test)]
 fn detections_to_csv(
     rows: &[birdnet_db::sqlite::DetectionRow],
     runs: &birdnet_db::sqlite::ModelAttribution,
+) -> String {
+    detections_to_csv_with(rows, runs, &RowProvenance::default())
+}
+
+/// [`detections_to_csv`] with each row's attribution.
+fn detections_to_csv_with(
+    rows: &[birdnet_db::sqlite::DetectionRow],
+    runs: &birdnet_db::sqlite::ModelAttribution,
+    provenance: &RowProvenance,
 ) -> String {
     let mut csv = String::with_capacity(rows.len() * 240);
     csv.push_str(
         "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name,\
          Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256,Model_Id,Model_Agreement,\
          Source,Review_Verdict,Chunk_Offset_Secs,Clip_Pruned_At,Import_Batch_Id,\
-         BirdWeather_Soundscape_Id,Detection_Id,Clip_SHA256,Clip_Bytes\n",
+         BirdWeather_Soundscape_Id,Detection_Id,Clip_SHA256,Clip_Bytes,Station_Id,Deployment_Id,Source_Device,Clock_State\n",
     );
 
     for row in rows {
         let model = runs.for_row(row.run_id, row.model_id.as_deref());
+        let recorded = provenance.of(row);
         let _ = writeln!(
             csv,
-            "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             escape_csv(&row.date),
             escape_csv(&row.time),
             escape_csv(&row.sci_name),
@@ -306,6 +399,14 @@ fn detections_to_csv(
                 .map_or(String::new(), escape_csv),
             row.clip_sha256.as_deref().map_or(String::new(), escape_csv),
             row.clip_bytes.map_or(String::new(), |v| v.to_string()),
+            recorded.station_id.map_or(String::new(), escape_csv),
+            recorded
+                .deployment_id
+                .map_or(String::new(), |v| v.to_string()),
+            recorded
+                .source_device
+                .map_or(String::new(), |v| v.to_string()),
+            recorded.clock_state.unwrap_or_default(),
         );
     }
 
@@ -344,7 +445,7 @@ mod tests {
             "Date,Time,Sci_Name,Com_Name,Confidence,Lat,Lon,Cutoff,Week,Sens,Overlap,File_Name,\
              Event_Date,Detected_At_UTC,Run_Id,Model_Name,Model_SHA256,Model_Id,Model_Agreement,\
              Source,Review_Verdict,Chunk_Offset_Secs,Clip_Pruned_At,Import_Batch_Id,\
-             BirdWeather_Soundscape_Id,Detection_Id,Clip_SHA256,Clip_Bytes"
+             BirdWeather_Soundscape_Id,Detection_Id,Clip_SHA256,Clip_Bytes,Station_Id,Deployment_Id,Source_Device,Clock_State"
         );
     }
 
@@ -395,7 +496,93 @@ mod tests {
                 ("Detection_Id", "6f1c2a52-0e4b-4c1e-9a77-0d6f3b8e2c11"),
                 ("Clip_SHA256", "ab".repeat(32).as_str()),
                 ("Clip_Bytes", "4321"),
+                ("Station_Id", ""),
+                ("Deployment_Id", ""),
+                ("Source_Device", ""),
+                ("Clock_State", ""),
             ]
+        );
+    }
+
+    /// RES-12 / RES-22 / MSC-13: each row names the station, the deployment
+    /// and device of its source at its instant, and the clock state it was
+    /// stamped under; an imported row names none of this station's.
+    #[test]
+    fn each_row_names_its_station_deployment_device_and_clock() {
+        use birdnet_db::audio_sources::{AudioSourceStore, NewAudioSource, SourceKind};
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        birdnet_db::migration::migrate(&conn).unwrap();
+        conn.insert(&NewAudioSource::defaults(
+            "mic",
+            SourceKind::UsbAlsa,
+            "plughw:1,0",
+        ))
+        .unwrap();
+        let d = birdnet_db::station::open_deployment(
+            &conn,
+            &birdnet_db::station::NewDeployment {
+                source_id: "mic".into(),
+                start_utc: 1_000,
+                stated: birdnet_db::station::DeploymentFields::default(),
+            },
+            1_000,
+        )
+        .unwrap();
+        conn.execute_batch(
+            "UPDATE audio_source_devices SET from_utc = NULL;
+             INSERT INTO clock_observations (at_utc, state, authority) VALUES (1500, 'unsynced', 'timedatectl'),
+                                                                              (3000, 'synced', 'timedatectl');",
+        )
+        .unwrap();
+        let provenance = RowProvenance::load(&conn).unwrap();
+        let station = birdnet_db::station::station_uuid(&conn).unwrap();
+        let row = |at: i64, import: Option<i64>| birdnet_db::sqlite::DetectionRow {
+            date: "2026-04-05".into(),
+            time: "06:07:08".into(),
+            sci_name: "Turdus merula".into(),
+            com_name: "Eurasian Blackbird".into(),
+            confidence: 0.9,
+            source: Some("mic".into()),
+            detected_at_utc: Some(at),
+            import_batch_id: import,
+            ..Default::default()
+        };
+        let csv = detections_to_csv_with(
+            &[
+                row(2_000, None),
+                row(3_500, None),
+                row(900, None),
+                row(2_000, Some(4)),
+            ],
+            &birdnet_db::sqlite::ModelAttribution::default(),
+            &provenance,
+        );
+        let tails: Vec<Vec<String>> = csv
+            .lines()
+            .skip(1)
+            .map(|l| {
+                l.rsplitn(5, ',')
+                    .take(4)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+            .map(|mut v| {
+                v.reverse();
+                v
+            })
+            .collect();
+        let id = d.id.to_string();
+        assert_eq!(tails[0], [station.as_str(), id.as_str(), "1", "unsynced"]);
+        assert_eq!(tails[1], [station.as_str(), id.as_str(), "1", "synced"]);
+        assert_eq!(
+            tails[2],
+            [station.as_str(), "", "1", "unknown"],
+            "before the deployment and before the clock was recorded"
+        );
+        assert_eq!(
+            tails[3],
+            ["", "", "", ""],
+            "an imported row is not this station's"
         );
     }
 
@@ -453,6 +640,7 @@ mod tests {
         let v = serde_json::to_value(ExportedDetection::new(
             &first,
             &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+            &RowProvenance::default(),
         ))
         .unwrap();
         assert_eq!(v["event_date"], "2026-10-25T01:30:00+01:00");
@@ -460,6 +648,7 @@ mod tests {
         let v = serde_json::to_value(ExportedDetection::new(
             &unplaceable,
             &birdnet_db::sqlite::ModelAttribution::from_runs(runs),
+            &RowProvenance::default(),
         ))
         .unwrap();
         assert!(v.get("event_date").is_none(), "{v}");
@@ -492,7 +681,7 @@ mod tests {
         );
         let lines: Vec<&str> = csv.lines().collect();
         assert!(
-            lines[1].ends_with(",\"perch,v2\",2,,,,,,,,,"),
+            lines[1].ends_with(",\"perch,v2\",2,,,,,,,,,,,,,"),
             "{}",
             lines[1]
         );
@@ -504,6 +693,7 @@ mod tests {
         let v = serde_json::to_value(ExportedDetection::new(
             &two,
             &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+            &RowProvenance::default(),
         ))
         .unwrap();
         assert_eq!(v["model_id"], "perch,v2");
@@ -511,6 +701,7 @@ mod tests {
         let v = serde_json::to_value(ExportedDetection::new(
             &legacy,
             &birdnet_db::sqlite::ModelAttribution::from_runs(runs),
+            &RowProvenance::default(),
         ))
         .unwrap();
         assert!(
@@ -557,7 +748,7 @@ mod tests {
         // The run's three columns are followed by `Model_Id,Model_Agreement`,
         // empty here because neither row names a classifier.
         assert!(
-            lines[1].ends_with(",7,BirdNET+_V3.0-preview3_Global_11K_FP32,2a0f9efb,,,,,,,,,,,"),
+            lines[1].ends_with(",7,BirdNET+_V3.0-preview3_Global_11K_FP32,2a0f9efb,,,,,,,,,,,,,,,"),
             "{}",
             lines[1]
         );
@@ -585,6 +776,7 @@ mod tests {
         let v = serde_json::to_value(ExportedDetection::new(
             &row,
             &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+            &RowProvenance::default(),
         ))
         .unwrap();
         assert_eq!(v["sci_name"], "Pica pica");
@@ -595,6 +787,7 @@ mod tests {
         let v = serde_json::to_value(ExportedDetection::new(
             &orphan,
             &birdnet_db::sqlite::ModelAttribution::from_runs(runs.clone()),
+            &RowProvenance::default(),
         ))
         .unwrap();
         assert!(v.get("model_name").is_none(), "{v}");

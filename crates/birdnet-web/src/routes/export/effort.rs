@@ -126,6 +126,58 @@ pub(super) async fn export_effort(
     }
 }
 
+/// `GET /api/v2/effort/export/utc?from=&to=` — the ledger by UTC hour (RES-13):
+/// one row per UTC hour and source, the analysed seconds by the instant the
+/// audio began, and the time up split by the clock's state while it was
+/// (`Seconds_Up_Clock_Synced`, `_Unsynced`, `_Unknown`). `from` and `to` are UTC
+/// dates, inclusive. Hours before the upgrade that added it are absent, not
+/// zero. An hour stamped while the clock was not synchronised is itself only as
+/// right as that clock.
+pub(super) async fn export_effort_utc(
+    State(state): State<AppState>,
+    Query(q): Query<EffortQuery>,
+) -> Response {
+    if let Err(message) = check_range(&q.from, &q.to) {
+        return bad_request(message);
+    }
+    let (Some(from), Some(to)) = (
+        birdnet_core::civil::unix_secs_from_local(&q.from, "00:00:00", 0),
+        birdnet_core::civil::unix_secs_from_local(&q.to, "00:00:00", 0),
+    ) else {
+        return bad_request("from and to are required, as YYYY-MM-DD");
+    };
+    let result = state
+        .run_blocking(move |s| {
+            s.with_read_db(|conn| {
+                birdnet_db::capture_ledger::effort_utc_hours(conn, from, to + 86_400)
+            })
+        })
+        .await;
+    match result {
+        Ok(rows) => {
+            let mut out = String::from(
+                "Hour_Start_UTC,Source,Seconds_Analysed,Seconds_Up,Seconds_Up_Clock_Synced,\
+                 Seconds_Up_Clock_Unsynced,Seconds_Up_Clock_Unknown\n",
+            );
+            for r in rows {
+                let _ = writeln!(
+                    out,
+                    "{},{},{:.1},{:.1},{:.1},{:.1},{:.1}",
+                    birdnet_core::civil::rfc3339_utc(r.hour_start_utc),
+                    escape_csv(&r.source),
+                    r.seconds_analysed,
+                    r.seconds_up,
+                    r.seconds_up_clock_synced,
+                    r.seconds_up_clock_unsynced,
+                    r.seconds_up_clock_unknown(),
+                );
+            }
+            csv_file("effort-by-utc-hour.csv", out)
+        }
+        Err(e) => internal(&e),
+    }
+}
+
 pub(super) async fn export_history(
     State(state): State<AppState>,
     Query(q): Query<HistoryQuery>,

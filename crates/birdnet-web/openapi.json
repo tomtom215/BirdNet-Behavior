@@ -4,7 +4,7 @@
     "title": "BirdNet-Behavior HTTP API",
     "version": "0.19.0",
     "summary": "JSON API for a BirdNet-Behavior acoustic monitoring station: open read-only endpoints, plus a small token-authenticated write surface.",
-    "description": "Everything the dashboard shows is backed by this versioned API under `/api/v2`. Almost every endpoint is a read-only `GET`; the exceptions are the nineteen bearer-token endpoints (eleven writes and eight reads whose contents are not public), each marked `bearerAuth` below.\n\n**Authentication.** The read-only endpoints, the WebSocket stream and the health check are intentionally open to anyone who can reach the port — restrict them at the network layer (VPN / reverse-proxy allow-list) if that matters. This is by design, not a bug.\n\nThe **bearer-token** endpoints are different: each requires `Authorization: Bearer <token>`, where the token is the station's `BNB_API_TOKEN`. A station that has not been given one answers `404` on every one of them — the write surface does not exist until an operator enables it, and it is never covered by the `/admin` password's open-when-unset behaviour. Generate a token with `openssl rand -base64 48`; anything shorter than 32 bytes is refused and leaves the write surface off.\n\n**Not described here.** The live audio stream at `/stream`, RSS/iCal feeds under `/feeds/*`, and per-detection public share pages under `/r/{token}` are part of the surface but are not under `/api/v2`; see the project docs. Every route served under `/api/v2` is described, and a test fails when one is added without being added here. The two live WebSockets (`/ws/detections`, `/ws/spectrogram`) are described with the status that upgrades them, `101`; the messages they then carry are in that response.\n\n**Analytics.** The `/analytics/*` and `/timeseries/*` families are powered by the bundled DuckDB engine, which is on by default. When it is disabled (or not compiled in), those endpoints answer `200` with a body of `{\"status\":\"unavailable\",...}` rather than failing.\n\n**Base URL.** A `GET` to the API root (`/api/v2`, no trailing slash) returns the API name, version and status.",
+    "description": "Everything the dashboard shows is backed by this versioned API under `/api/v2`. Almost every endpoint is a read-only `GET`; the exceptions are the twenty-one bearer-token endpoints (twelve writes and nine reads whose contents are not public), each marked `bearerAuth` below.\n\n**Authentication.** The read-only endpoints, the WebSocket stream and the health check are intentionally open to anyone who can reach the port — restrict them at the network layer (VPN / reverse-proxy allow-list) if that matters. This is by design, not a bug.\n\nThe **bearer-token** endpoints are different: each requires `Authorization: Bearer <token>`, where the token is the station's `BNB_API_TOKEN`. A station that has not been given one answers `404` on every one of them — the write surface does not exist until an operator enables it, and it is never covered by the `/admin` password's open-when-unset behaviour. Generate a token with `openssl rand -base64 48`; anything shorter than 32 bytes is refused and leaves the write surface off.\n\n**Not described here.** The live audio stream at `/stream`, RSS/iCal feeds under `/feeds/*`, and per-detection public share pages under `/r/{token}` are part of the surface but are not under `/api/v2`; see the project docs. Every route served under `/api/v2` is described, and a test fails when one is added without being added here. The two live WebSockets (`/ws/detections`, `/ws/spectrogram`) are described with the status that upgrades them, `101`; the messages they then carry are in that response.\n\n**Analytics.** The `/analytics/*` and `/timeseries/*` families are powered by the bundled DuckDB engine, which is on by default. When it is disabled (or not compiled in), those endpoints answer `200` with a body of `{\"status\":\"unavailable\",...}` rather than failing.\n\n**Base URL.** A `GET` to the API root (`/api/v2`, no trailing slash) returns the API name, version and status.",
     "license": {
       "name": "CC BY-NC-SA 4.0",
       "url": "https://github.com/tomtom215/BirdNet-Behavior/blob/main/LICENSE"
@@ -9150,6 +9150,259 @@
           }
         }
       }
+    },
+    "/station/record": {
+      "get": {
+        "tags": [
+          "system"
+        ],
+        "summary": "The station's identity, deployments, source devices and clock record",
+        "description": "The station's UUID (minted once, kept across restarts); every deployment an operator stated (`start_utc`/`end_utc` Unix seconds, coordinates, height, orientation, microphone and the rest, as stated: nothing here measured them); every device record (`device_seq` numbers a source's distinct devices: the same device string keeps its number, a changed one gets a new one; `from_utc` null means the device began before this was recorded and the start is unknown; URL credentials redacted); and the newest 50 clock observations, newest first (`state` synced, unsynced, unknown or unset; `reason` first, changed, boot or step; `step_secs` how far the wall clock moved against the boot clock). A clock state between two observations is the earlier one's; an instant before the first is unknown. Token-gated: deployments hold coordinates and device records hold camera URLs.",
+        "operationId": "getStationRecord",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The record.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "station_uuid": {
+                      "type": "string"
+                    },
+                    "deployments": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "source_devices": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "clock_observations": {
+                      "type": "array",
+                      "items": {
+                        "type": "object"
+                      }
+                    },
+                    "notes": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          },
+          "500": {
+            "description": "The record could not be read.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/deployments": {
+      "post": {
+        "tags": [
+          "system"
+        ],
+        "summary": "State a deployment of one source",
+        "description": "Opens a deployment of `source_id` from `start_utc` (Unix seconds) and closes the source's open deployment there. Every other field is optional and is what the operator states: `latitude`/`longitude` (together or not at all), `coord_uncertainty_m`, `elevation_m`, `height_m`, `orientation_deg` (0 to below 360, clockwise from true north), `microphone`, `recorder`, `enclosure`, `habitat`, `notes`. A deployment is a record: it is never rewritten or deleted; a mistake is corrected by stating the next one.",
+        "operationId": "openDeployment",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "source_id",
+                  "start_utc"
+                ],
+                "properties": {
+                  "source_id": {
+                    "type": "string"
+                  },
+                  "start_utc": {
+                    "type": "integer"
+                  },
+                  "latitude": {
+                    "type": "number"
+                  },
+                  "longitude": {
+                    "type": "number"
+                  },
+                  "coord_uncertainty_m": {
+                    "type": "number"
+                  },
+                  "elevation_m": {
+                    "type": "number"
+                  },
+                  "height_m": {
+                    "type": "number"
+                  },
+                  "orientation_deg": {
+                    "type": "number"
+                  },
+                  "microphone": {
+                    "type": "string"
+                  },
+                  "recorder": {
+                    "type": "string"
+                  },
+                  "enclosure": {
+                    "type": "string"
+                  },
+                  "habitat": {
+                    "type": "string"
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Stated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "deployment": {
+                      "type": "object"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A value out of range, an unknown source, or a start not after the open deployment's.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token."
+          },
+          "409": {
+            "description": "It would overlap a deployment already stated for this source.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Nothing was written.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/effort/export/utc": {
+      "get": {
+        "tags": [
+          "export"
+        ],
+        "summary": "Export the effort ledger by UTC hour",
+        "description": "Per UTC hour and source: the seconds of audio analysed (by the instant the audio began) and the seconds the source's capture was up, split by what the system said of its clock while it was, as CSV (`Hour_Start_UTC`, `Source`, `Seconds_Analysed`, `Seconds_Up`, `Seconds_Up_Clock_Synced`, `Seconds_Up_Clock_Unsynced`, `Seconds_Up_Clock_Unknown`). Keyed on UTC, so the repeated autumn hour is two rows. Hours are recorded from the upgrade that added this ledger on; an hour stamped under an unsynchronised clock is only as right as that clock. The range is at most 366 days.",
+        "operationId": "exportEffortByUtcHour",
+        "parameters": [
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "description": "First UTC date (YYYY-MM-DD).",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "description": "Last UTC date (YYYY-MM-DD), inclusive.",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ledger.",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -9584,6 +9837,15 @@
               ]
             },
             "description": "What the boot journal found changed since the last start; non-empty is a strict fault."
+          },
+          "clock": {
+            "type": "string",
+            "enum": [
+              "synced",
+              "unsynced",
+              "unknown"
+            ],
+            "description": "What the system last said of its clock, as the station-health poll read it; `unknown` when nothing could answer. Not a status-code fault."
           }
         }
       },

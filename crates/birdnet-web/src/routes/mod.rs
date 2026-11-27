@@ -30,6 +30,7 @@ pub mod species;
 pub mod spectrogram;
 pub mod spectrogram_ws;
 pub mod static_files;
+pub mod station_record;
 pub mod system;
 pub mod timeseries;
 pub mod weather;

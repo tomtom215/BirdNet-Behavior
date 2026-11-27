@@ -1,6 +1,6 @@
 # HTTP & WebSocket API
 
-Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the nineteen token-gated endpoints — eleven writes and eight reads — under [Changing a station](#changing-a-station).
+Everything the UI does is backed by a versioned JSON API under **`/api/v2`**. It's handy for dashboards, scripts, and home-automation pulls. Almost every endpoint is a read-only `GET`; the exceptions are the twenty-one token-gated endpoints — twelve writes and nine reads — under [Changing a station](#changing-a-station).
 
 > Base URL in the examples is `http://localhost:8502`. Adjust for your host, and remember any [reverse-proxy auth](../admin/remote-access.md) you've added.
 
@@ -465,21 +465,41 @@ recorded source (imported history) counts as one on a surveyed source. Add
 the hourly ledger existed are `NA`. Days read the daily ledger, which counted capture
 uptime until that upgrade. Both take a range of at most 366 days, and read the reviewed set.
 
+The same ledger by UTC hour: `GET /api/v2/effort/export/utc?from=&to=` (UTC dates) is
+`effort-by-utc-hour.csv`, with `Hour_Start_UTC`, `Source`, `Seconds_Analysed`,
+`Seconds_Up` and the time up split by what the system said of its clock while it was
+(`Seconds_Up_Clock_Synced`, `Seconds_Up_Clock_Unsynced`, `Seconds_Up_Clock_Unknown`).
+Keyed on UTC, the repeated autumn hour is two rows, where the local ledger has one.
+It starts at the upgrade that added it; nothing earlier is inferred into it.
+
+The detections export (`/api/v2/detections/export`) ends with four columns that say
+where, with what and under which clock a row was recorded: `Station_Id` (the station's
+UUID), `Deployment_Id` (the deployment an operator stated for the row's source, in force
+at its instant; empty when none was stated), `Source_Device` (which of that source's
+devices it was, from 1; re-adding the same device keeps its number, editing a URL to
+another camera starts a new one) and `Clock_State` (`synced`, `unsynced`, `unknown` or
+`unset`: what the system said of its clock when the row was stamped; `unknown` before
+the station kept that record). All four are empty on an imported row. A detection
+stamped under `unsynced` or `unknown` may be hours or days off on a station without a
+battery-backed clock and without network time.
+
 ## Changing a station
 
-Ten method-and-path pairs, and they are the only ones in `/api/v2` that change
+Twelve method-and-path pairs, and they are the only ones in `/api/v2` that change
 anything.
 They exist so Home Assistant, Node-RED or a shell script can *act* on a station
 rather than only read it — before them, every state change in the product was an
 HTMX form post returning HTML, which is not a contract anyone can build on.
 
-Eight *reads* live behind the same token, because what they return is not public:
+Nine *reads* live behind the same token, because what they return is not public:
 `GET /api/v2/settings` (the configuration, credentials taken out),
 `GET /api/v2/system/capture` and `GET /api/v2/system/jobs` (operational detail
 about the station and its sources), `GET /api/v2/system/network` and
 `GET /api/v2/system/processes` (the network it sits on, and what it is running),
 `GET /api/v2/system/database/overview` (where its database is and what is in
-it), `GET /api/v2/models/catalog`, and `GET /api/v2/detections/comments`.
+it), `GET /api/v2/models/catalog`, `GET /api/v2/detections/comments`, and
+`GET /api/v2/station/record` (the station's id, its deployments with their
+coordinates, each source's devices, and its clock record).
 
 ### Turning them on
 
@@ -490,7 +510,7 @@ environment and restart:
 openssl rand -base64 48
 ```
 
-Until you do, all nineteen answer `404`: the write surface does not exist rather
+Until you do, all twenty-one answer `404`: the write surface does not exist rather
 than existing unprotected. Note this is the opposite default from `CADDY_PWD`,
 where an unset password leaves `/admin` *open* — an unset token leaves the write
 API *closed*. A token shorter than 32 bytes is refused and leaves the API off,
