@@ -1034,6 +1034,10 @@ pub(super) fn event_processor(
     threshold_floor: Option<PublishedFloor>,
 ) {
     tracing::debug!("event processor started");
+    // Where `--ingest-recordings` marks the pieces of imported history it
+    // stages (review F11): a detection from one is stored and announced to no
+    // one.
+    let import_marks = crate::ingest::marker_dir(state.db_path());
     let mut threshold_cache = ThresholdCache::new(species_thresholds).publishing(threshold_floor);
     // Asked about every detection, so it must not wait on the client: a send
     // holds the client's lock for its whole round trip (see
@@ -1874,6 +1878,20 @@ pub(super) fn event_processor(
                 state.metrics().inc_analytics_mirror_failed(&e.to_string());
                 tracing::warn!(error = %e, "failed to insert detection into DuckDB");
             }
+        }
+
+        // Imported history (review F11): stored, and announced to no one. An
+        // alert, a BirdWeather upload or a "new species" message about a
+        // recording from months ago would be read as what is singing now.
+        // Settled above, so the replay contract is unaffected.
+        if crate::ingest::stage::imported_mark(&import_marks, &event.source_file).is_some() {
+            tracing::debug!(
+                correlation_id,
+                species = %detection.common_name,
+                file = %event.source_file.display(),
+                "imported history stored; not announced"
+            );
+            continue;
         }
 
         // What a person is shown for this species. Every channel below that
@@ -5491,6 +5509,72 @@ mod tests {
             next_attempt_at > now + 60,
             "the parked upload is open to the drainer while the live attempt runs"
         );
+    }
+
+    /// Review F11: a detection in imported history (a piece
+    /// `--ingest-recordings` staged, known by its marker) is stored and
+    /// announced to no one: no BirdWeather upload, no alert. A live detection
+    /// beside it is announced as before.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn imported_history_is_stored_and_not_announced() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            // Held open, never answered.
+            let _held: Vec<_> = listener.incoming().flatten().collect();
+        });
+        let tmp = tempfile::tempdir().unwrap();
+        let client = birdnet_integrations::birdweather::Client::new("tok", 51.48, -0.13)
+            .unwrap()
+            .with_base_url(&format!("http://127.0.0.1:{port}"));
+        let state = birdnet_web::state::AppState::new(tmp.path().join("birds.db")).unwrap();
+        let marks = crate::ingest::marker_dir(state.db_path());
+        std::fs::create_dir_all(&marks).unwrap();
+        std::fs::write(
+            marks.join("imported.wav"),
+            r#"{"source":"card_1","index":0}"#,
+        )
+        .unwrap();
+        run_processor_integrated(
+            &state,
+            vec![
+                make_event(
+                    "Pica pica",
+                    "Eurasian Magpie",
+                    0.95,
+                    tmp.path().join("imported.wav"),
+                    "c1",
+                ),
+                make_event(
+                    "Turdus merula",
+                    "Eurasian Blackbird",
+                    0.95,
+                    tmp.path().join("live.wav"),
+                    "c2",
+                ),
+            ],
+            HashMap::new(),
+            0.25,
+            0,
+            crate::daemon::daylight::DaylightFilter::new(None, 60, 0, Vec::new()),
+            birdnet_core::detection::dynamic_threshold::DynamicThresholds::new(
+                birdnet_core::detection::dynamic_threshold::DynamicThresholdConfig::default(),
+            ),
+            test_provenance(&state),
+            Some(client),
+            Extractor::new(ExtractionConfig::default()),
+        )
+        .await;
+        let (rows, parked): (i64, i64) = state.with_db(|c| {
+            c.query_row(
+                "SELECT (SELECT COUNT(*) FROM detections), (SELECT COUNT(*) FROM outbound_queue)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap()
+        });
+        assert_eq!(rows, 2, "both detections are stored");
+        assert_eq!(parked, 1, "only the live detection is sent to BirdWeather");
     }
 
     /// the station's log off the public map, without touching the log.

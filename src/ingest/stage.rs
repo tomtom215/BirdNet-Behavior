@@ -281,17 +281,11 @@ fn read_mark(path: &Path) -> Option<Value> {
 /// The import marker for `source_file`, when it is a staged piece of imported
 /// history; `None` for live audio.
 ///
-/// The hook the event processor needs (it is not called yet: `processor.rs`
-/// is outside this change). Once per detection, before notifications:
-///
-/// ```text
-/// let imported = ingest::stage::imported_mark(&marker_dir, &event.source_file);
-/// // Some(_): store the row, skip Apprise/MQTT/BirdWeather/new-species alerts
-/// ```
-///
-/// where `marker_dir` is [`super::marker_dir`] of the station's database path.
-/// One `stat` and, for an imported piece, one small read.
-#[allow(dead_code, reason = "the processor's hook; wired by the integrator")]
+/// The event processor's hook: asked once per stored detection, before any
+/// notification, and a `Some` is stored and announced to no one
+/// (`daemon::processor::event_processor`). `marker_dir` is
+/// [`super::marker_dir`] of the station's database path. One `stat` and, for
+/// an imported piece, one small read.
 #[must_use]
 pub fn imported_mark(marker_dir: &Path, source_file: &Path) -> Option<Value> {
     read_mark(&marker_dir.join(source_file.file_name()?))

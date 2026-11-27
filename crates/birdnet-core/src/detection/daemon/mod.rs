@@ -818,6 +818,10 @@ pub struct DaemonConfig {
     /// a segment is claimed here while the pipeline reads it. `None` claims
     /// nothing.
     pub in_flight: Option<InFlight>,
+    /// Where a recording too long for a live segment is moved once the
+    /// detection path refuses it (review F11), out of the stream directory's
+    /// purge, for `--ingest-recordings` to take. `None` leaves it in place.
+    pub refused_dir: Option<PathBuf>,
     /// When to analyse one segment in two rather than fall further behind
     /// (PR-2); `None` never sheds.
     pub shed: Option<ShedPolicy>,
@@ -1192,6 +1196,7 @@ mod tests {
             on_model_state: None,
             on_file_analysed: None,
             in_flight: None,
+            refused_dir: None,
             shed: None,
             species_filter: crate::inference::species_filter::SpeciesFilterConfig::default(),
             species_lists_provider: None,

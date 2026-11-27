@@ -34,6 +34,9 @@ pub enum PipelineError {
     Channel(String),
     /// The configuration asks for something this call cannot give.
     Config(String),
+    /// The file is not one the detection path decodes (review F11): too long
+    /// for a live segment, or its header cannot be read.
+    Refused(crate::audio::admission::AdmissionError),
 }
 
 impl fmt::Display for PipelineError {
@@ -45,6 +48,7 @@ impl fmt::Display for PipelineError {
             Self::Spectrogram(e) => write!(f, "spectrogram error: {e}"),
             Self::Channel(msg) => write!(f, "channel error: {msg}"),
             Self::Config(msg) => write!(f, "pipeline configuration: {msg}"),
+            Self::Refused(e) => write!(f, "not analysed: {e}"),
         }
     }
 }
@@ -55,6 +59,7 @@ impl std::error::Error for PipelineError {
             Self::Decode(e) => Some(e),
             Self::Resample(e) => Some(e),
             Self::Spectrogram(e) => Some(e),
+            Self::Refused(e) => Some(e),
             Self::Watch(_) | Self::Channel(_) | Self::Config(_) => None,
         }
     }
@@ -463,18 +468,29 @@ pub fn process_file_channels(
             path.display()
         ))
     })?;
+    // Judged from the header before anything is decoded (review F11), and
+    // decoded under the cap that judgement gives: a file past a live
+    // segment's length is refused, and one whose header understates its
+    // length still cannot grow the buffer past it.
+    let cap = crate::audio::admission::admit_for_live_analysis(path)
+        .map_err(PipelineError::Refused)?
+        .sample_cap();
     let (audios, provenance): (Vec<(Option<u16>, decode::AudioData)>, _) = match config.channels {
         ChannelAnalysis::Mean => {
-            let (audio, p) = decode::decode_file_with_provenance(path, decode::ChannelMix::Mean)?;
+            let (audio, p) =
+                decode::decode_file_with_provenance(path, decode::ChannelMix::Mean, Some(cap))?;
             (vec![(None, audio)], p)
         }
         ChannelAnalysis::Only(c) => {
-            let (audio, p) =
-                decode::decode_file_with_provenance(path, decode::ChannelMix::Channel(c))?;
+            let (audio, p) = decode::decode_file_with_provenance(
+                path,
+                decode::ChannelMix::Channel(c),
+                Some(cap),
+            )?;
             (vec![(Some(c), audio)], p)
         }
         ChannelAnalysis::Each => {
-            let (each, p) = decode::decode_file_each_channel(path)?;
+            let (each, p) = decode::decode_file_each_channel(path, Some(cap))?;
             (
                 each.into_iter()
                     .enumerate()
@@ -1117,6 +1133,68 @@ pub(crate) mod channel_tests {
             channels,
             ..PipelineConfig::default()
         }
+    }
+
+    /// A WAV of `secs` seconds of quiet noise at 8 kHz, named as the pipeline
+    /// expects (8 kHz keeps a twelve-minute file near 11 MB).
+    fn write_long(dir: &std::path::Path, secs: u32) -> std::path::PathBuf {
+        let path = dir.join("2026-05-19-birdnet-09:00:00.wav");
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 8_000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for i in 0..8_000 * secs {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
+            w.write_sample(((i % 97) as i16) - 48).unwrap();
+        }
+        w.finalize().unwrap();
+        path
+    }
+
+    /// Review F11: a file longer than a live segment may be is refused before
+    /// it is decoded, and the refusal names the command that takes it; the
+    /// detection path no longer decodes a recording of any length whole.
+    #[test]
+    fn a_recording_longer_than_a_segment_is_refused_and_pointed_at_the_ingest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let secs = u32::try_from(crate::audio::admission::LIVE_MAX_FILE_SECS).unwrap() + 1;
+        let wav = write_long(tmp.path(), secs);
+        let mut cfg = config(ChannelAnalysis::Mean);
+        cfg.target_sample_rate = 8_000;
+        let text = match process_file_channels(&wav, &cfg) {
+            Ok((groups, _, _)) => panic!(
+                "a recording past the live limit was decoded whole: {} chunks",
+                groups[0].chunks.len()
+            ),
+            Err(e) => e.to_string(),
+        };
+        assert!(
+            text.contains(crate::audio::admission::INGEST_COMMAND),
+            "the refusal names the ingest command: {text}"
+        );
+    }
+
+    /// The counterpart: a recording exactly at the limit is analysed, every
+    /// sample of it.
+    #[test]
+    fn a_recording_at_the_live_limit_is_analysed_whole() {
+        let tmp = tempfile::tempdir().unwrap();
+        let secs = u32::try_from(crate::audio::admission::LIVE_MAX_FILE_SECS).unwrap();
+        let wav = write_long(tmp.path(), secs);
+        let mut cfg = config(ChannelAnalysis::Mean);
+        cfg.target_sample_rate = 8_000;
+        let (groups, rate, _) = process_file_channels(&wav, &cfg).expect("admitted");
+        assert_eq!(rate, 8_000);
+        let chunks = &groups[0].chunks;
+        let last = chunks.last().expect("chunks");
+        assert!(
+            (last.end_secs - f32::from(u16::try_from(secs).unwrap())).abs() < 0.01,
+            "the last chunk ends at the recording's end: {}",
+            last.end_secs
+        );
     }
 
     /// Review F12: antiphase stereo (`R = -L`) averages to exact silence, so

@@ -104,7 +104,8 @@ impl ChannelProvenance {
 }
 
 /// [`decode_file`], with the channels chosen by `mix`, and where the samples
-/// came from (review F12).
+/// came from (review F12). With `max_samples`, as [`decode_file_capped`]: no
+/// output ever holds more frames than it.
 ///
 /// # Errors
 ///
@@ -113,12 +114,13 @@ impl ChannelProvenance {
 pub fn decode_file_with_provenance(
     path: &Path,
     mix: ChannelMix,
+    max_samples: Option<usize>,
 ) -> Result<(AudioData, ChannelProvenance), DecodeError> {
     let select = match mix {
         ChannelMix::Mean => Select::Mean,
         ChannelMix::Channel(c) => Select::Channel(usize::from(c)),
     };
-    let mut decoded = decode_file_inner(path, None, select)?;
+    let mut decoded = decode_file_inner(path, max_samples, select)?;
     let samples = decoded.outputs.pop().unwrap_or_default();
     Ok((
         AudioData {
@@ -130,16 +132,19 @@ pub fn decode_file_with_provenance(
 }
 
 /// Every channel of a file, each decoded separately and in channel order, for
-/// analysing channels independently (review F12). One element for a
-/// one-channel file.
+/// analysing channels independently (review F12).
+///
+/// One element for a one-channel file. `max_samples` caps each, as in
+/// [`decode_file_with_provenance`].
 ///
 /// # Errors
 ///
 /// As [`decode_file`].
 pub fn decode_file_each_channel(
     path: &Path,
+    max_samples: Option<usize>,
 ) -> Result<(Vec<AudioData>, ChannelProvenance), DecodeError> {
-    let decoded = decode_file_inner(path, None, Select::Each)?;
+    let decoded = decode_file_inner(path, max_samples, Select::Each)?;
     let rate = decoded.provenance.sample_rate;
     Ok((
         decoded
@@ -737,7 +742,7 @@ pub(crate) mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("m.wav");
         write_multichannel(&path, gain);
-        let (_, p) = decode_file_with_provenance(&path, ChannelMix::Mean).unwrap();
+        let (_, p) = decode_file_with_provenance(&path, ChannelMix::Mean, None).unwrap();
         (p.mix_energy_ratio, p.cancellation_suspected(), p)
     }
 
@@ -788,7 +793,7 @@ pub(crate) mod tests {
         let path = dir.path().join("mono.wav");
         write_multichannel(&path, &[1.0]);
         let plain = decode_file(&path).unwrap();
-        let (right, provenance) = decode_file_with_provenance(&path, ChannelMix::RIGHT)
+        let (right, provenance) = decode_file_with_provenance(&path, ChannelMix::RIGHT, None)
             .expect("a mono file is its own only channel");
         assert_eq!(provenance.mix, AppliedMix::Mono);
         assert_eq!(right.samples, plain.samples);
@@ -803,8 +808,8 @@ pub(crate) mod tests {
         let path = dir.path().join("lr.wav");
         write_multichannel(&path, &[1.0, -0.5]);
         let mean = decode_file(&path).unwrap();
-        let (left, pl) = decode_file_with_provenance(&path, ChannelMix::LEFT).unwrap();
-        let (right, pr) = decode_file_with_provenance(&path, ChannelMix::RIGHT).unwrap();
+        let (left, pl) = decode_file_with_provenance(&path, ChannelMix::LEFT, None).unwrap();
+        let (right, pr) = decode_file_with_provenance(&path, ChannelMix::RIGHT, None).unwrap();
         assert_eq!(
             (pl.mix, pr.mix),
             (AppliedMix::Channel(0), AppliedMix::Channel(1))
@@ -817,15 +822,16 @@ pub(crate) mod tests {
         );
         assert!(left.samples[12] * right.samples[12] < 0.0, "in antiphase");
         assert!((peak(&mean) - 0.125).abs() < 1e-3, "the mean of the two");
-        assert!(decode_file_with_provenance(&path, ChannelMix::Channel(2)).is_err());
+        assert!(decode_file_with_provenance(&path, ChannelMix::Channel(2), None).is_err());
 
-        let (each, pe) = decode_file_each_channel(&path).unwrap();
+        let (each, pe) = decode_file_each_channel(&path, None).unwrap();
         assert_eq!(pe.mix, AppliedMix::Each);
         assert_eq!(each.len(), 2);
         assert_eq!(each[0].samples, left.samples);
         assert_eq!(each[1].samples, right.samples);
 
-        let (by_default, _) = decode_file_with_provenance(&path, ChannelMix::default()).unwrap();
+        let (by_default, _) =
+            decode_file_with_provenance(&path, ChannelMix::default(), None).unwrap();
         assert_eq!(by_default.samples.len(), mean.samples.len());
         assert!(
             by_default

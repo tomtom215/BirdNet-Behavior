@@ -771,6 +771,9 @@ fn daemon_config(
         on_file_analysed: Some(throughput_observer(state)),
         // The stream directory's purge honours these claims (PR-1 / S-3).
         in_flight: Some(in_flight),
+        // A recording too long for a live segment, moved out of the purge's
+        // reach for `--ingest-recordings` (review F11).
+        refused_dir: Some(crate::ingest::ingest_dir(state.db_path()).join("refused")),
         // One segment in two while the queue is deep or the board is at its
         // thermal limit (PR-2); the thermal condition and this read the same
         // sensor and the same line, so the notification and the shed agree.
