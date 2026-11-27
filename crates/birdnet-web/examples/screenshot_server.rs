@@ -702,10 +702,13 @@ fn seed(conn: &Connection, today_days: i64) {
             }
         }
 
-        // Hourly weather for the last two months, today up to the current hour.
+        // Hourly weather for the last two months, today up to the current hour,
+        // and over at least the `MIN_TODAY_WINDOW_SECS` the detections are spread
+        // over: one sample draws no line, so between 00:00 and 01:00 UTC the
+        // temperature line, and the gate that grades it, had nothing to show.
         if days_ago < 60 {
             let last_hour = if days_ago == 0 {
-                (cutoff_today / 3600) as usize
+                (cutoff_today.max(MIN_TODAY_WINDOW_SECS) / 3600) as usize
             } else {
                 23
             };

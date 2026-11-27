@@ -512,10 +512,13 @@ fn a_mirrors_credentials_are_never_logged_or_reported() {
         seen.contains("mirror-user"),
         "the account is still named: {seen}"
     );
-    for secret in ["hunter2pw", "s3cr3ttok"] {
+    // The message names which planted value leaked by its role, never the value
+    // or the text that holds it: a failure would otherwise print the secret
+    // this test is about (CodeQL `rust/cleartext-logging`, alert 192).
+    for (role, secret) in [("the password", "hunter2pw"), ("the token", "s3cr3ttok")] {
         assert!(
             !seen.contains(secret),
-            "{secret} reached a log line or the error: {seen}"
+            "{role} reached a log line or the error"
         );
     }
 }
