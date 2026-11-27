@@ -446,7 +446,10 @@ fn decode_file_inner(
         .sample_format
         .map(|f| sample_format_name(f).to_owned());
     let bits_per_sample = audio_params.bits_per_sample;
-    let declared_channels = audio_params.channels.as_ref().map(symphonia::core::audio::Channels::count);
+    let declared_channels = audio_params
+        .channels
+        .as_ref()
+        .map(symphonia::core::audio::Channels::count);
 
     // `make_audio_decoder` now takes the audio-specific codec params
     // (previously `make` accepted the whole CodecParameters struct).

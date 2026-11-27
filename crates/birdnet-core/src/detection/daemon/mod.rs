@@ -28,7 +28,9 @@ use crate::inference::model::{InferenceError, ModelConfig};
 mod process;
 mod run;
 
-pub use process::{process_and_infer_filtered, process_file_pipeline_only};
+pub use process::{
+    process_and_infer_channels, process_and_infer_filtered, process_file_pipeline_only,
+};
 pub use run::{fit_pipeline_to_classifiers, run_daemon};
 
 /// Errors from the detection daemon.
@@ -1059,6 +1061,14 @@ pub struct FilteredFile {
     /// The sample rate the recording was decoded at, before any resampling:
     /// the band its source carried (ACC-14).
     pub source_rate_hz: u32,
+    /// The channel these events were heard on, counted from `0`, when the
+    /// pipeline analysed channels separately (review F12); `None` for the mean
+    /// of every channel, as always. A channel is provenance within one
+    /// station, never a station.
+    pub channel: Option<u16>,
+    /// What the decoder found and did with the recording's channels, when it
+    /// went through [`process_and_infer_channels`] (every daemon call does).
+    pub channels: Option<crate::audio::decode::ChannelProvenance>,
 }
 
 /// Handle for controlling a running daemon.

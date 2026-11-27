@@ -4,7 +4,9 @@ use std::path::Path;
 use std::time::Instant;
 
 use crate::detection::ChunkFilters;
-use crate::detection::pipeline::{self, OccurrenceWeek, PipelineConfig, PreparedChunk};
+use crate::detection::pipeline::{
+    self, ChannelAnalysis, OccurrenceWeek, PipelineConfig, PreparedChunk,
+};
 use crate::detection::types::ChunkPrediction;
 use crate::inference::health::ErrorClass;
 use crate::inference::registry::ClassifierRegistry;
@@ -604,7 +606,10 @@ fn window_week(chunk: &PreparedChunk, mode: OccurrenceWeek, file_week: u32) -> u
 /// # Errors
 ///
 /// Returns `DaemonError` if any stage fails.
-#[allow(clippy::cast_possible_truncation, clippy::too_many_arguments)]
+///
+/// [`ChannelAnalysis::Each`] gives one result per channel and is refused here
+/// with [`DaemonError::Config`]; [`process_and_infer_channels`] gives it.
+#[allow(clippy::too_many_arguments)]
 pub fn process_and_infer_filtered(
     path: &Path,
     pipeline_config: &PipelineConfig,
@@ -617,9 +622,112 @@ pub fn process_and_infer_filtered(
     lon: Option<f64>,
     correlation_id: &str,
 ) -> Result<super::FilteredFile, DaemonError> {
-    let start = Instant::now();
+    if pipeline_config.channels == ChannelAnalysis::Each {
+        return Err(DaemonError::Config(
+            "each channel analysed on its own gives one result per channel; call \
+             process_and_infer_channels"
+                .to_owned(),
+        ));
+    }
+    let mut files = process_and_infer_channels(
+        path,
+        pipeline_config,
+        registry,
+        route,
+        chunk_filters,
+        species_filter,
+        model_state,
+        lat,
+        lon,
+        correlation_id,
+    )?;
+    files
+        .pop()
+        .ok_or_else(|| DaemonError::Config("the pipeline returned no channel".to_owned()))
+}
 
-    let (chunks, source_rate_hz) = pipeline::process_file_with_source_rate(path, pipeline_config)?;
+/// [`process_and_infer_filtered`] under every [`ChannelAnalysis`] (review F12).
+///
+/// One [`super::FilteredFile`] for the mean or the chosen channel, and
+/// one per channel, in channel order, for [`ChannelAnalysis::Each`], each
+/// tagged with its channel ([`super::FilteredFile::channel`]).
+///
+/// Each channel is analysed as its own recording, through its own filters:
+/// the privacy filter's neighbours, the noise filter's window and the
+/// corroboration count never reach across channels. The channels are still
+/// **one station**: one place, one clock, one recorder, and a bird heard on
+/// both is one bird, not two. A caller storing these must map each channel
+/// to the station's identity (and keep the channel as provenance), never to a
+/// station of its own, and must not count a minute of listening once per
+/// channel.
+///
+/// # Errors
+///
+/// As [`process_and_infer_filtered`]; a channel whose every window failed
+/// fails the call.
+#[allow(clippy::too_many_arguments)]
+pub fn process_and_infer_channels(
+    path: &Path,
+    pipeline_config: &PipelineConfig,
+    registry: &mut ClassifierRegistry,
+    route: &[usize],
+    chunk_filters: &ChunkFilters,
+    species_filter: &mut SpeciesFilter,
+    model_state: Option<&crate::detection::daemon::ModelStateObserver>,
+    lat: Option<f64>,
+    lon: Option<f64>,
+    correlation_id: &str,
+) -> Result<Vec<super::FilteredFile>, DaemonError> {
+    let start = Instant::now();
+    let (groups, source_rate_hz, provenance) =
+        pipeline::process_file_channels(path, pipeline_config)?;
+    groups
+        .into_iter()
+        .map(|group| {
+            let mut file = analyse_chunks(
+                path,
+                group.chunks,
+                source_rate_hz,
+                start,
+                pipeline_config,
+                registry,
+                route,
+                chunk_filters,
+                species_filter,
+                model_state,
+                lat,
+                lon,
+                correlation_id,
+            )?;
+            file.channel = group.channel;
+            file.channels = Some(provenance.clone());
+            Ok(file)
+        })
+        .collect()
+}
+
+/// One stream's chunks through inference and every filter.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::too_many_arguments,
+    clippy::needless_pass_by_value,
+    reason = "the chunks are this stream's, handed over whole as the old body owned them"
+)]
+fn analyse_chunks(
+    path: &Path,
+    chunks: Vec<PreparedChunk>,
+    source_rate_hz: u32,
+    start: Instant,
+    pipeline_config: &PipelineConfig,
+    registry: &mut ClassifierRegistry,
+    route: &[usize],
+    chunk_filters: &ChunkFilters,
+    species_filter: &mut SpeciesFilter,
+    model_state: Option<&crate::detection::daemon::ModelStateObserver>,
+    lat: Option<f64>,
+    lon: Option<f64>,
+    correlation_id: &str,
+) -> Result<super::FilteredFile, DaemonError> {
     let pipeline_elapsed = start.elapsed();
 
     tracing::debug!(
@@ -844,6 +952,8 @@ pub fn process_and_infer_filtered(
         events,
         tally,
         source_rate_hz,
+        channel: None,
+        channels: None,
     })
 }
 
@@ -1070,6 +1180,7 @@ mod tests {
             .unwrap(),
             silent: false,
             at_rates: Vec::new(),
+            channel: None,
         }
     }
 
@@ -1656,6 +1767,118 @@ mod tests {
         ));
         assert!(!masks(
             PrivacyFilter::new(0.80).with_classifier_rule("v3", rule)
+        ));
+    }
+
+    /// Review F12, through the daemon's entry point: antiphase stereo
+    /// analysed as its mean is silence, so nothing is classified; analysed
+    /// channel by channel each channel is classified and its result says which
+    /// channel it was. The one-result entry point refuses per-channel analysis
+    /// rather than merge two channels' events into one file's.
+    #[test]
+    fn each_channel_s_result_is_tagged_with_its_channel() {
+        use crate::detection::corroboration::ConfirmationLevel;
+        use crate::detection::noise::NoiseFilter;
+        use crate::detection::pipeline::ChannelAnalysis;
+        use crate::detection::privacy::PrivacyFilter;
+        use crate::inference::labels::LabelSet;
+        use crate::inference::model::{BirdNetModel, ModelConfig};
+        use crate::inference::species_filter::SpeciesFilterConfig;
+        const TINY_V24: &[u8] = include_bytes!("../../testdata/tiny_v24_test.onnx");
+        let tmp = tempfile::tempdir().unwrap();
+        let model_path = tmp.path().join("m.onnx");
+        std::fs::write(&model_path, TINY_V24).unwrap();
+        let labels = LabelSet::from_entries(
+            (0..11)
+                .map(|i| (format!("Species{i} bird"), format!("Bird {i}")))
+                .collect(),
+        );
+        let model = BirdNetModel::load(
+            &model_path,
+            labels,
+            ModelConfig {
+                confidence_threshold: 0.0,
+                ..ModelConfig::default()
+            },
+        )
+        .unwrap();
+        let mut registry = ClassifierRegistry::single("birdnet", model);
+        let mut species_filter = SpeciesFilter::new_passthrough(SpeciesFilterConfig::default());
+        let wav = crate::detection::pipeline::channel_tests::write_channels(tmp.path(), &[1, -1]);
+        let filters = ChunkFilters {
+            privacy: PrivacyFilter::new(0.0),
+            noise: NoiseFilter::new(0.0, Vec::new()),
+            confirmation: ConfirmationLevel::Off,
+        };
+        let mut run = |channels| {
+            let config = PipelineConfig {
+                raw_audio_input: true,
+                target_sample_rate: 48_000,
+                chunk_duration_secs: 3.0,
+                channels,
+                ..PipelineConfig::default()
+            };
+            process_and_infer_channels(
+                &wav,
+                &config,
+                &mut registry,
+                &[0],
+                &filters,
+                &mut species_filter,
+                None,
+                None,
+                None,
+                "",
+            )
+            .unwrap()
+        };
+        let mean = run(ChannelAnalysis::Mean);
+        assert_eq!(mean.len(), 1);
+        assert_eq!(mean[0].channel, None);
+        assert!(
+            mean[0].events.is_empty(),
+            "the mean of antiphase stereo is silence"
+        );
+        assert!(
+            mean[0]
+                .channels
+                .as_ref()
+                .is_some_and(crate::audio::decode::ChannelProvenance::cancellation_suspected)
+        );
+
+        let each = run(ChannelAnalysis::Each);
+        let tags: Vec<Option<u16>> = each.iter().map(|f| f.channel).collect();
+        assert_eq!(tags, [Some(0), Some(1)]);
+        for f in &each {
+            assert!(
+                !f.events.is_empty(),
+                "channel {:?} was classified",
+                f.channel
+            );
+            assert_eq!(f.tally.windows, 2, "each channel is its own six seconds");
+        }
+
+        let config = PipelineConfig {
+            raw_audio_input: true,
+            target_sample_rate: 48_000,
+            chunk_duration_secs: 3.0,
+            channels: ChannelAnalysis::Each,
+            ..PipelineConfig::default()
+        };
+        assert!(matches!(
+            process_and_infer_filtered(
+                &wav,
+                &config,
+                &mut registry,
+                &[0],
+                &filters,
+                &mut species_filter,
+                None,
+                None,
+                None,
+                "",
+            ),
+            Err(DaemonError::Config(_))
         ));
     }
 
