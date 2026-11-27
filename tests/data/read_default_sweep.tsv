@@ -118,7 +118,6 @@ task-panic	crates/birdnet-web/src/routes/pages/health.rs	station_health_line_par
 handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_streamgraph	ok	conn.query_row("SELECT date('now','localtime')", [], |r| { r.get::<_, String>(0) }) .ok()
 handled	crates/birdnet-web/src/routes/pages/heatmap.rs	compute_streamgraph	ok	state .with_read_db(|conn| species_sparklines(conn, days)) .ok()
 handled	crates/birdnet-web/src/routes/pages/migration.rs	stats_partial	ok	s.with_read_db(|conn| stats_fragment(conn, &today, s.names())) .ok()
-handled	crates/birdnet-web/src/routes/pages/migration.rs	compute_ridgeline	ok	state .with_read_db(|conn| { let today = crate::routes::pages::today_date_string(); let ridges = collect_ridge
 omitted	crates/birdnet-web/src/routes/pages/mod.rs	station_location	ok	birdnet_db::settings::get_or(conn, "latitude", "") .ok()
 omitted	crates/birdnet-web/src/routes/pages/mod.rs	station_location	ok	birdnet_db::settings::get_or(conn, "latitude", "") .ok()? .trim() .parse() .ok()
 omitted	crates/birdnet-web/src/routes/pages/mod.rs	station_location	ok	birdnet_db::settings::get_or(conn, "longitude", "") .ok()
@@ -276,3 +275,5 @@ fail-closed	crates/birdnet-web/src/routes/pages/quarantine.rs	quarantine_delete	
 fail-closed	crates/birdnet-web/src/routes/pages/quarantine.rs	remove_unreferenced_clips	match-err	match state .with_read_db(|conn| birdnet_db::sqlite::unreferenced_clips(conn, names)) { Err .. }
 fail-closed	src/daemon/processor.rs	quarantine_already_recorded	match-err	match state.with_read_db(|conn| { birdnet_db::sqlite::quarantine_recorded( conn, &detection.date, &detection.t
 task-panic	src/main.rs	main	unwrap_or	tokio::task::spawn_blocking(move || ingest::run(&cli, config.as_ref())) .await .unwrap_or(1)
+decoration	crates/birdnet-web/src/routes/pages/history.rs	history_calendar_partial	ok	super::listening::StationLedger::read(conn).ok()
+handled	crates/birdnet-web/src/routes/pages/migration.rs	compute_ridgeline	ok	state .with_read_db(|conn| { let today = crate::routes::pages::today_date_string(); ridgeline_html(conn, year,
