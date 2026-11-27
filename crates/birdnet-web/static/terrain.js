@@ -218,6 +218,18 @@ export function dayName(iso) {
   return `${WEEKDAYS[wd]} ${d} ${MONTHS[m - 1]}`;
 }
 
+/**
+ * The axis tick for the hour `h` (0 to 24; 24 is the midnight that ends the day): a clock time
+ * in the reader's choice, through display-format.js (`display` is `window.bnbDisplay`), and the
+ * canonical 24-hour text without it (UIR-19; the axis printed "12a", "6p").
+ */
+export function hourTick(h, display) {
+  const t = `${String(h % 24).padStart(2, "0")}:00`;
+  if (!display || typeof display.formatClock !== "function") return t;
+  const f = typeof display.effective === "function" ? display.effective().time : "24h";
+  return display.formatClock(t, f) || t;
+}
+
 /** The hour `h` as the span it covers, `06:00 to 06:59`. */
 export function hourSpan(h) {
   const p = (n) => String(n).padStart(2, "0");
@@ -691,7 +703,7 @@ class Terrain {
     ctx.font = `10px ${font}`;
     ctx.textBaseline = "alphabetic";
     ctx.textAlign = "left";
-    for (const [h, t] of [[0, "12a"], [6, "6a"], [12, "12p"], [18, "6p"]]) ctx.fillText(t, left + h * cw, 12);
+    for (const h of [0, 6, 12, 18]) ctx.fillText(hourTick(h, window.bnbDisplay), left + h * cw, 12);
     ctx.textAlign = "right";
     const stepD = days <= 30 ? 7 : days <= 90 ? 30 : 90;
     for (let back = 0; back < days; back += stepD) {
@@ -958,7 +970,7 @@ class Terrain {
       lab.appendChild(s);
       this.axisLabels.push({ el: s, x, z });
     };
-    for (const [h, t] of [[0, "12a"], [6, "6a"], [12, "12p"], [18, "6p"], [24, "12a"]]) add(t, -12 + h, 11.8, "tr-lbl-hour");
+    for (const h of [0, 6, 12, 18, 24]) add(hourTick(h, window.bnbDisplay), -12 + h, 11.8, "tr-lbl-hour");
     const stepD = days <= 30 ? 7 : days <= 90 ? 30 : 90;
     for (let back = 0; back < days; back += stepD) {
       const r = days - 1 - back;
