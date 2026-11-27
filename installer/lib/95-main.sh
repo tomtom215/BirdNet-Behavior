@@ -20,6 +20,11 @@ main() {
     # root check, download, or filesystem change, so a Mac user never gets a
     # half-finished Linux install.
     if [ "$(uname -s)" = "Darwin" ]; then
+        if [ "${SUBCOMMAND}" = "reset-password" ]; then
+            warn "On macOS, set a new password on the Accounts page, or put a new CADDY_PWD= line in"
+            warn "${MAC_DATA_DIR}/birdnet.conf and restart the agent."
+            exit 1
+        fi
         if [ "${SUBCOMMAND}" = "uninstall" ]; then
             warn "On macOS, uninstall with:  ./uninstall.sh   (it handles the launchd LaunchAgent)."
             exit 0
@@ -52,11 +57,16 @@ main() {
         fi
     fi
 
+    # Before anything is downloaded or written: never install over BirdNET-Pi's
+    # files (OOB-03). Uninstall passes.
+    refuse_birdnet_pi_host
+
     MODE="${SUBCOMMAND}"
     case "${SUBCOMMAND}" in
         install | update | reinstall) do_install ;;
         repair)                       do_repair ;;
         uninstall)                    do_uninstall ;;
+        reset-password)               do_reset_password ;;
         *)                            fatal "Unknown command: ${SUBCOMMAND}" ;;
     esac
 }

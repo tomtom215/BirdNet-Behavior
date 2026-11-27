@@ -175,6 +175,49 @@ do_repair() {
 # Remove the software cleanly. Data/config are kept unless the operator opts in
 # (interactively, or via BIRDNET_PURGE=1). Idempotent: safe to re-run when
 # nothing — or only part — is installed.
+# A new admin password for a station whose password is lost (OOB-07, N25-14).
+#
+# `sudo grep '^CADDY_PWD'` used to be the only way back, and it answers with
+# the password the installer wrote: once the password has been changed on the
+# Accounts page the file still holds the old one, and the station ignores it.
+# A NEW value in CADDY_PWD is what the station applies at its next start
+# (helpers::auth::bootstrap_admin_password: a CADDY_PWD that is not the one it
+# last applied replaces the stored password and signs every session out), so
+# this writes a new random one, restarts, and prints it. Nothing else in the
+# file changes; no detection, recording or setting is touched.
+do_reset_password() {
+    [ -f "${CONFIG_FILE}" ] || fatal "No configuration at ${CONFIG_FILE}: there is no installed station here to reset."
+    [ -L "${CONFIG_FILE}" ] && fatal "${CONFIG_FILE} is a link; the installer does not write through links."
+    local pwd tmp
+    pwd="$(gen_password)"
+    tmp="$(mktemp "${CONFIG_FILE}.reset.XXXXXX")"
+    # Replace every active CADDY_PWD line with the new one (the last would win
+    # anyway), or add one; a commented-out example line is left as it is.
+    awk -v line="CADDY_PWD=${pwd}" '
+        /^[[:space:]]*CADDY_PWD[[:space:]]*=/ { if (!done) print line; done = 1; next }
+        { print }
+        END { if (!done) { print ""; print "# Set by install.sh reset-password."; print line } }
+    ' "${CONFIG_FILE}" >"${tmp}"
+    chmod --reference="${CONFIG_FILE}" "${tmp}" 2>/dev/null || chmod 0640 "${tmp}"
+    chown --reference="${CONFIG_FILE}" "${tmp}" 2>/dev/null || true
+    mv -f "${tmp}" "${CONFIG_FILE}"
+    if grep -qE '^[[:space:]]*CADDY_USER[[:space:]]*=' "${CONFIG_FILE}" \
+        && ! grep -qE '^[[:space:]]*CADDY_USER[[:space:]]*=[[:space:]]*admin[[:space:]]*$' "${CONFIG_FILE}"; then
+        warn "CADDY_USER in ${CONFIG_FILE} is not 'admin'; the account this resets is 'admin'."
+    fi
+    if has_systemd && systemctl restart "${SERVICE_NAME}" 2>/dev/null; then
+        success "Restarted ${SERVICE_NAME}: the new password is in force, and every browser was signed out."
+    else
+        warn "Could not restart ${SERVICE_NAME}; the new password takes effect when the station next starts:"
+        warn "  sudo systemctl restart birdnet-behavior"
+    fi
+    echo
+    echo -e "  ${BOLD}Admin panel login${RESET}"
+    echo -e "      username:  ${BOLD}admin${RESET}"
+    echo -e "      password:  ${BOLD}${pwd}${RESET}"
+    echo    "      Write it down now. You can change it on the Accounts page once signed in."
+}
+
 do_uninstall() {
     info "Removing BirdNet-Behavior…"
 

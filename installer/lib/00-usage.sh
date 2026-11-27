@@ -15,6 +15,7 @@
 #   sudo bash install.sh repair       # fix dirs/permissions + rewrite the unit
 #   sudo bash install.sh reinstall    # re-download and rewrite everything
 #   sudo bash install.sh uninstall    # remove the software, keep data
+#   sudo bash install.sh reset-password  # a new admin password, printed; data kept
 #
 # Do NOT use `sudo bash <(curl ...)`: process substitution hands bash a file
 # descriptor owned by your user, and sudo closes it crossing to root, so the

@@ -390,6 +390,14 @@ else
 fi
 [ "$(flow_conf "${SB}" MODEL_PATH)" = "$(want "${SB}" "${FLOW_V24_MODEL}")" ] \
     && pass "the config still names the V2.4 files, ready for them" || fail "MODEL_PATH is '$(flow_conf "${SB}" MODEL_PATH)'"
+# MDL-27: the station repairs the files its config names, so it fetches these
+# itself. The warning used to say it would "detect NOTHING until you stage it".
+if grep -q "The station fetches it itself" "${SB}/out.log" && grep -q "BIRDNET_OFFLINE=1" "${SB}/out.log" \
+    && ! grep -q "detect NOTHING until you stage it" "${SB}/out.log"; then
+    pass "the warning says the station fetches the files itself, and how to stop it"
+else
+    fail "the staging warning does not say the station fetches the files itself (MDL-27)"
+fi
 
 # ── 8. the free-space floor ─────────────────────────────────────────────────
 echo "=== 8. the free-space floor follows the classifier ==="

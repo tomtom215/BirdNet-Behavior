@@ -63,6 +63,8 @@ print_admin_login() {
         echo -e "      username:  ${BOLD}admin${RESET}"
         echo    "      password:  already set on this station. To see it:"
         echo -e "        ${BOLD}sudo grep '^CADDY_PWD' ${CONFIG_FILE}${RESET}"
+        echo    "      If it was changed in the browser since, that file holds the old one;"
+        echo    "      give the station a new password with:  sudo bash install.sh reset-password"
         echo    "      Signing in is required for the admin panel — earlier versions"
         echo    "      served it without a password. Viewing the dashboard is unchanged."
         return 0

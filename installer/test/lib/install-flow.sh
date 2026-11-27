@@ -265,6 +265,9 @@ flow_run() {
             JOURNALD_DROPIN="${sb}/journald.conf"
             HELP_DIR="${sb}/help"
             SERVICE_USER="$(id -un)"
+            # Where BirdNET-Pi's units would be (OOB-03): the sandbox, never
+            # the host's, so a test machine's own units cannot decide a run.
+            SYSTEMD_UNIT_DIRS="${sb}/systemd"
         }
 
         # ── the machine: nothing here may reach it ─────────────────────────

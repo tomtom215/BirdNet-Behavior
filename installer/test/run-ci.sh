@@ -28,6 +28,7 @@ CI_TESTS=(
     admin-login-summary.sh
     alsa-device-detect.sh
     binary-swap-atomicity.sh
+    birdnet-pi-host.sh
     blank-env-opt-outs.sh
     checksum-refusals.sh
     classifier-default.sh
@@ -45,6 +46,7 @@ CI_TESTS=(
     model-pins-match-catalogue.sh
     pipefail-sigpipe.sh
     quickstart-env.sh
+    reset-password.sh
     release-tag-gate.sh
     rollback-geomodel.sh
     service-owner-preserved.sh
